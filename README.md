@@ -63,6 +63,9 @@
 - docs/44_NETWORK_SECURITY_SPEC.md
 - docs/45_BUYER_TARGET_RESEARCH_AND_PRODUCT_FIT.md
 - docs/46_SECURITY_IMPLEMENTATION_BACKLOG.md
+- docs/47_ARCHITECTURE_BOUNDARIES_AND_MVP_GATES.md
+- docs/48_ISSUE_LABELING_AND_PROGRESS_RULES.md
+- docs/49_EXTERNAL_REVIEW_RECONCILIATION.md
 - prompts/codex_build_mvp.md
 
 ## 開発の最初のゴール
@@ -79,20 +82,29 @@ AIアドオンは、制作支援、レポート生成、配信改善、多言語
 
 複数台商用運用では、端末ID、店舗ID、設置場所ID、heartbeat、死活監視、通知、ログローテーション、Tailscale/SSH運用、ファイアウォール、/admin認証、退役/紛失対応まで標準化する。
 
+## アーキテクチャ原則
+
+local player / Remote CMS / field ops を混ぜすぎない。
+
+まず `misell-player` が単体で確実に動き、Remote CMS・端末管理・広告運用・AI分析は外側から連動させる。
+
 ## 開発チームへの最初の指示
 
 1. docs/00_PROJECT_OVERVIEW.md を読む
 2. docs/03_MVP_SPEC.md を読む
 3. docs/04_TECH_ARCHITECTURE_LINUX.md を読む
-4. prompts/codex_build_mvp.md をCodexに渡す
-5. docs/16_ISSUE_BACKLOG.md をGitHub Issuesへ分解する
-6. docs/17_BUYOUT_EXECUTION_SCORECARD.md を見て、期間別KPIを毎月更新する
-7. docs/18_VIDEO_PRODUCTION_GUIDE.md と docs/19_SPLIT_SCREEN_PATTERN_LIBRARY.md を制作チームの標準仕様にする
-8. docs/30_FIRST_30_DAYS_EXECUTION_PLAN.md をもとに初動30日を実行する
-9. docs/35_OPERATIONS_SOP.md と docs/36_QA_TEST_CHECKLIST.md を導入前チェックに使う
-10. docs/29_MA_DATA_ROOM_CHECKLIST.md を最初の1件目から更新する
-11. docs/41_REMOTE_CMS_SPEC.md を事業化フェーズのCMS仕様として扱う
-12. docs/42_AI_ADDON_SPEC.md を上位プラン設計に使う
-13. docs/43_DEVICE_FLEET_MANAGEMENT_SPEC.md と docs/44_NETWORK_SECURITY_SPEC.md を商用端末運用の必須仕様にする
-14. docs/45_BUYER_TARGET_RESEARCH_AND_PRODUCT_FIT.md をもとに買収候補へ刺さる設計へ寄せる
-15. docs/46_SECURITY_IMPLEMENTATION_BACKLOG.md をGitHub Issuesへ分解する
+4. docs/47_ARCHITECTURE_BOUNDARIES_AND_MVP_GATES.md を読む
+5. prompts/codex_build_mvp.md をCodexに渡す
+6. docs/16_ISSUE_BACKLOG.md をGitHub Issuesへ分解する
+7. docs/17_BUYOUT_EXECUTION_SCORECARD.md を見て、期間別KPIを毎月更新する
+8. docs/18_VIDEO_PRODUCTION_GUIDE.md と docs/19_SPLIT_SCREEN_PATTERN_LIBRARY.md を制作チームの標準仕様にする
+9. docs/30_FIRST_30_DAYS_EXECUTION_PLAN.md をもとに初動30日を実行する
+10. docs/35_OPERATIONS_SOP.md と docs/36_QA_TEST_CHECKLIST.md を導入前チェックに使う
+11. docs/29_MA_DATA_ROOM_CHECKLIST.md を最初の1件目から更新する
+12. docs/41_REMOTE_CMS_SPEC.md を事業化フェーズのCMS仕様として扱う
+13. docs/42_AI_ADDON_SPEC.md を上位プラン設計に使う
+14. docs/43_DEVICE_FLEET_MANAGEMENT_SPEC.md と docs/44_NETWORK_SECURITY_SPEC.md を商用端末運用の必須仕様にする
+15. docs/45_BUYER_TARGET_RESEARCH_AND_PRODUCT_FIT.md をもとに買収候補へ刺さる設計へ寄せる
+16. docs/46_SECURITY_IMPLEMENTATION_BACKLOG.md をGitHub Issuesへ分解する
+17. docs/48_ISSUE_LABELING_AND_PROGRESS_RULES.md に従って進捗管理する
+18. docs/49_EXTERNAL_REVIEW_RECONCILIATION.md をレビュー対応履歴として確認する
