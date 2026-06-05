@@ -15,12 +15,12 @@ jobs:
         working-directory: apps/player
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/player/package-lock.json
 
@@ -44,12 +44,12 @@ jobs:
         working-directory: apps/cloud
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/cloud/package-lock.json
 
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check shell script syntax
         run: bash -n apps/player/scripts/*.sh apps/cloud/scripts/*.sh
