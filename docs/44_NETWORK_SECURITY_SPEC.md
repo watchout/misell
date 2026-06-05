@@ -184,6 +184,8 @@ HTML/URL表示は管理者のみ許可する。
 - .envまたはconfig.jsonで管理
 - 権限600
 - 退役時に削除
+- device_tokenはCloud DBへ平文保存せずhashのみ保存
+- device_tokenの失効/再発行履歴を残す
 
 ## バックアップ
 
@@ -208,6 +210,7 @@ HTML/URL表示は管理者のみ許可する。
 - playlist公開
 - 広告公開
 - 端末操作
+- device_token失効/再発行
 - ユーザー権限変更
 - 削除操作
 
@@ -216,8 +219,8 @@ HTML/URL表示は管理者のみ許可する。
 対応：
 
 1. device_token無効化
-2. Tailscale登録削除
-3. クラウドでlost状態に変更
+2. クラウドでlost状態に変更
+3. Tailscale登録削除
 4. 顧客へ通知
 5. 端末交換
 6. 必要なら警察/保険対応

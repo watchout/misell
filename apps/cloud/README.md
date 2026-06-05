@@ -121,6 +121,32 @@ curl -u admin:change-me \
 
 The response returns `device_token` once. Store it in the terminal env file.
 
+## Manage Device Tokens
+
+Device tokens are stored as hashes. The plain token is shown only when a device is registered or rotated.
+
+Revoke a token immediately:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"terminal lost"}' \
+  http://localhost:3200/api/admin/devices/DEV-DEMO-001/token/revoke
+```
+
+Rotate a token and copy the returned `device_token` into the terminal env file:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"scheduled rotation"}' \
+  http://localhost:3200/api/admin/devices/DEV-DEMO-001/token/rotate
+```
+
+After updating `MISELL_DEVICE_TOKEN` on the terminal, restart the heartbeat timer and player service.
+
 ## Device Heartbeat
 
 ```bash
@@ -151,6 +177,8 @@ scripts/emit-heartbeat.sh
 - `GET /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
+- `POST /api/admin/devices/:device_id/token/revoke` with Basic auth
+- `POST /api/admin/devices/:device_id/token/rotate` with Basic auth
 - `GET /api/admin/alerts` with Basic auth
 - `GET /api/admin/alert-notifications` with Basic auth
 - `POST /api/admin/alert-notifications/test` with Basic auth

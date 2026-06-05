@@ -1,7 +1,8 @@
 (function () {
   const state = {
     devices: [],
-    summary: null
+    summary: null,
+    issuedToken: null
   };
 
   const STATUS_LABELS = {
@@ -49,6 +50,7 @@
     devices: document.getElementById("devices"),
     alerts: document.getElementById("alerts"),
     notifications: document.getElementById("notifications"),
+    tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
   };
 
@@ -69,6 +71,7 @@
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
+    renderTokenResult();
   }
 
   async function fetchJson(url, options = {}) {
@@ -115,6 +118,7 @@
             <th>最終受信</th>
             <th>App</th>
             <th>Release</th>
+            <th>Token</th>
             <th>Playlist</th>
             <th>空き容量</th>
             <th>メモリ</th>
@@ -134,6 +138,9 @@
     els.devices.querySelectorAll(".update-action").forEach((form) => {
       form.addEventListener("submit", handleUpdateRequest);
     });
+    els.devices.querySelectorAll(".token-action").forEach((form) => {
+      form.addEventListener("submit", handleTokenAction);
+    });
   }
 
   function renderDeviceRow(device) {
@@ -150,6 +157,7 @@
         <td>${formatTime(device.last_seen)}</td>
         <td>${escapeHtml(device.app_version || "")}</td>
         <td>${escapeHtml(device.release_id || "")}<small>${escapeHtml(device.release_channel || "")}</small></td>
+        <td>${renderTokenCell(device)}</td>
         <td>${escapeHtml(device.playlist_version || "")}</td>
         <td>${formatNumber(device.disk_free_mb)} MB</td>
         <td>${formatNumber(device.memory_used_percent)}%</td>
@@ -183,6 +191,22 @@
           </form>
         </td>
       </tr>
+    `;
+  }
+
+  function renderTokenCell(device) {
+    const tokenStatus = device.token_status || "active";
+    const tokenStatusLabel = tokenStatus === "revoked" ? "失効済み" : "有効";
+    const tokenStatusClass = tokenStatus === "revoked" ? "failed" : "success";
+    return `
+      <form class="token-action" data-device-id="${escapeHtml(device.device_id)}">
+        <span class="update-status update-status-${tokenStatusClass}">${escapeHtml(tokenStatusLabel)}</span>
+        <small>世代 ${escapeHtml(device.token_generation || 1)} / 最終使用 ${formatTime(device.token_last_used_at)}</small>
+        <input name="reason" type="text" value="" placeholder="理由" aria-label="トークン操作理由">
+        <button type="submit" name="action" value="rotate">再発行</button>
+        <button class="danger" type="submit" name="action" value="revoke"${tokenStatus === "revoked" ? " disabled" : ""}>失効</button>
+        ${device.token_revoked_reason ? `<small>${escapeHtml(device.token_revoked_reason)}</small>` : ""}
+      </form>
     `;
   }
 
@@ -237,6 +261,45 @@
       await loadDashboard();
     } catch (error) {
       window.alert(error.message || "更新予約に失敗しました。");
+      buttons.forEach((button) => {
+        button.disabled = false;
+      });
+    }
+  }
+
+  async function handleTokenAction(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitter = event.submitter || form.querySelector("button");
+    const buttons = form.querySelectorAll("button");
+    const deviceId = form.dataset.deviceId;
+    const action = submitter?.value === "revoke" ? "revoke" : "rotate";
+    const confirmed = window.confirm(
+      action === "rotate"
+        ? `${deviceId} の端末トークンを再発行します。旧トークンは使えなくなります。`
+        : `${deviceId} の端末トークンを失効します。端末からの通信は停止します。`
+    );
+    if (!confirmed) return;
+
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+    try {
+      const result = await fetchJson(`/api/admin/devices/${encodeURIComponent(deviceId)}/token/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: form.elements.reason.value })
+      });
+      if (result.device_token) {
+        state.issuedToken = {
+          device_id: deviceId,
+          token: result.device_token,
+          issued_at: new Date().toISOString()
+        };
+      }
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "トークン操作に失敗しました。");
       buttons.forEach((button) => {
         button.disabled = false;
       });
@@ -300,6 +363,43 @@
     if (testButton) {
       testButton.addEventListener("click", handleNotificationTest);
     }
+  }
+
+  function renderTokenResult() {
+    if (!els.tokenResult) return;
+    if (!state.issuedToken) {
+      els.tokenResult.hidden = true;
+      els.tokenResult.innerHTML = "";
+      return;
+    }
+
+    els.tokenResult.hidden = false;
+    els.tokenResult.innerHTML = `
+      <h2>発行済み端末トークン</h2>
+      <div class="token-banner">
+        <div>
+          <strong>${escapeHtml(state.issuedToken.device_id)}</strong>
+          <small>${formatTime(state.issuedToken.issued_at)}</small>
+        </div>
+        <input id="issued-token" class="token-value" type="text" readonly value="${escapeHtml(state.issuedToken.token)}" aria-label="発行済み端末トークン">
+        <button id="copy-issued-token" type="button">コピー</button>
+        <button id="clear-issued-token" class="secondary" type="button">閉じる</button>
+      </div>
+    `;
+
+    const tokenInput = document.getElementById("issued-token");
+    const copyButton = document.getElementById("copy-issued-token");
+    const clearButton = document.getElementById("clear-issued-token");
+    copyButton?.addEventListener("click", async () => {
+      tokenInput?.select();
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(state.issuedToken.token).catch(() => {});
+      }
+    });
+    clearButton?.addEventListener("click", () => {
+      state.issuedToken = null;
+      renderTokenResult();
+    });
   }
 
   async function handleNotificationTest(event) {

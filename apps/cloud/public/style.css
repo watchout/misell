@@ -58,6 +58,14 @@ button:disabled {
   opacity: 0.7;
 }
 
+button.secondary {
+  background: #52616f;
+}
+
+button.danger {
+  background: #a83228;
+}
+
 select,
 input {
   background: #ffffff;
@@ -114,6 +122,10 @@ table {
   width: 100%;
 }
 
+#devices {
+  overflow-x: auto;
+}
+
 th,
 td {
   border-bottom: 1px solid #e5e9ee;
@@ -149,9 +161,22 @@ td small {
   min-width: 640px;
 }
 
+.token-action {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(76px, 96px) minmax(170px, 1fr) auto auto;
+  min-width: 440px;
+}
+
 .device-action button,
-.update-action button {
+.update-action button,
+.token-action button {
   min-height: 34px;
+}
+
+.token-action input,
+.token-action small {
+  grid-column: 1 / -1;
 }
 
 .update-action small {
@@ -216,6 +241,33 @@ td small {
 
 .notifications-table {
   table-layout: fixed;
+}
+
+.token-banner {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(140px, 220px) minmax(240px, 1fr) auto auto;
+  padding: 10px;
+}
+
+.token-banner strong,
+.token-banner small {
+  display: block;
+}
+
+.token-banner small {
+  color: #697986;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.token-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  width: 100%;
 }
 
 .pill {
@@ -292,4 +344,18 @@ pre {
   color: #e8edf2;
   overflow: auto;
   padding: 12px;
+}
+
+@media (max-width: 720px) {
+  main {
+    padding: 16px;
+  }
+
+  .token-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .token-banner button {
+    width: 100%;
+  }
 }
