@@ -17,10 +17,10 @@
 
 ### Issue: device_token認証
 
-- 端末ごとのdevice_token発行
-- APIリクエストにtoken付与
-- token無効化
-- 退役時のrevoke
+- MVP実装済み: 端末ごとのdevice_token発行
+- MVP実装済み: APIリクエストにtoken付与
+- MVP実装済み: token無効化/再発行
+- MVP実装済み: 退役/紛失時のrevoke
 
 ## Epic 2: Heartbeat/監視
 
@@ -228,6 +228,6 @@
 - クラウド認証
 - role-based access
 - 通知
-- token revoke
+- token revoke運用手順の現地検証
 - SLA
 - 退役/紛失フロー

@@ -77,12 +77,24 @@ function requireDeviceAuth(req, res, next) {
     return;
   }
 
+  if (device.token_status === "revoked") {
+    res.status(403).json({ error: "Device token has been revoked" });
+    return;
+  }
+
   if (device.status === "retired" || device.status === "lost") {
     res.status(403).json({ error: "Device is not allowed to send data" });
     return;
   }
 
-  req.device = device;
+  const now = nowIso();
+  db.prepare("UPDATE devices SET token_last_used_at = ?, updated_at = ? WHERE device_id = ?")
+    .run(now, now, device.device_id);
+
+  req.device = {
+    ...device,
+    token_last_used_at: now
+  };
   next();
 }
 
@@ -166,8 +178,26 @@ app.patch("/api/admin/devices/:device_id", requireAdminAuth, (req, res, next) =>
 
     const input = normalizeDeviceAdminUpdate(req.body || {});
     const now = nowIso();
-    db.prepare("UPDATE devices SET status = ?, notes = ?, updated_at = ? WHERE device_id = ?")
-      .run(input.status, input.notes, now, deviceId);
+    const updateDevice = db.transaction(() => {
+      db.prepare("UPDATE devices SET status = ?, notes = ?, updated_at = ? WHERE device_id = ?")
+        .run(input.status, input.notes, now, deviceId);
+
+      if (input.status === "retired" || input.status === "lost") {
+        const reason = `device marked ${input.status}`;
+        db.prepare(`
+          UPDATE devices SET
+            token_status = 'revoked',
+            token_revoked_at = COALESCE(token_revoked_at, ?),
+            token_revoked_reason = COALESCE(NULLIF(token_revoked_reason, ''), ?),
+            updated_at = ?
+          WHERE device_id = ?
+        `).run(now, reason, now, deviceId);
+        if (existing.token_status !== "revoked") {
+          recordDeviceTokenEvent(deviceId, "revoked", reason, now, existing.token_generation || 1);
+        }
+      }
+    });
+    updateDevice();
 
     if (TERMINAL_STATUS.has(input.status)) {
       resolveDeviceAlerts(deviceId, now);
@@ -224,6 +254,80 @@ app.patch("/api/admin/devices/:device_id/update", requireAdminAuth, (req, res, n
 
     res.json({
       ok: true,
+      device: getDeviceDetail(deviceId)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/devices/:device_id/token/revoke", requireAdminAuth, (req, res, next) => {
+  try {
+    const deviceId = cleanId(req.params.device_id);
+    const existing = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+    if (!existing) {
+      res.status(404).json({ error: "Device not found" });
+      return;
+    }
+
+    const input = normalizeDeviceTokenAction(req.body || {});
+    const now = nowIso();
+    const revokeToken = db.transaction(() => {
+      db.prepare(`
+        UPDATE devices SET
+          token_status = 'revoked',
+          token_revoked_at = ?,
+          token_revoked_reason = ?,
+          updated_at = ?
+        WHERE device_id = ?
+      `).run(now, input.reason, now, deviceId);
+      recordDeviceTokenEvent(deviceId, "revoked", input.reason, now, existing.token_generation || 1);
+    });
+    revokeToken();
+
+    res.json({
+      ok: true,
+      device: getDeviceDetail(deviceId)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/devices/:device_id/token/rotate", requireAdminAuth, (req, res, next) => {
+  try {
+    const deviceId = cleanId(req.params.device_id);
+    const existing = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+    if (!existing) {
+      res.status(404).json({ error: "Device not found" });
+      return;
+    }
+
+    const input = normalizeDeviceTokenAction(req.body || {});
+    const deviceToken = generateDeviceToken();
+    const tokenGeneration = (existing.token_generation || 1) + 1;
+    const now = nowIso();
+    const rotateToken = db.transaction(() => {
+      db.prepare(`
+        UPDATE devices SET
+          device_token_hash = ?,
+          token_status = 'active',
+          token_generation = ?,
+          token_rotated_at = ?,
+          token_revoked_at = NULL,
+          token_revoked_reason = '',
+          token_last_used_at = NULL,
+          updated_at = ?
+        WHERE device_id = ?
+      `).run(hashDeviceToken(deviceToken), tokenGeneration, now, now, deviceId);
+      recordDeviceTokenEvent(deviceId, "rotated", input.reason, now, tokenGeneration);
+    });
+    rotateToken();
+
+    res.status(201).json({
+      ok: true,
+      device_id: deviceId,
+      device_token: deviceToken,
       device: getDeviceDetail(deviceId)
     });
   } catch (error) {
@@ -331,32 +435,36 @@ app.post("/api/admin/devices", requireAdminAuth, (req, res, next) => {
       return;
     }
 
-    const deviceToken = crypto.randomBytes(32).toString("base64url");
+    const deviceToken = generateDeviceToken();
     const now = nowIso();
 
-    upsertTenant(input.tenant_id, input.tenant_name || input.tenant_id, now);
-    upsertStore(input.tenant_id, input.store_id, input.store_name || input.store_id, now);
-    upsertLocation(input.tenant_id, input.store_id, input.location_id, input.location_name || input.location_id, now);
-    upsertScreenGroup(input.tenant_id, input.store_id, input.location_id, input.screen_group_id, input.screen_group_name || input.screen_group_id, now);
+    const createDevice = db.transaction(() => {
+      upsertTenant(input.tenant_id, input.tenant_name || input.tenant_id, now);
+      upsertStore(input.tenant_id, input.store_id, input.store_name || input.store_id, now);
+      upsertLocation(input.tenant_id, input.store_id, input.location_id, input.location_name || input.location_id, now);
+      upsertScreenGroup(input.tenant_id, input.store_id, input.location_id, input.screen_group_id, input.screen_group_name || input.screen_group_id, now);
 
-    db.prepare(`
-      INSERT INTO devices (
-        tenant_id, store_id, location_id, screen_group_id, device_id, device_name,
-        device_token_hash, status, release_channel, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'offline', ?, ?, ?, ?)
-    `).run(
-      input.tenant_id,
-      input.store_id,
-      input.location_id,
-      input.screen_group_id,
-      input.device_id,
-      input.device_name,
-      hashDeviceToken(deviceToken),
-      input.release_channel,
-      input.notes,
-      now,
-      now
-    );
+      db.prepare(`
+        INSERT INTO devices (
+          tenant_id, store_id, location_id, screen_group_id, device_id, device_name,
+          device_token_hash, token_status, token_generation, status, release_channel, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 1, 'offline', ?, ?, ?, ?)
+      `).run(
+        input.tenant_id,
+        input.store_id,
+        input.location_id,
+        input.screen_group_id,
+        input.device_id,
+        input.device_name,
+        hashDeviceToken(deviceToken),
+        input.release_channel,
+        input.notes,
+        now,
+        now
+      );
+      recordDeviceTokenEvent(input.device_id, "created", "initial device registration", now, 1);
+    });
+    createDevice();
 
     res.status(201).json({
       ok: true,
@@ -636,6 +744,12 @@ function initDb() {
       device_id TEXT NOT NULL UNIQUE,
       device_name TEXT NOT NULL,
       device_token_hash TEXT NOT NULL,
+      token_status TEXT NOT NULL DEFAULT 'active',
+      token_generation INTEGER NOT NULL DEFAULT 1,
+      token_rotated_at TEXT,
+      token_revoked_at TEXT,
+      token_revoked_reason TEXT,
+      token_last_used_at TEXT,
       status TEXT NOT NULL DEFAULT 'offline',
       release_channel TEXT NOT NULL DEFAULT 'stable',
       app_version TEXT,
@@ -749,6 +863,15 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS device_token_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id TEXT NOT NULL,
+      event TEXT NOT NULL,
+      token_generation INTEGER,
+      reason TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -756,13 +879,21 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(status, severity, last_seen DESC);
     CREATE INDEX IF NOT EXISTS idx_alert_notifications_alert ON alert_notifications(alert_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_alert_notifications_status ON alert_notifications(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_token_events_device ON device_token_events(device_id, created_at DESC);
   `);
   migrateDevicesTable();
+  db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
 }
 
 function migrateDevicesTable() {
   const existingColumns = new Set(db.prepare("PRAGMA table_info(devices)").all().map((column) => column.name));
   const columns = [
+    ["token_status", "TEXT NOT NULL DEFAULT 'active'"],
+    ["token_generation", "INTEGER NOT NULL DEFAULT 1"],
+    ["token_rotated_at", "TEXT"],
+    ["token_revoked_at", "TEXT"],
+    ["token_revoked_reason", "TEXT"],
+    ["token_last_used_at", "TEXT"],
     ["target_update_ref", "TEXT"],
     ["target_release_id", "TEXT"],
     ["target_release_channel", "TEXT"],
@@ -778,6 +909,31 @@ function migrateDevicesTable() {
     if (!existingColumns.has(name)) {
       db.exec(`ALTER TABLE devices ADD COLUMN ${name} ${definition}`);
     }
+  }
+
+  const terminalDevices = db.prepare(`
+    SELECT device_id, status, token_generation
+    FROM devices
+    WHERE status IN ('retired', 'lost')
+      AND token_status != 'revoked'
+  `).all();
+  if (terminalDevices.length > 0) {
+    const now = nowIso();
+    const migrateTerminalTokens = db.transaction((devices) => {
+      for (const device of devices) {
+        const reason = `migration: device status ${device.status}`;
+        db.prepare(`
+          UPDATE devices SET
+            token_status = 'revoked',
+            token_revoked_at = COALESCE(token_revoked_at, ?),
+            token_revoked_reason = COALESCE(NULLIF(token_revoked_reason, ''), ?),
+            updated_at = ?
+          WHERE device_id = ?
+        `).run(now, reason, now, device.device_id);
+        recordDeviceTokenEvent(device.device_id, "revoked", reason, now, device.token_generation || 1);
+      }
+    });
+    migrateTerminalTokens(terminalDevices);
   }
 }
 
@@ -807,6 +963,12 @@ function normalizeDeviceAdminUpdate(input) {
   return {
     status,
     notes: cleanString(input.notes).slice(0, 1000)
+  };
+}
+
+function normalizeDeviceTokenAction(input) {
+  return {
+    reason: cleanString(input.reason || input.notes || input.note).slice(0, 1000)
   };
 }
 
@@ -922,6 +1084,7 @@ function getDeviceDetail(deviceId) {
   if (!device) return null;
   return {
     ...device,
+    token_events: db.prepare("SELECT * FROM device_token_events WHERE device_id = ? ORDER BY created_at DESC LIMIT 50").all(deviceId),
     heartbeats: db.prepare("SELECT * FROM heartbeats WHERE device_id = ? ORDER BY received_at DESC LIMIT 100").all(deviceId),
     playlogs: db.prepare("SELECT * FROM playlogs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
     error_logs: db.prepare("SELECT * FROM error_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
@@ -1266,6 +1429,13 @@ function upsertScreenGroup(tenantId, storeId, locationId, screenGroupId, name, n
   `).run(tenantId, storeId, locationId, screenGroupId, name, now, now);
 }
 
+function recordDeviceTokenEvent(deviceId, event, reason, now, tokenGeneration) {
+  db.prepare(`
+    INSERT INTO device_token_events (device_id, event, token_generation, reason, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(deviceId, event, tokenGeneration || null, cleanString(reason), now);
+}
+
 function assertPayloadDeviceMatches(device, payload) {
   const payloadDeviceId = cleanString(payload.device_id);
   if (payloadDeviceId && payloadDeviceId !== device.device_id) {
@@ -1279,6 +1449,10 @@ function getBearerToken(req) {
   const header = req.get("authorization") || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : "";
+}
+
+function generateDeviceToken() {
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 function hashDeviceToken(token) {
@@ -1371,6 +1545,17 @@ function renderDeviceDetailPage(device) {
             }, null, 2))}</pre>
           </article>
           <article class="panel">
+            <h2>トークン</h2>
+            <pre>${escapeHtml(JSON.stringify({
+              token_status: device.token_status,
+              token_generation: device.token_generation,
+              token_rotated_at: device.token_rotated_at,
+              token_revoked_at: device.token_revoked_at,
+              token_revoked_reason: device.token_revoked_reason,
+              token_last_used_at: device.token_last_used_at
+            }, null, 2))}</pre>
+          </article>
+          <article class="panel">
             <h2>バージョン</h2>
             <pre>${escapeHtml(JSON.stringify({
               app_version: device.app_version,
@@ -1397,6 +1582,10 @@ function renderDeviceDetailPage(device) {
         <section class="section">
           <h2>未対応アラート</h2>
           <pre>${escapeHtml(JSON.stringify(device.alerts, null, 2))}</pre>
+        </section>
+        <section class="section">
+          <h2>トークン履歴</h2>
+          <pre>${escapeHtml(JSON.stringify(device.token_events, null, 2))}</pre>
         </section>
       </main>
     </div>

@@ -132,6 +132,33 @@ MVPからテスト導入までの監視。
 | retired | 退役済み | token無効 |
 | lost | 紛失/盗難 | token/Tailscale即時削除 |
 
+## 端末トークン運用
+
+device_tokenは端末APIの認証情報であり、Cloud DBには平文保存しない。端末登録時または再発行時だけ表示し、端末側の `MISELL_DEVICE_TOKEN` に反映する。
+
+### 失効するケース
+
+- 端末紛失または盗難
+- 端末交換、廃棄、退役
+- tokenが外部に漏れた可能性がある
+- 管理外の端末から通信が来ている疑いがある
+
+### 再発行するケース
+
+- 定期交換
+- 端末セットアップ時にtokenを誤って記録した
+- 端末を交換せず、同じ `device_id` で運用継続する
+- 失効後に同一端末を復帰させる
+
+### 操作手順
+
+1. Cloud管理画面で対象端末のtokenを失効または再発行する
+2. 再発行時は表示された新tokenを端末envの `MISELL_DEVICE_TOKEN` へ反映する
+3. 端末で `systemctl --user restart misell-heartbeat.timer misell-player.service` を実行する
+4. Cloudでheartbeatが復帰し、`token_last_used_at` が更新されることを確認する
+
+退役または紛失に設定した端末はtokenも失効扱いにする。再利用する場合は、端末状態を戻すだけではなくtokenを再発行してから端末envを更新する。
+
 ## アラート基準
 
 ### warning

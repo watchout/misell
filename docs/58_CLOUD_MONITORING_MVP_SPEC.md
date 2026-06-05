@@ -263,6 +263,12 @@ CREATE TABLE devices (
   device_id TEXT NOT NULL UNIQUE,
   device_name TEXT NOT NULL,
   device_token_hash TEXT NOT NULL,
+  token_status TEXT NOT NULL DEFAULT 'active',
+  token_generation INTEGER NOT NULL DEFAULT 1,
+  token_rotated_at TEXT,
+  token_revoked_at TEXT,
+  token_revoked_reason TEXT,
+  token_last_used_at TEXT,
   status TEXT NOT NULL DEFAULT 'offline',
   release_channel TEXT NOT NULL DEFAULT 'stable',
   app_version TEXT,
@@ -275,6 +281,19 @@ CREATE TABLE devices (
   notes TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+```
+
+### device_token_events
+
+```sql
+CREATE TABLE device_token_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  event TEXT NOT NULL,
+  token_generation INTEGER,
+  reason TEXT,
+  created_at TEXT NOT NULL
 );
 ```
 
@@ -385,12 +404,13 @@ Authorization: Bearer <device_token>
 - DBには平文保存しない
 - `device_token_hash` にsha256またはbcrypt/argon2 hashを保存
 - MVPではsha256 + pepperでも可
-- 商用ではtoken発行/失効履歴を追加する
+- token発行/失効/再発行履歴を `device_token_events` に保存する
 
 認証条件:
 
 - tokenが存在する
 - hashが一致する
+- `token_status` が `revoked` ではない
 - device statusが `retired` / `lost` ではない
 - payloadの `device_id` がtoken所有端末と一致する
 
@@ -495,6 +515,11 @@ MVPではBasic auth。
 - store_id
 - location_id
 - screen_group_id
+- token_status
+- token_generation
+- token_rotated_at
+- token_revoked_at
+- token_last_used_at
 - status
 - last_seen
 - app_version
@@ -552,6 +577,50 @@ MVPでは管理者がJSONで登録してもよい。
 
 `device_token` はこのレスポンスで一度だけ表示する。
 
+### POST /api/admin/devices/:device_id/token/revoke
+
+端末トークンを即時失効する。
+
+入力:
+
+```json
+{
+  "reason": "terminal lost"
+}
+```
+
+レスポンス:
+
+```json
+{
+  "ok": true,
+  "device": {}
+}
+```
+
+### POST /api/admin/devices/:device_id/token/rotate
+
+端末トークンを再発行する。旧トークンは即時無効になり、新しい `device_token` はこのレスポンスで一度だけ表示する。
+
+入力:
+
+```json
+{
+  "reason": "scheduled rotation"
+}
+```
+
+レスポンス:
+
+```json
+{
+  "ok": true,
+  "device_id": "DEV-000001",
+  "device_token": "shown-only-once",
+  "device": {}
+}
+```
+
 ## 管理画面
 
 ### /admin
@@ -582,6 +651,8 @@ Dashboard。
 - last_seen
 - app_version
 - release_id
+- token_status
+- token_generation
 - playlist_version
 - disk_free
 - memory
@@ -596,11 +667,12 @@ Dashboard。
 - 基本情報
 - 最新heartbeat
 - version情報
+- token状態
+- token操作履歴
 - resource状態
 - open alerts
 - recent playlogs
 - recent errors
-- token再発行ボタンは後続
 
 ## Alert運用
 
@@ -659,6 +731,7 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - tenants/stores/locations/screen_groups/devices
 - `POST /api/admin/devices`
 - token生成/hash保存
+- token失効/再発行
 
 ### PR 3: heartbeat ingest
 
@@ -699,6 +772,8 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - tokenなしheartbeatが401
 - 不正token heartbeatが401
 - 正しいtoken heartbeatが200
+- token失効後のheartbeatが403
+- token再発行後に旧tokenが401、新tokenが200
 - devices一覧にlast_seenが出る
 - 3分/10分判定の関数テストがある
 
@@ -707,12 +782,13 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - Ubuntu端末の `scripts/emit-heartbeat.sh` から送信できる
 - Cloud上で `DEV-DEMO-001` がonlineになる
 - `app_version/release_id/release_channel/playlist_version/config_version` が見える
-- tokenを無効化した端末は401になる
+- tokenを無効化した端末は403になる
 
 ## セキュリティ
 
 - device tokenは平文保存しない
 - tokenは一度だけ表示
+- token失効/再発行履歴を残す
 - `/admin` は認証必須
 - request body sizeを制限する
 - raw_jsonは保存するが秘密情報を含めない
