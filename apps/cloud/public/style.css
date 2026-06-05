@@ -192,6 +192,32 @@ td small {
   color: #a83228;
 }
 
+.notification-bar {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+}
+
+.notification-bar span:not(.update-status) {
+  color: #52616f;
+  font-size: 13px;
+}
+
+.notification-bar button {
+  margin-left: auto;
+}
+
+.notifications-table {
+  table-layout: fixed;
+}
+
 .pill {
   border-radius: 999px;
   display: inline-block;

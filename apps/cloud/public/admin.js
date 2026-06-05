@@ -48,6 +48,7 @@
     summary: document.getElementById("summary"),
     devices: document.getElementById("devices"),
     alerts: document.getElementById("alerts"),
+    notifications: document.getElementById("notifications"),
     refresh: document.getElementById("refresh")
   };
 
@@ -56,16 +57,18 @@
   window.setInterval(loadDashboard, 30000);
 
   async function loadDashboard() {
-    const [summary, devices, alerts] = await Promise.all([
+    const [summary, devices, alerts, notifications] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
-      fetchJson("/api/admin/alerts")
+      fetchJson("/api/admin/alerts"),
+      fetchJson("/api/admin/alert-notifications")
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
     renderSummary(summary);
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
+    renderNotifications(notifications);
   }
 
   async function fetchJson(url, options = {}) {
@@ -251,8 +254,70 @@
         <strong>${escapeHtml(ALERT_LABELS[alert.severity] || alert.severity)} / ${escapeHtml(alert.alert_type)}</strong>
         <span>${escapeHtml(alert.device_id)} ${escapeHtml(alert.message)}</span>
         <small>最終検知 ${formatTime(alert.last_seen)}</small>
+        <small>通知 ${escapeHtml(alert.last_notification_status || "未送信")} ${formatTime(alert.last_notification_delivered_at || alert.last_notification_attempted_at)}</small>
       </article>
     `).join("");
+  }
+
+  function renderNotifications(data) {
+    const config = data.config || {};
+    const notifications = data.notifications || [];
+    els.notifications.innerHTML = `
+      <div class="notification-bar">
+        <span class="update-status update-status-${config.webhook_enabled ? "success" : "idle"}">
+          ${config.webhook_enabled ? "Webhook有効" : "Webhook未設定"}
+        </span>
+        <span>最小 ${escapeHtml(config.min_severity || "warning")}</span>
+        <span>解決通知 ${config.notify_resolved ? "on" : "off"}</span>
+        <button id="test-notification" type="button"${config.webhook_enabled ? "" : " disabled"}>テスト送信</button>
+      </div>
+      ${notifications.length === 0 ? `<p class="empty">通知履歴はありません。</p>` : `
+        <table class="notifications-table">
+          <thead>
+            <tr>
+              <th>時刻</th>
+              <th>Event</th>
+              <th>Status</th>
+              <th>端末</th>
+              <th>Alert</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${notifications.slice(0, 20).map((notification) => `
+              <tr>
+                <td>${formatTime(notification.created_at)}</td>
+                <td>${escapeHtml(notification.event || "")}</td>
+                <td>${escapeHtml(notification.status || "")}<small>${escapeHtml(notification.error || "")}</small></td>
+                <td>${escapeHtml(notification.device_id || "")}</td>
+                <td>${escapeHtml(notification.alert_type || "")}<small>${escapeHtml(notification.severity || "")}</small></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+    const testButton = document.getElementById("test-notification");
+    if (testButton) {
+      testButton.addEventListener("click", handleNotificationTest);
+    }
+  }
+
+  async function handleNotificationTest(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "送信中";
+    try {
+      await fetchJson("/api/admin/alert-notifications/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "テスト送信に失敗しました。");
+      button.disabled = false;
+      button.textContent = "テスト送信";
+    }
   }
 
   function formatTime(value) {
