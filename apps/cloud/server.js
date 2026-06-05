@@ -11,8 +11,8 @@ const basicAuth = require("express-basic-auth");
 const app = express();
 const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
-const DATA_DIR = path.join(ROOT_DIR, "data");
-const DB_PATH = path.resolve(ROOT_DIR, process.env.DB_PATH || "data/misell-cloud.sqlite");
+const DATA_DIR = runtimePath("MISELL_CLOUD_DATA_DIR", path.join(ROOT_DIR, "data"));
+const DB_PATH = runtimePath("DB_PATH", path.join(DATA_DIR, "misell-cloud.sqlite"));
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3200);
@@ -30,7 +30,7 @@ const WARNING_MEMORY_PERCENT = 85;
 const OFFLINE_AFTER_MS = 3 * 60 * 1000;
 const CRITICAL_AFTER_MS = 10 * 60 * 1000;
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
@@ -737,6 +737,12 @@ function hashDeviceToken(token) {
     .createHash("sha256")
     .update(`${DEVICE_TOKEN_PEPPER}:${token}`)
     .digest("hex");
+}
+
+function runtimePath(envName, fallbackPath) {
+  const value = process.env[envName];
+  if (!value) return fallbackPath;
+  return path.isAbsolute(value) ? value : path.resolve(ROOT_DIR, value);
 }
 
 function cleanString(value) {

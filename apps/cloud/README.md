@@ -43,6 +43,13 @@ scripts/setup-macos-launchagent.sh --apply
 
 The script stores secrets in `~/.config/misell-cloud/env` and starts `com.misell.cloud`.
 
+Runtime files are kept outside the Git checkout:
+
+- SQLite DB: `~/.local/share/misell-cloud/data/misell-cloud.sqlite`
+- LaunchAgent logs: `~/.local/share/misell-cloud/logs/`
+
+For Mac mini operation, keep the app itself as a clean checkout of GitHub `main`, and keep DB/secrets/logs under `~/.config/misell-cloud` and `~/.local/share/misell-cloud`.
+
 Read the admin password locally:
 
 ```bash
@@ -110,5 +117,6 @@ scripts/emit-heartbeat.sh
 
 ## Data
 
-- SQLite DB: `data/misell-cloud.sqlite`
+- Local development DB: `data/misell-cloud.sqlite`
+- macOS LaunchAgent DB: `~/.local/share/misell-cloud/data/misell-cloud.sqlite`
 - DB files are ignored by Git.

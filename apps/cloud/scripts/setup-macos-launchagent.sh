@@ -7,11 +7,14 @@ LABEL="${MISELL_CLOUD_LABEL:-com.misell.cloud}"
 PORT="${PORT:-3200}"
 HOST="${HOST:-}"
 APP_DIR="${MISELL_CLOUD_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+RUNTIME_DIR="${MISELL_CLOUD_RUNTIME_DIR:-${HOME}/.local/share/misell-cloud}"
+DATA_DIR="${MISELL_CLOUD_DATA_DIR:-${RUNTIME_DIR}/data}"
+LOG_DIR="${MISELL_CLOUD_LOG_DIR:-${RUNTIME_DIR}/logs}"
 ENV_FILE="${MISELL_CLOUD_ENV_FILE:-${HOME}/.config/misell-cloud/env}"
 STARTER="${MISELL_CLOUD_STARTER:-${HOME}/.local/bin/misell-cloud-start}"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
-LOG_OUT="${MISELL_CLOUD_LOG_OUT:-/tmp/misell-cloud-3200.log}"
-LOG_ERR="${MISELL_CLOUD_LOG_ERR:-/tmp/misell-cloud-3200.err}"
+LOG_OUT="${MISELL_CLOUD_LOG_OUT:-${LOG_DIR}/misell-cloud-3200.log}"
+LOG_ERR="${MISELL_CLOUD_LOG_ERR:-${LOG_DIR}/misell-cloud-3200.err}"
 
 usage() {
   cat <<'EOF'
@@ -20,6 +23,8 @@ Usage:
 
 Default is dry-run. This creates:
   ~/.config/misell-cloud/env
+  ~/.local/share/misell-cloud/data/misell-cloud.sqlite
+  ~/.local/share/misell-cloud/logs/
   ~/.local/bin/misell-cloud-start
   ~/Library/LaunchAgents/com.misell.cloud.plist
 
@@ -109,6 +114,9 @@ echo "Misell cloud macOS launch agent setup"
 echo "app_dir=${APP_DIR}"
 echo "host=${HOST}"
 echo "port=${PORT}"
+echo "runtime_dir=${RUNTIME_DIR}"
+echo "data_dir=${DATA_DIR}"
+echo "log_dir=${LOG_DIR}"
 echo "env_file=${ENV_FILE}"
 echo "starter=${STARTER}"
 echo "plist=${PLIST}"
@@ -118,7 +126,7 @@ if [[ "${APPLY}" != "1" ]]; then
   exit 0
 fi
 
-mkdir -p "$(dirname "${ENV_FILE}")" "$(dirname "${STARTER}")" "$(dirname "${PLIST}")"
+mkdir -p "$(dirname "${ENV_FILE}")" "$(dirname "${STARTER}")" "$(dirname "${PLIST}")" "${DATA_DIR}" "${LOG_DIR}"
 
 ENV_TMP="$(mktemp "${ENV_FILE}.XXXXXX")"
 cat > "${ENV_TMP}" <<EOF
@@ -129,7 +137,8 @@ ADMIN_USER=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 REQUIRE_ADMIN_AUTH=1
 DEVICE_TOKEN_PEPPER=${DEVICE_TOKEN_PEPPER}
-DB_PATH=${APP_DIR}/data/misell-cloud.sqlite
+MISELL_CLOUD_DATA_DIR=${DATA_DIR}
+DB_PATH=${DATA_DIR}/misell-cloud.sqlite
 EOF
 chmod 600 "${ENV_TMP}"
 mv "${ENV_TMP}" "${ENV_FILE}"
