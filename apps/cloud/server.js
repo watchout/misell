@@ -577,10 +577,15 @@ function listDevices() {
         .run(effectiveStatus, nowIso(), row.device_id);
     }
     return {
-      ...row,
+      ...publicDevice(row),
       effective_status: effectiveStatus
     };
   });
+}
+
+function publicDevice(device) {
+  const { device_token_hash, ...publicFields } = device;
+  return publicFields;
 }
 
 function getDeviceDetail(deviceId) {
