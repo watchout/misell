@@ -63,6 +63,23 @@ npm run check
 npm audit --audit-level=moderate
 ```
 
+## Backup
+
+Create a manual SQLite backup:
+
+```bash
+scripts/backup-sqlite.sh
+```
+
+Install a macOS LaunchAgent for daily backups:
+
+```bash
+scripts/setup-macos-backup-launchagent.sh
+scripts/setup-macos-backup-launchagent.sh --apply
+```
+
+Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days.
+
 ## Register a Device
 
 ```bash
