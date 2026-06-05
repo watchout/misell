@@ -1,0 +1,26 @@
+{
+  "name": "misell-player",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local 3-screen digital signage MVP for Ubuntu kiosk terminals.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js",
+    "check": "node --check server.js && node --check public/player.js && node --check public/admin.js",
+    "validate:playlist": "node server.js --validate-playlist",
+    "heartbeat": "scripts/emit-heartbeat.sh",
+    "rotate:logs": "scripts/rotate-logs.sh"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "express-basic-auth": "^1.2.1",
+    "multer": "^2.1.1",
+    "nanoid": "^3.3.12"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

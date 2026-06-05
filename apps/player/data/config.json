@@ -1,0 +1,13 @@
+{
+  "tenant_id": "TEN-LOCAL",
+  "store_id": "STO-LOCAL",
+  "location_id": "LOC-LOCAL",
+  "screen_group_id": "SG-LOCAL",
+  "device_id": "DEV-LOCAL-001",
+  "device_name": "local-dev-player",
+  "playlist_version": "local-001",
+  "release_id": "local-0.1.0",
+  "release_channel": "dev",
+  "config_version": "local-001",
+  "environment": "local"
+}

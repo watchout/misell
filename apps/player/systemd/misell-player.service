@@ -1,0 +1,17 @@
+[Unit]
+Description=misell-player local signage server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__MISELL_HOME__
+Environment=APP_ENV=production
+Environment=PORT=3000
+EnvironmentFile=-%h/.config/misell-player/env
+ExecStart=/usr/bin/env npm start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=misell-player daily log rotation timer
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=misell-log-rotate.service
+
+[Install]
+WantedBy=timers.target

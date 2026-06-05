@@ -1,0 +1,16 @@
+[Unit]
+Description=misell-player Chromium kiosk
+After=graphical-session.target misell-player.service
+Wants=misell-player.service
+
+[Service]
+Type=simple
+Environment=MISELL_HOME=__MISELL_HOME__
+Environment=PORT=3000
+Environment=DISPLAY=:0
+ExecStart=__MISELL_HOME__/scripts/start-kiosk.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

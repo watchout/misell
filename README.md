@@ -14,6 +14,77 @@
 - テスト導入候補：安心お宿、バリアン、パセラ、ビジョンセンター
 - 事業目標：2027年6月までに10億円バイアウトを狙える事業体を作る
 
+## 実装済みMVP
+
+### Local Player
+
+- 実装ディレクトリ: `apps/player`
+- Ubuntu kiosk端末向け
+- Chromium kioskで 5760 x 1080 の3画面横連結表示
+- `three-zone`: 左・中央・右の3ゾーン表示
+- `wide`: 3面ぶち抜き表示
+- LAN管理画面 `/admin`
+- playlist schema validation
+- device identity
+- playlog/admin/error log
+- Ubuntu setup / kiosk / systemd / security / burn-in scripts
+
+```bash
+cd apps/player
+npm install
+npm start
+```
+
+起動後:
+
+- Player: http://localhost:3000/player
+- Preview: http://localhost:3000/player?preview=1
+- Admin: http://localhost:3000/admin
+
+既定のBasic認証:
+
+- User: `admin`
+- Password: `change-me`
+
+店舗LANへ接続する前に、必ず `ADMIN_PASSWORD` または `MISELL_ADMIN_PASSWORD` を変更する。
+
+### Cloud Monitoring MVP
+
+- 実装ディレクトリ: `apps/cloud`
+- 端末登録
+- device token認証
+- heartbeat/playlog/error ingest
+- 死活・劣化・重大状態の集計
+- アラート管理
+- 日本語管理UI
+- macOS LaunchAgentセットアップスクリプト
+
+```bash
+cd apps/cloud
+npm install
+npm start
+```
+
+起動後:
+
+- Admin: http://localhost:3200/admin
+- Health: http://localhost:3200/api/health
+
+共有環境や公開環境では、必ず `ADMIN_PASSWORD` と `DEVICE_TOKEN_PEPPER` を変更する。
+
+検証:
+
+```bash
+cd apps/player
+npm run check
+npm run validate:playlist
+npm audit --audit-level=moderate
+
+cd ../cloud
+npm run check
+npm audit --audit-level=moderate
+```
+
 ## ドキュメント
 
 - docs/00_PROJECT_OVERVIEW.md
@@ -68,7 +139,13 @@
 - docs/49_EXTERNAL_REVIEW_RECONCILIATION.md
 - docs/50_IMPLEMENTATION_READY_MVP_SPEC.md
 - docs/51_PR_IMPLEMENTATION_PLAN.md
+- docs/52_MVP_GATE_EVIDENCE_TEMPLATE.md
+- docs/53_DEVICE_ROLLOUT_SETUP_AND_OPERATIONS.md
+- docs/54_PRODUCTIZATION_SALES_READINESS_CHECKLIST.md
+- docs/55_ORDER_TO_INSTALL_RUNBOOK.md
 - docs/56_SELF_SERVE_LP_AND_ONBOARDING_PORTAL_SPEC.md
+- docs/57_FLEET_MONITORING_RELEASE_OPERATIONS.md
+- docs/58_CLOUD_MONITORING_MVP_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
@@ -98,6 +175,8 @@ local player / Remote CMS / field ops を混ぜすぎない。
 
 まず `misell-player` が単体で確実に動き、Remote CMS・端末管理・広告運用・AI分析は外側から連動させる。
 
+端末監視クラウドMVPは `apps/cloud` に分離し、heartbeat、playlog、error log、アラート、バージョン管理、リリース運用を local player と疎結合で扱う。
+
 ## 開発チームへの最初の指示
 
 1. docs/00_PROJECT_OVERVIEW.md を読む
@@ -119,3 +198,5 @@ local player / Remote CMS / field ops を混ぜすぎない。
 17. docs/48_ISSUE_LABELING_AND_PROGRESS_RULES.md に従って進捗管理する
 18. docs/49_EXTERNAL_REVIEW_RECONCILIATION.md をレビュー対応履歴として確認する
 19. docs/56_SELF_SERVE_LP_AND_ONBOARDING_PORTAL_SPEC.md を申込・顧客オンボーディング仕様として扱う
+20. docs/57_FLEET_MONITORING_RELEASE_OPERATIONS.md を複数端末の監視・更新・ロールバック運用仕様として扱う
+21. docs/58_CLOUD_MONITORING_MVP_SPEC.md を端末監視クラウドMVPの実装仕様として扱う

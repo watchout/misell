@@ -1,0 +1,11 @@
+[Unit]
+Description=misell-player heartbeat emitter
+After=misell-player.service
+Wants=misell-player.service
+
+[Service]
+Type=oneshot
+Environment=MISELL_HOME=__MISELL_HOME__
+Environment=PORT=3000
+EnvironmentFile=-%h/.config/misell-player/env
+ExecStart=__MISELL_HOME__/scripts/emit-heartbeat.sh
