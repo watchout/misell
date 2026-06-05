@@ -12,6 +12,8 @@
     "heartbeat": "scripts/emit-heartbeat.sh",
     "evidence": "scripts/collect-device-evidence.sh",
     "evidence:upload": "scripts/collect-device-evidence.sh --upload",
+    "backup:content": "scripts/backup-content.sh",
+    "content:sync": "scripts/sync-content.sh",
     "rotate:logs": "scripts/rotate-logs.sh"
   },
   "dependencies": {

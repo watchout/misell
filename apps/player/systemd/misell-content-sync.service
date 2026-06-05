@@ -1,0 +1,10 @@
+[Unit]
+Description=misell-player content sync
+After=network-online.target misell-player.service
+Wants=network-online.target misell-player.service
+
+[Service]
+Type=oneshot
+Environment=MISELL_HOME=__MISELL_HOME__
+EnvironmentFile=-%h/.config/misell-player/env
+ExecStart=__MISELL_HOME__/scripts/sync-content.sh

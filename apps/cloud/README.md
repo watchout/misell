@@ -190,6 +190,9 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 - `GET /api/admin/release-manifests` with Basic auth
 - `POST /api/admin/release-manifests` with Basic auth
 - `PATCH /api/admin/release-manifests/:manifest_id` with Basic auth
+- `GET /api/admin/content-manifests` with Basic auth
+- `POST /api/admin/content-manifests` with Basic auth
+- `PATCH /api/admin/content-manifests/:content_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth
@@ -200,6 +203,8 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 - `POST /api/device/heartbeat` with Bearer device token
 - `GET /api/device/update-policy` with Bearer device token
 - `POST /api/device/update-result` with Bearer device token
+- `GET /api/device/content-policy` with Bearer device token
+- `POST /api/device/content-result` with Bearer device token
 - `POST /api/device/playlog` with Bearer device token
 - `POST /api/device/error` with Bearer device token
 - `POST /api/device/logs` with Bearer device token
@@ -240,6 +245,41 @@ curl -u admin:change-me \
 ```
 
 Per-device update targets take priority over release manifests. Without a per-device target, `GET /api/device/update-policy` returns the active manifest for the device `release_channel` with `source: "release_manifest"` and `target_manifest_id`. Terminals on `hold` do not receive active release manifests.
+
+## Content Manifests
+
+Create an active playlist manifest to update all terminals on the matching release channel:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "content_id": "content-20260605-staging-001",
+    "playlist_version": "pl-20260605-001",
+    "release_channel": "staging",
+    "status": "active",
+    "title": "staging playlist",
+    "playlist": {
+      "version": 1,
+      "playlist_version": "pl-20260605-001",
+      "items": [
+        {
+          "item_id": "demo-wide",
+          "layout": "wide",
+          "enabled": true,
+          "duration": 12,
+          "wide": "/demo/wide.html"
+        }
+      ]
+    }
+  }' \
+  http://localhost:3200/api/admin/content-manifests
+```
+
+The terminal polls `GET /api/device/content-policy` with `scripts/sync-content.sh`. The script writes the returned playlist to the terminal runtime playlist, validates it, and reports the result to `POST /api/device/content-result`.
+
+This MVP content manifest distributes playlist JSON only. Asset file distribution from Cloud storage is a separate next step; playlist sources should currently reference assets already present on the terminal or built-in `/demo/...` sources.
 
 ## Data
 

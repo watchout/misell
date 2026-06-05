@@ -453,6 +453,10 @@ Git pull直更新は禁止する。
 - 端末更新チェックscript/timer
 - release manifest管理API
 - release channel単位の一括配信
+- Cloud content manifest管理API
+- Cloud playlist sync API
+- 端末content sync script/timer
+- 端末コンテンツバックアップscript/API
 - Webhookアラート通知
 - 通知履歴管理
 - クラウドログ回収
@@ -464,15 +468,16 @@ Git pull直更新は禁止する。
 
 - bundle/symlink方式の商用rollback
 - artifact storage付き商用release bundle
+- Cloud asset storage/sync
 - 通知ルーティングの顧客/店舗別分離
 - Tailscale ACLの正式運用
 
 ## 次の実装候補
 
 1. bundle/symlink方式の商用rollbackを実装する
-2. artifact storage付き商用release bundleを実装する
-3. 通知ルーティングを顧客/店舗単位で分離する
-4. Tailscale ACLと端末権限の正式運用手順を固める
+2. Cloud asset storage/syncを実装する
+3. artifact storage付き商用release bundleを実装する
+4. 通知ルーティングを顧客/店舗単位で分離する
 
 ## MVP実装済みの運用補助
 
@@ -483,6 +488,9 @@ Git pull直更新は禁止する。
 - `scripts/collect-device-evidence.sh --upload`: 端末証跡をCloudへ送信する
 - `scripts/update-player.sh`: MVP向け手動更新、検証、restart、health checkをまとめる
 - `scripts/check-update.sh`: Cloud更新予約をpollし、必要な場合に `update-player.sh` を実行する
+- `scripts/backup-content.sh`: playlist、config、assetsを世代バックアップする
+- `scripts/sync-content.sh`: Cloud content manifestをpollし、playlistを検証して反映する
 - `misell-log-rotate.timer`: ログローテーション用systemd user timer
 - `misell-heartbeat.timer`: heartbeat送信用systemd user timer。URL設定後に有効化する
 - `misell-update.timer`: Cloud更新確認用systemd user timer。heartbeat疎通後に有効化する
+- `misell-content-sync.timer`: Cloud playlist同期用systemd user timer。heartbeat疎通後に有効化する

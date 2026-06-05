@@ -4,6 +4,16 @@ const ADMIN = {
   validationErrors: []
 };
 
+const DAY_OPTIONS = [
+  ["sun", "日"],
+  ["mon", "月"],
+  ["tue", "火"],
+  ["wed", "水"],
+  ["thu", "木"],
+  ["fri", "金"],
+  ["sat", "土"]
+];
+
 const assetListEl = document.getElementById("asset-list");
 const assetCountEl = document.getElementById("asset-count");
 const uploadForm = document.getElementById("upload-form");
@@ -14,6 +24,8 @@ const jsonEditor = document.getElementById("json-editor");
 const toastEl = document.getElementById("toast");
 
 document.getElementById("save-playlist").addEventListener("click", savePlaylist);
+document.getElementById("preview-playlist").addEventListener("click", previewPlaylist);
+document.getElementById("backup-content").addEventListener("click", backupContent);
 document.getElementById("reload-player").addEventListener("click", reloadPlayer);
 document.getElementById("add-three-zone").addEventListener("click", () => addItem("three-zone"));
 document.getElementById("add-wide").addEventListener("click", () => addItem("wide"));
@@ -137,30 +149,47 @@ function renderPlaylist() {
 
       <div class="item-grid">
         <label>
-          <span>Layout</span>
+          <span>レイアウト</span>
           <select data-field="layout">
             <option value="three-zone" ${item.layout !== "wide" ? "selected" : ""}>three-zone</option>
             <option value="wide" ${item.layout === "wide" ? "selected" : ""}>wide</option>
           </select>
         </label>
         <label>
-          <span>Duration</span>
+          <span>表示秒数</span>
           <input type="number" min="1" max="300" data-field="duration" value="${escapeAttr(item.duration || 10)}">
         </label>
         <label>
-          <span>Start</span>
-          <input type="text" placeholder="09:00" data-field="start" value="${escapeAttr(item.start || "")}">
+          <span>開始時刻</span>
+          <input type="time" data-field="start" value="${escapeAttr(item.start || "")}">
         </label>
         <label>
-          <span>End</span>
-          <input type="text" placeholder="23:00" data-field="end" value="${escapeAttr(item.end || "")}">
+          <span>終了時刻</span>
+          <input type="time" data-field="end" value="${escapeAttr(item.end || "")}">
         </label>
       </div>
 
+      ${renderDayControls(item)}
       ${renderSourceControls(item, index)}
       ${renderMiniPreview(item)}
     </article>
   `).join("");
+}
+
+function renderDayControls(item) {
+  const selectedDays = Array.isArray(item.days_of_week) ? item.days_of_week : [];
+  return `
+    <fieldset class="day-grid">
+      <legend>曜日</legend>
+      ${DAY_OPTIONS.map(([value, label]) => `
+        <label>
+          <input type="checkbox" data-day="${escapeAttr(value)}"${selectedDays.includes(value) ? " checked" : ""}>
+          <span>${escapeHtml(label)}</span>
+        </label>
+      `).join("")}
+      <small>未選択の場合は毎日表示</small>
+    </fieldset>
+  `;
 }
 
 function renderSourceControls(item, index) {
@@ -237,6 +266,21 @@ function handlePlaylistInput(event) {
 function handlePlaylistChange(event) {
   const target = event.target;
 
+  if (target.matches("[data-day]")) {
+    const item = getItemFromTarget(target);
+    if (!item) return;
+    const day = target.dataset.day;
+    const selected = new Set(Array.isArray(item.days_of_week) ? item.days_of_week : []);
+    if (target.checked) {
+      selected.add(day);
+    } else {
+      selected.delete(day);
+    }
+    item.days_of_week = DAY_OPTIONS.map(([value]) => value).filter((value) => selected.has(value));
+    renderJson();
+    return;
+  }
+
   if (target.matches("[data-field]")) {
     handlePlaylistInput(event);
     if (target.dataset.field === "layout") {
@@ -301,7 +345,11 @@ async function handleAssetClick(event) {
   }
 
   if (deletePath) {
-    if (!window.confirm(`${deletePath} を削除しますか？`)) return;
+    const usages = findAssetUsages(deletePath);
+    const usageLabel = usages.length > 0
+      ? `\n\nこの素材は ${usages.length} 件のplaylist itemで使用中です:\n${usages.slice(0, 6).join("\n")}\n\n削除すると該当枠は表示できなくなります。`
+      : "";
+    if (!window.confirm(`${deletePath} を削除しますか？${usageLabel}`)) return;
     const response = await fetch(`/api/assets?path=${encodeURIComponent(deletePath)}`, { method: "DELETE" });
     if (!response.ok) {
       showToast(await errorMessage(response), true);
@@ -309,7 +357,7 @@ async function handleAssetClick(event) {
     }
     await loadAssets();
     renderAll();
-    showToast("素材を削除しました");
+    showToast("素材を削除しました。削除前バックアップを作成済みです。");
   }
 }
 
@@ -333,11 +381,12 @@ async function uploadAsset(event) {
   assetInput.value = "";
   await loadAssets();
   renderAll();
-  showToast("素材をアップロードしました");
+  showToast("素材をアップロードしました。バックアップも作成済みです。");
 }
 
 async function savePlaylist() {
   try {
+    normalizePlaylistForSave();
     const response = await fetch("/api/playlist", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -353,10 +402,35 @@ async function savePlaylist() {
     ADMIN.playlist = payload.playlist || payload;
     ADMIN.validationErrors = [];
     renderAll();
-    showToast("playlistを保存しました");
+    showToast(`playlistを保存しました: ${ADMIN.playlist.playlist_version}`);
   } catch (error) {
     showToast(error.message, true);
   }
+}
+
+async function previewPlaylist() {
+  try {
+    normalizePlaylistForSave({ preview: true });
+    localStorage.setItem("misell_preview_playlist", JSON.stringify(ADMIN.playlist));
+    window.open("/player?preview=1&local_preview=1", "_blank", "noopener,noreferrer");
+    showToast("未保存playlistをプレビューへ送信しました");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function backupContent() {
+  const response = await fetch("/api/content-backups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: "manual-admin" })
+  });
+  if (!response.ok) {
+    showToast(await errorMessage(response), true);
+    return;
+  }
+  const payload = await response.json();
+  showToast(`バックアップを作成しました: ${payload.backup?.name || ""}`);
 }
 
 async function reloadPlayer() {
@@ -375,6 +449,7 @@ function addItem(layout) {
     duration: 10,
     start: "",
     end: "",
+    days_of_week: [],
     left: layout === "three-zone" ? "/demo/left.html" : "",
     center: layout === "three-zone" ? "/demo/center.html" : "",
     right: layout === "three-zone" ? "/demo/right.html" : "",
@@ -394,6 +469,52 @@ function applyJsonEditor() {
   } catch (error) {
     showToast(`JSONエラー: ${error.message}`, true);
   }
+}
+
+function normalizePlaylistForSave(options = {}) {
+  if (!ADMIN.playlist || !Array.isArray(ADMIN.playlist.items)) {
+    throw new Error("playlist items are required");
+  }
+  const now = new Date();
+  ADMIN.playlist.version = Number(ADMIN.playlist.version || 1);
+  ADMIN.playlist.updatedAt = now.toISOString();
+  if (!options.preview) {
+    ADMIN.playlist.playlist_version = nextPlaylistVersion(now);
+  } else {
+    ADMIN.playlist.playlist_version = ADMIN.playlist.playlist_version || nextPlaylistVersion(now);
+  }
+  ADMIN.playlist.items = ADMIN.playlist.items.map((item, index) => {
+    const id = item.item_id || item.id || `item-${now.getTime()}-${index + 1}`;
+    return {
+      ...item,
+      id,
+      item_id: id,
+      enabled: item.enabled !== false,
+      duration: clampInt(Number.parseInt(item.duration, 10) || 10, 1, 300),
+      days_of_week: Array.isArray(item.days_of_week)
+        ? DAY_OPTIONS.map(([value]) => value).filter((value) => item.days_of_week.includes(value))
+        : []
+    };
+  });
+  renderJson();
+}
+
+function nextPlaylistVersion(date = new Date()) {
+  const stamp = date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  return `pl-${stamp}`;
+}
+
+function findAssetUsages(assetPath) {
+  const usages = [];
+  const fields = ["left", "center", "right", "wide"];
+  for (const item of ADMIN.playlist.items || []) {
+    for (const field of fields) {
+      if (item[field] === assetPath) {
+        usages.push(`${item.name || item.item_id || "item"} / ${field}`);
+      }
+    }
+  }
+  return usages;
 }
 
 function getItemFromTarget(target) {

@@ -175,6 +175,13 @@ INSTALL_UPDATE=1 scripts/setup-autostart.sh
 systemctl --user status misell-update.timer
 ```
 
+Enable cloud content sync after heartbeat is working. `MISELL_CONTENT_URL` and `MISELL_CONTENT_RESULT_URL` are optional when `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`; the sync script derives both URLs from it.
+
+```bash
+INSTALL_CONTENT_SYNC=1 scripts/setup-autostart.sh
+systemctl --user status misell-content-sync.timer
+```
+
 ## Security Baseline
 
 Dry-run:
@@ -243,6 +250,16 @@ Force rotation for verification:
 scripts/rotate-logs.sh --force
 ```
 
+## Content Backups
+
+Create a versioned backup of `playlist.json`, `config.json`, and local assets:
+
+```bash
+npm run backup:content
+```
+
+The local admin API also creates content backups before playlist saves and before asset deletion. Backups are stored under `MISELL_CONTENT_BACKUP_DIR`, defaulting to `~/.local/share/misell-player/backups` on terminals.
+
 ## MVP Update Flow
 
 For Git-based MVP updates, keep `apps/player` as a clean checkout and keep runtime files under `~/.local/share/misell-player`.
@@ -277,3 +294,19 @@ scripts/check-update.sh --dry-run
 `scripts/check-update.sh` accepts both per-device update targets and active Cloud release manifests. When a manifest is returned, the script reports `target_manifest_id` back to Cloud with the update result.
 
 Commercial deployments should move from direct Git refs to release bundles with symlink rollback.
+
+## Cloud Content Sync
+
+Sync the active Cloud content manifest for the terminal release channel:
+
+```bash
+npm run content:sync
+```
+
+Dry-run:
+
+```bash
+scripts/sync-content.sh --dry-run
+```
+
+The script backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud.

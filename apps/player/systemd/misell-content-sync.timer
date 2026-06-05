@@ -1,0 +1,11 @@
+[Unit]
+Description=misell-player content sync timer
+
+[Timer]
+OnBootSec=150
+OnUnitActiveSec=180
+AccuracySec=30
+Unit=misell-content-sync.service
+
+[Install]
+WantedBy=timers.target

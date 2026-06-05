@@ -156,11 +156,10 @@
 
 ### Issue: 端末バックアップ
 
-- config.json
-- playlist
-- assets manifest
+- MVP実装済み: `backup-content.sh` とlocal admin APIで `config.json`、playlist、assetsをtar.gz保存
 - xrandr設定
 - systemd設定
+- 商用前: バックアップの外部保管と復元演習
 
 ### Issue: 復元手順スクリプト
 
@@ -169,6 +168,7 @@
 - config配置
 - assets同期
 - service有効化
+- MVP残: tar.gzからの自動復元スクリプト
 
 ## Epic 9: 紛失/退役
 
