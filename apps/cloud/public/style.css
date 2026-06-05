@@ -122,7 +122,8 @@ table {
   width: 100%;
 }
 
-#devices {
+#devices,
+#release-manifests {
   overflow-x: auto;
 }
 
@@ -241,6 +242,35 @@ td small {
 
 .notifications-table {
   table-layout: fixed;
+}
+
+.release-manifest-create {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(140px, 1fr) minmax(150px, 1fr) minmax(140px, 1fr) minmax(92px, 110px) minmax(92px, 110px) minmax(120px, 1fr) minmax(160px, 1.2fr) auto;
+  margin-bottom: 8px;
+  min-width: 1040px;
+  padding: 10px;
+}
+
+.release-manifest-create button,
+.release-manifest-action button {
+  min-height: 34px;
+}
+
+.release-manifests-table {
+  table-layout: fixed;
+}
+
+.release-manifest-action {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(92px, 1fr) auto;
+  min-width: 170px;
 }
 
 .log-bundles-table {

@@ -187,6 +187,9 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 - `GET /api/admin/devices/:device_id` with Basic auth
 - `GET /api/admin/device-log-bundles` with Basic auth
 - `GET /api/admin/device-log-bundles/:id` with Basic auth
+- `GET /api/admin/release-manifests` with Basic auth
+- `POST /api/admin/release-manifests` with Basic auth
+- `PATCH /api/admin/release-manifests/:manifest_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth
@@ -218,6 +221,25 @@ curl -u admin:change-me \
 ```
 
 The terminal polls `GET /api/device/update-policy` and reports `updating`, `success`, or `failed` to `POST /api/device/update-result`.
+
+Create an active release manifest to update all terminals on the matching release channel:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "manifest_id": "rel-20260605-canary-001",
+    "release_id": "rel-20260605-001",
+    "release_channel": "canary",
+    "update_ref": "origin/main",
+    "status": "active",
+    "notes": "canary rollout"
+  }' \
+  http://localhost:3200/api/admin/release-manifests
+```
+
+Per-device update targets take priority over release manifests. Without a per-device target, `GET /api/device/update-policy` returns the active manifest for the device `release_channel` with `source: "release_manifest"` and `target_manifest_id`. Terminals on `hold` do not receive active release manifests.
 
 ## Data
 

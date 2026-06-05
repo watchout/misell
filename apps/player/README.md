@@ -274,4 +274,6 @@ Check Cloud for a scheduled update:
 scripts/check-update.sh --dry-run
 ```
 
-Commercial deployments should move to release bundles/manifests instead of direct Git updates.
+`scripts/check-update.sh` accepts both per-device update targets and active Cloud release manifests. When a manifest is returned, the script reports `target_manifest_id` back to Cloud with the update result.
+
+Commercial deployments should move from direct Git refs to release bundles with symlink rollback.
