@@ -192,7 +192,7 @@ device_tokenは端末APIの認証情報であり、Cloud DBには平文保存し
 ### 保存期間
 
 - MVP: 手動回収、必要に応じて保存
-- テスト導入: 端末内30日
+- テスト導入: 端末内30日、障害時は `collect-device-evidence.sh --upload` でCloudへ送信
 - 商用: クラウド送信済みは30日で圧縮または削除
 
 ### ログの責務
@@ -201,6 +201,17 @@ device_tokenは端末APIの認証情報であり、Cloud DBには平文保存し
 - admin.log: 誰が何を変更したか
 - error.log: 障害調査
 - heartbeat: 稼働監視
+- device log bundle: journal、service状態、端末内ログをまとめた障害調査証跡
+
+### Cloudログ回収
+
+端末側で以下を実行すると、ローカル証跡フォルダを作成し、同じ内容をCloudへ送信する。
+
+```bash
+scripts/collect-device-evidence.sh --upload --label incident --reason "kiosk did not start"
+```
+
+`MISELL_HEARTBEAT_URL` が `/api/device/heartbeat` で終わる場合、送信先は同じCloudの `/api/device/logs` に自動導出される。Cloud管理画面では直近のlog bundle履歴とJSON詳細を確認する。
 
 ## バージョン管理
 
@@ -424,6 +435,7 @@ Git pull直更新は禁止する。
 - `/api/status`
 - `/api/heartbeat`
 - `device_token` の端末env保存
+- device_token失効/再発行
 - heartbeat送信スクリプト
 - ログローテーションスクリプト/timer
 - MVP手動更新スクリプト
@@ -433,14 +445,13 @@ Git pull直更新は禁止する。
 - 端末更新チェックscript/timer
 - Webhookアラート通知
 - 通知履歴管理
+- クラウドログ回収
 - release_channel/config_versionの端末env保存
 - systemd user service
 - Ubuntu security baseline script
 
 未実装で、複数端末商用前に必要なもの:
 
-- device_token失効/再発行
-- クラウドログ回収
 - release manifest
 - bundle/symlink方式の商用rollback
 - release channel単位の一括配信
@@ -449,11 +460,10 @@ Git pull直更新は禁止する。
 
 ## 次の実装候補
 
-1. device_token再発行/失効を管理画面へ実装する
-2. release manifest配布を実装する
-3. release channel単位の一括配信を実装する
-4. bundle/symlink方式の商用rollbackを実装する
-5. 通知ルーティングを顧客/店舗単位で分離する
+1. release manifest配布を実装する
+2. release channel単位の一括配信を実装する
+3. bundle/symlink方式の商用rollbackを実装する
+4. 通知ルーティングを顧客/店舗単位で分離する
 
 ## MVP実装済みの運用補助
 
@@ -461,6 +471,7 @@ Git pull直更新は禁止する。
 - `GET /api/heartbeat`: `/api/status` と同じpayloadを返す
 - `scripts/emit-heartbeat.sh`: payloadを表示、または `MISELL_HEARTBEAT_URL` へPOSTする
 - `scripts/rotate-logs.sh`: ローカルログをサイズ条件でローテーションする
+- `scripts/collect-device-evidence.sh --upload`: 端末証跡をCloudへ送信する
 - `scripts/update-player.sh`: MVP向け手動更新、検証、restart、health checkをまとめる
 - `scripts/check-update.sh`: Cloud更新予約をpollし、必要な場合に `update-player.sh` を実行する
 - `misell-log-rotate.timer`: ログローテーション用systemd user timer

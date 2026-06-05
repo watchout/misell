@@ -169,12 +169,24 @@ Then run on the terminal:
 scripts/emit-heartbeat.sh
 ```
 
+## Device Log Bundles
+
+Terminals can upload a bounded evidence bundle with recent service status, journal output, and local Misell logs:
+
+```bash
+scripts/collect-device-evidence.sh --upload --label incident --reason "kiosk did not start"
+```
+
+When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derives `MISELL_LOGS_URL` as `/api/device/logs`.
+
 ## API
 
 - `GET /api/health`
 - `POST /api/admin/devices` with Basic auth
 - `GET /api/admin/devices` with Basic auth
 - `GET /api/admin/devices/:device_id` with Basic auth
+- `GET /api/admin/device-log-bundles` with Basic auth
+- `GET /api/admin/device-log-bundles/:id` with Basic auth
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth
@@ -187,6 +199,7 @@ scripts/emit-heartbeat.sh
 - `POST /api/device/update-result` with Bearer device token
 - `POST /api/device/playlog` with Bearer device token
 - `POST /api/device/error` with Bearer device token
+- `POST /api/device/logs` with Bearer device token
 
 ## Device Updates
 

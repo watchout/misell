@@ -68,9 +68,12 @@
 
 ### Issue: クラウドログ送信
 
-- 未送信ログキュー
-- 再送
-- 重複防止
+- MVP実装済み: `collect-device-evidence.sh --upload`
+- MVP実装済み: `POST /api/device/logs`
+- MVP実装済み: 管理画面のlog bundle履歴
+- 商用前: 未送信ログキュー
+- 商用前: 再送
+- 商用前: 重複防止
 
 ## Epic 4: ネットワーク/Firewall
 

@@ -37,6 +37,9 @@ const CRITICAL_DISK_MB = 2048;
 const WARNING_MEMORY_PERCENT = 85;
 const OFFLINE_AFTER_MS = 3 * 60 * 1000;
 const CRITICAL_AFTER_MS = 10 * 60 * 1000;
+const DEVICE_LOG_MAX_ENTRIES = normalizedLimit(process.env.DEVICE_LOG_MAX_ENTRIES || process.env.MISELL_DEVICE_LOG_MAX_ENTRIES, 60, 1, 200);
+const DEVICE_LOG_ENTRY_MAX_BYTES = normalizedLimit(process.env.DEVICE_LOG_ENTRY_MAX_BYTES || process.env.MISELL_DEVICE_LOG_ENTRY_MAX_BYTES, 40000, 4096, 100000);
+const DEVICE_LOG_TOTAL_MAX_BYTES = normalizedLimit(process.env.DEVICE_LOG_TOTAL_MAX_BYTES || process.env.MISELL_DEVICE_LOG_TOTAL_MAX_BYTES, 500000, 65536, 900000);
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -165,6 +168,19 @@ app.get("/api/admin/devices/:device_id", requireAdminAuth, (req, res) => {
     return;
   }
   res.json({ ok: true, device });
+});
+
+app.get("/api/admin/device-log-bundles", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, log_bundles: listDeviceLogBundles() });
+});
+
+app.get("/api/admin/device-log-bundles/:id", requireAdminAuth, (req, res) => {
+  const bundle = getDeviceLogBundle(asInteger(req.params.id));
+  if (!bundle) {
+    res.status(404).json({ error: "Device log bundle not found" });
+    return;
+  }
+  res.json({ ok: true, log_bundle: bundle });
 });
 
 app.patch("/api/admin/devices/:device_id", requireAdminAuth, (req, res, next) => {
@@ -679,6 +695,68 @@ app.post("/api/device/error", requireDeviceAuth, (req, res, next) => {
   }
 });
 
+app.post("/api/device/logs", requireDeviceAuth, (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    assertPayloadDeviceMatches(req.device, payload);
+    const now = nowIso();
+    const input = normalizeDeviceLogBundle(req.device, payload, now);
+
+    const result = db.prepare(`
+      INSERT INTO device_log_bundles (
+        device_id, tenant_id, store_id, screen_group_id, received_at, captured_at,
+        label, reason, source, hostname, app_version, release_id, release_channel,
+        entry_count, total_bytes, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.device.device_id,
+      req.device.tenant_id,
+      req.device.store_id,
+      req.device.screen_group_id,
+      now,
+      input.captured_at,
+      input.label,
+      input.reason,
+      input.source,
+      input.hostname,
+      input.app_version,
+      input.release_id,
+      input.release_channel,
+      input.entry_count,
+      input.total_bytes,
+      JSON.stringify(input.raw)
+    );
+
+    db.prepare("UPDATE devices SET updated_at = ? WHERE device_id = ?")
+      .run(now, req.device.device_id);
+
+    res.status(201).json({
+      ok: true,
+      received_at: now,
+      log_bundle: publicDeviceLogBundle({
+        id: result.lastInsertRowid,
+        device_id: req.device.device_id,
+        tenant_id: req.device.tenant_id,
+        store_id: req.device.store_id,
+        screen_group_id: req.device.screen_group_id,
+        received_at: now,
+        captured_at: input.captured_at,
+        label: input.label,
+        reason: input.reason,
+        source: input.source,
+        hostname: input.hostname,
+        app_version: input.app_version,
+        release_id: input.release_id,
+        release_channel: input.release_channel,
+        entry_count: input.entry_count,
+        total_bytes: input.total_bytes
+      })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
@@ -872,6 +950,26 @@ function initDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS device_log_bundles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      store_id TEXT NOT NULL,
+      screen_group_id TEXT,
+      received_at TEXT NOT NULL,
+      captured_at TEXT,
+      label TEXT,
+      reason TEXT,
+      source TEXT,
+      hostname TEXT,
+      app_version TEXT,
+      release_id TEXT,
+      release_channel TEXT,
+      entry_count INTEGER NOT NULL DEFAULT 0,
+      total_bytes INTEGER NOT NULL DEFAULT 0,
+      raw_json TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -880,6 +978,8 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_alert_notifications_alert ON alert_notifications(alert_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_alert_notifications_status ON alert_notifications(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_device_token_events_device ON device_token_events(device_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_log_bundles_device ON device_log_bundles(device_id, received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_log_bundles_received ON device_log_bundles(received_at DESC);
   `);
   migrateDevicesTable();
   db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
@@ -1013,6 +1113,71 @@ function normalizeDeviceUpdateResult(input) {
   };
 }
 
+function normalizeDeviceLogBundle(device, payload, receivedAt) {
+  const entriesInput = Array.isArray(payload.entries) ? payload.entries.slice(0, DEVICE_LOG_MAX_ENTRIES) : [];
+  const entries = [];
+  let totalBytes = 0;
+
+  for (const entry of entriesInput) {
+    if (!entry || typeof entry !== "object") continue;
+    if (totalBytes >= DEVICE_LOG_TOTAL_MAX_BYTES) break;
+
+    const name = cleanLogEntryName(entry.name || entry.filename || "log");
+    const filename = cleanLogEntryName(entry.filename || name);
+    const command = cleanString(entry.command).slice(0, 300);
+    const kind = cleanString(entry.kind || "text").slice(0, 40);
+    const originalText = cleanText(entry.content || entry.text || entry.output);
+    const originalBytes = Buffer.byteLength(originalText, "utf8");
+    const remainingBytes = DEVICE_LOG_TOTAL_MAX_BYTES - totalBytes;
+    const maxBytes = Math.min(DEVICE_LOG_ENTRY_MAX_BYTES, remainingBytes);
+    const truncated = truncateTextByBytes(originalText, maxBytes);
+    const contentBytes = Buffer.byteLength(truncated.value, "utf8");
+
+    entries.push({
+      name,
+      filename,
+      kind,
+      command,
+      content: truncated.value,
+      bytes: contentBytes,
+      original_bytes: originalBytes,
+      truncated: Boolean(entry.truncated) || truncated.truncated || originalBytes > contentBytes
+    });
+    totalBytes += contentBytes;
+  }
+
+  const raw = {
+    device_id: device.device_id,
+    tenant_id: device.tenant_id,
+    store_id: device.store_id,
+    location_id: device.location_id,
+    screen_group_id: device.screen_group_id,
+    captured_at: cleanString(payload.captured_at || payload.timestamp || receivedAt),
+    label: cleanString(payload.label || payload.title || "manual").slice(0, 120),
+    reason: cleanString(payload.reason || payload.message || "").slice(0, 1000),
+    source: cleanString(payload.source || "device").slice(0, 80),
+    hostname: cleanString(payload.hostname).slice(0, 120),
+    app_version: cleanString(payload.app_version).slice(0, 80),
+    release_id: cleanString(payload.release_id).slice(0, 120),
+    release_channel: cleanString(payload.release_channel || device.release_channel).slice(0, 40),
+    entries
+  };
+
+  return {
+    captured_at: raw.captured_at,
+    label: raw.label,
+    reason: raw.reason,
+    source: raw.source,
+    hostname: raw.hostname,
+    app_version: raw.app_version,
+    release_id: raw.release_id,
+    release_channel: raw.release_channel,
+    entry_count: entries.length,
+    total_bytes: totalBytes,
+    raw
+  };
+}
+
 function normalizeHeartbeatPayload(device, payload, receivedAt) {
   return {
     device_id: device.device_id,
@@ -1085,11 +1250,44 @@ function getDeviceDetail(deviceId) {
   return {
     ...device,
     token_events: db.prepare("SELECT * FROM device_token_events WHERE device_id = ? ORDER BY created_at DESC LIMIT 50").all(deviceId),
+    log_bundles: listDeviceLogBundles(deviceId, 20),
     heartbeats: db.prepare("SELECT * FROM heartbeats WHERE device_id = ? ORDER BY received_at DESC LIMIT 100").all(deviceId),
     playlogs: db.prepare("SELECT * FROM playlogs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
     error_logs: db.prepare("SELECT * FROM error_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
     alerts: db.prepare("SELECT * FROM alerts WHERE device_id = ? AND status = 'open' ORDER BY last_seen DESC").all(deviceId)
   };
+}
+
+function listDeviceLogBundles(deviceId = "", limit = 50) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 50, 100));
+  const rows = deviceId
+    ? db.prepare(`
+      SELECT * FROM device_log_bundles
+      WHERE device_id = ?
+      ORDER BY received_at DESC
+      LIMIT ?
+    `).all(deviceId, boundedLimit)
+    : db.prepare(`
+      SELECT * FROM device_log_bundles
+      ORDER BY received_at DESC
+      LIMIT ?
+    `).all(boundedLimit);
+  return rows.map(publicDeviceLogBundle);
+}
+
+function getDeviceLogBundle(id) {
+  if (!id) return null;
+  const row = db.prepare("SELECT * FROM device_log_bundles WHERE id = ?").get(id);
+  if (!row) return null;
+  return {
+    ...publicDeviceLogBundle(row),
+    payload: parseJson(row.raw_json, {})
+  };
+}
+
+function publicDeviceLogBundle(row) {
+  const { raw_json, ...publicFields } = row;
+  return publicFields;
 }
 
 function evaluateStatus(device, heartbeat) {
@@ -1472,8 +1670,17 @@ function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function cleanText(value) {
+  return typeof value === "string" ? value.replace(/\0/g, "") : "";
+}
+
 function cleanId(value) {
   return cleanString(value).replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 100);
+}
+
+function cleanLogEntryName(value) {
+  const name = cleanString(value).replace(/[^a-zA-Z0-9_.:/-]/g, "-").slice(0, 120);
+  return name || "log";
 }
 
 function cleanGitRef(value) {
@@ -1488,6 +1695,23 @@ function cleanGitRef(value) {
   return ref;
 }
 
+function truncateTextByBytes(value, maxBytes) {
+  const text = cleanText(value);
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= maxBytes) {
+    return { value: text, truncated: false };
+  }
+  if (maxBytes <= 32) {
+    return { value: buffer.subarray(0, Math.max(0, maxBytes)).toString("utf8"), truncated: true };
+  }
+  const headBytes = Math.floor(maxBytes * 0.4);
+  const tailBytes = Math.max(0, maxBytes - headBytes - 28);
+  return {
+    value: `${buffer.subarray(0, headBytes).toString("utf8")}\n... truncated ...\n${buffer.subarray(buffer.length - tailBytes).toString("utf8")}`,
+    truncated: true
+  };
+}
+
 function asInteger(value) {
   if (value === undefined || value === null || value === "") return null;
   const number = Number.parseInt(value, 10);
@@ -1500,8 +1724,22 @@ function asNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function normalizedLimit(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(number, max));
+}
+
 function nowIso() {
   return new Date().toISOString();
+}
+
+function parseJson(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
 }
 
 function escapeHtml(value) {
@@ -1582,6 +1820,10 @@ function renderDeviceDetailPage(device) {
         <section class="section">
           <h2>未対応アラート</h2>
           <pre>${escapeHtml(JSON.stringify(device.alerts, null, 2))}</pre>
+        </section>
+        <section class="section">
+          <h2>ログ収集履歴</h2>
+          <pre>${escapeHtml(JSON.stringify(device.log_bundles, null, 2))}</pre>
         </section>
         <section class="section">
           <h2>トークン履歴</h2>

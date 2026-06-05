@@ -243,6 +243,10 @@ td small {
   table-layout: fixed;
 }
 
+.log-bundles-table {
+  table-layout: fixed;
+}
+
 .token-banner {
   align-items: center;
   background: #ffffff;
