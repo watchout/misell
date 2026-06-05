@@ -53,6 +53,22 @@ button {
   padding: 0 14px;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+select,
+input {
+  background: #ffffff;
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  color: #1f2933;
+  font: inherit;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
 main {
   padding: 24px;
 }
@@ -117,6 +133,17 @@ td small {
   color: #697986;
   display: block;
   margin-top: 3px;
+}
+
+.device-action {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(92px, 120px) minmax(140px, 1fr) auto;
+  min-width: 360px;
+}
+
+.device-action button {
+  min-height: 34px;
 }
 
 .pill {

@@ -24,6 +24,7 @@ const DEVICE_TOKEN_PEPPER = process.env.DEVICE_TOKEN_PEPPER || process.env.MISEL
 
 const STATUS = new Set(["online", "degraded", "offline", "critical", "maintenance", "retired", "lost"]);
 const TERMINAL_STATUS = new Set(["maintenance", "retired", "lost"]);
+const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "lost"]);
 const WARNING_DISK_MB = 10240;
 const CRITICAL_DISK_MB = 2048;
 const WARNING_MEMORY_PERCENT = 85;
@@ -140,6 +141,33 @@ app.get("/api/admin/devices/:device_id", requireAdminAuth, (req, res) => {
     return;
   }
   res.json({ ok: true, device });
+});
+
+app.patch("/api/admin/devices/:device_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const deviceId = cleanId(req.params.device_id);
+    const existing = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+    if (!existing) {
+      res.status(404).json({ error: "Device not found" });
+      return;
+    }
+
+    const input = normalizeDeviceAdminUpdate(req.body || {});
+    const now = nowIso();
+    db.prepare("UPDATE devices SET status = ?, notes = ?, updated_at = ? WHERE device_id = ?")
+      .run(input.status, input.notes, now, deviceId);
+
+    if (TERMINAL_STATUS.has(input.status)) {
+      resolveDeviceAlerts(deviceId, now);
+    }
+
+    res.json({
+      ok: true,
+      device: getDeviceDetail(deviceId)
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/admin/alerts", requireAdminAuth, (req, res) => {
@@ -522,6 +550,17 @@ function normalizeDeviceInput(input) {
   };
 }
 
+function normalizeDeviceAdminUpdate(input) {
+  const status = cleanString(input.status);
+  if (!ADMIN_SET_DEVICE_STATUS.has(status)) {
+    throw new Error(`status must be one of: ${Array.from(ADMIN_SET_DEVICE_STATUS).join(", ")}`);
+  }
+  return {
+    status,
+    notes: cleanString(input.notes).slice(0, 1000)
+  };
+}
+
 function normalizeHeartbeatPayload(device, payload, receivedAt) {
   return {
     device_id: device.device_id,
@@ -683,6 +722,11 @@ function openAlert(deviceId, tenantId, storeId, severity, type, message, now, me
 function resolveAlert(deviceId, type, now) {
   db.prepare("UPDATE alerts SET status = 'resolved', resolved_at = ?, last_seen = ? WHERE device_id = ? AND alert_type = ? AND status = 'open'")
     .run(now, now, deviceId, type);
+}
+
+function resolveDeviceAlerts(deviceId, now) {
+  db.prepare("UPDATE alerts SET status = 'resolved', resolved_at = ?, last_seen = ? WHERE device_id = ? AND status = 'open'")
+    .run(now, now, deviceId);
 }
 
 function upsertTenant(tenantId, name, now) {

@@ -19,6 +19,13 @@
     critical: "重大"
   };
 
+  const ADMIN_STATUS_OPTIONS = [
+    ["offline", "監視復帰"],
+    ["maintenance", "メンテ"],
+    ["retired", "退役"],
+    ["lost", "紛失"]
+  ];
+
   const els = {
     summary: document.getElementById("summary"),
     devices: document.getElementById("devices"),
@@ -43,9 +50,12 @@
     renderAlerts(alerts.alerts || []);
   }
 
-  async function fetchJson(url) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`${url} returned ${res.status}`);
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `${url} returned ${res.status}`);
+    }
     return res.json();
   }
 
@@ -56,7 +66,9 @@
       ["degraded", STATUS_LABELS.degraded, counts.degraded || 0],
       ["offline", STATUS_LABELS.offline, counts.offline || 0],
       ["critical", STATUS_LABELS.critical, counts.critical || 0],
-      ["maintenance", STATUS_LABELS.maintenance, counts.maintenance || 0]
+      ["maintenance", STATUS_LABELS.maintenance, counts.maintenance || 0],
+      ["retired", STATUS_LABELS.retired, counts.retired || 0],
+      ["lost", STATUS_LABELS.lost, counts.lost || 0]
     ];
     els.summary.innerHTML = items.map(([key, label, value]) => (
       `<section class="metric metric-${key}">
@@ -86,6 +98,7 @@
             <th>空き容量</th>
             <th>メモリ</th>
             <th>再生中</th>
+            <th>運用</th>
           </tr>
         </thead>
         <tbody>
@@ -93,10 +106,14 @@
         </tbody>
       </table>
     `;
+    els.devices.querySelectorAll(".device-action").forEach((form) => {
+      form.addEventListener("submit", handleDeviceUpdate);
+    });
   }
 
   function renderDeviceRow(device) {
     const status = device.effective_status || device.status;
+    const selectedStatus = ADMIN_STATUS_OPTIONS.some(([value]) => value === device.status) ? device.status : "offline";
     return `
       <tr>
         <td><span class="pill pill-${escapeAttr(status)}">${escapeHtml(STATUS_LABELS[status] || status)}</span></td>
@@ -112,8 +129,45 @@
         <td>${formatNumber(device.disk_free_mb)} MB</td>
         <td>${formatNumber(device.memory_used_percent)}%</td>
         <td>${escapeHtml(device.current_item_id || "")}</td>
+        <td>
+          <form class="device-action" data-device-id="${escapeHtml(device.device_id)}">
+            <select name="status" aria-label="端末ステータス">
+              ${ADMIN_STATUS_OPTIONS.map(([value, label]) => (
+                `<option value="${escapeAttr(value)}"${value === selectedStatus ? " selected" : ""}>${escapeHtml(label)}</option>`
+              )).join("")}
+            </select>
+            <input name="notes" type="text" value="${escapeHtml(device.notes || "")}" placeholder="運用メモ" aria-label="運用メモ">
+            <button type="submit">保存</button>
+          </form>
+        </td>
       </tr>
     `;
+  }
+
+  async function handleDeviceUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const deviceId = form.dataset.deviceId;
+    const payload = {
+      status: form.elements.status.value,
+      notes: form.elements.notes.value
+    };
+
+    button.disabled = true;
+    button.textContent = "保存中";
+    try {
+      await fetchJson(`/api/admin/devices/${encodeURIComponent(deviceId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "保存に失敗しました。");
+      button.disabled = false;
+      button.textContent = "保存";
+    }
   }
 
   function renderAlerts(alerts) {
