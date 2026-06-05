@@ -14,6 +14,10 @@ DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
 HEARTBEAT_URL="${MISELL_HEARTBEAT_URL:-}"
 RELEASE_CHANNEL="${MISELL_RELEASE_CHANNEL:-stable}"
 CONFIG_VERSION="${MISELL_CONFIG_VERSION:-cfg-local-001}"
+RUNTIME_DIR="${MISELL_RUNTIME_DIR:-${HOME}/.local/share/misell-player}"
+DATA_DIR="${MISELL_DATA_DIR:-${RUNTIME_DIR}/data}"
+ASSETS_DIR="${MISELL_ASSETS_DIR:-${RUNTIME_DIR}/assets}"
+LOG_DIR="${MISELL_LOG_DIR:-${RUNTIME_DIR}/logs}"
 
 TENANT_ID="${MISELL_TENANT_ID:-TEN-LOCAL}"
 STORE_ID="${MISELL_STORE_ID:-STO-LOCAL}"
@@ -45,6 +49,7 @@ Options:
   --release-channel CHANNEL       dev/staging/canary/stable/hold. Default: stable
   --config-version VERSION        Device config version. Default: cfg-local-001
   --upload-max-mb MB              Upload limit. Default: 2048
+  --runtime-dir PATH              Runtime data root. Default: ~/.local/share/misell-player
 
 Environment variables with the same names are also accepted.
 EOF
@@ -120,6 +125,13 @@ while [[ $# -gt 0 ]]; do
       UPLOAD_MAX_MB="$2"
       shift 2
       ;;
+    --runtime-dir)
+      RUNTIME_DIR="$2"
+      DATA_DIR="${RUNTIME_DIR}/data"
+      ASSETS_DIR="${RUNTIME_DIR}/assets"
+      LOG_DIR="${RUNTIME_DIR}/logs"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -189,6 +201,11 @@ APP_ENV=${APP_ENV}
 UPLOAD_MAX_MB=${UPLOAD_MAX_MB}
 MISELL_RELEASE_CHANNEL=${RELEASE_CHANNEL}
 MISELL_CONFIG_VERSION=${CONFIG_VERSION}
+MISELL_DATA_DIR=${DATA_DIR}
+MISELL_ASSETS_DIR=${ASSETS_DIR}
+MISELL_LOG_DIR=${LOG_DIR}
+MISELL_PLAYLIST_PATH=${DATA_DIR}/playlist.json
+MISELL_DEVICE_CONFIG_PATH=${DATA_DIR}/config.json
 
 MISELL_TENANT_ID=${TENANT_ID}
 MISELL_STORE_ID=${STORE_ID}
@@ -213,6 +230,7 @@ echo "device_id=${DEVICE_ID}"
 echo "device_name=${DEVICE_NAME}"
 echo "release_channel=${RELEASE_CHANNEL}"
 echo "config_version=${CONFIG_VERSION}"
+echo "runtime_dir=${RUNTIME_DIR}"
 
 if [[ "${APPLY}" != "1" ]]; then
   echo
@@ -228,6 +246,7 @@ if [[ -f "${ENV_FILE}" && "${FORCE}" != "1" ]]; then
 fi
 
 mkdir -p "$(dirname "${ENV_FILE}")"
+mkdir -p "${DATA_DIR}" "${ASSETS_DIR}/images" "${ASSETS_DIR}/videos" "${LOG_DIR}"
 TEMP_FILE="$(mktemp "${ENV_FILE}.XXXXXX")"
 render_env > "${TEMP_FILE}"
 chmod 600 "${TEMP_FILE}"

@@ -240,16 +240,18 @@ MVPからテスト導入までの監視。
 
 ただし、必ず以下を実施する。
 
-1. 更新前に `npm run check`
-2. 更新前に `npm run validate:playlist`
-3. 更新前に `npm audit --audit-level=moderate`
-4. 端末で現在の `app_version` と `playlist_version` を記録
-5. アプリを更新
-6. `npm install --omit=dev`
-7. `systemctl --user restart misell-player.service`
-8. `/api/health` が200を返すことを確認
-9. `/player` が200を返すことを確認
-10. 問題があれば前の配置へ戻す
+1. アプリcheckoutをcleanに保つ
+2. 端末固有のplaylist、config、素材、ログは `~/.local/share/misell-player` へ分離する
+3. 更新前に `npm run check`
+4. 更新前に `npm run validate:playlist`
+5. 更新前に `npm audit --audit-level=moderate`
+6. 端末で現在の `app_version` と `playlist_version` を記録
+7. アプリを更新
+8. `npm install --omit=dev`
+9. `systemctl --user restart misell-player.service`
+10. `/api/health` が200を返すことを確認
+11. `/player` が200を返すことを確認
+12. 問題があれば前の配置へ戻す
 
 ### 商用
 

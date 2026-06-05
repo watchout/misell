@@ -5,12 +5,37 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 MISELL_CONFIG_DIR="${HOME}/.config/misell-player"
 MISELL_ENV_FILE="${MISELL_CONFIG_DIR}/env"
+MISELL_RUNTIME_DIR="${MISELL_RUNTIME_DIR:-${HOME}/.local/share/misell-player}"
+MISELL_DATA_DIR="${MISELL_DATA_DIR:-${MISELL_RUNTIME_DIR}/data}"
+MISELL_ASSETS_DIR="${MISELL_ASSETS_DIR:-${MISELL_RUNTIME_DIR}/assets}"
+MISELL_LOG_DIR="${MISELL_LOG_DIR:-${MISELL_RUNTIME_DIR}/logs}"
 INSTALL_KIOSK="${INSTALL_KIOSK:-1}"
 INSTALL_HEARTBEAT="${INSTALL_HEARTBEAT:-0}"
 INSTALL_LOG_ROTATE="${INSTALL_LOG_ROTATE:-1}"
 
 mkdir -p "${SYSTEMD_USER_DIR}"
 mkdir -p "${MISELL_CONFIG_DIR}"
+mkdir -p "${MISELL_DATA_DIR}" "${MISELL_ASSETS_DIR}/images" "${MISELL_ASSETS_DIR}/videos" "${MISELL_LOG_DIR}"
+
+copy_if_missing() {
+  local source="$1"
+  local target="$2"
+  if [[ -f "${source}" && ! -f "${target}" ]]; then
+    cp "${source}" "${target}"
+  fi
+}
+
+ensure_env_setting() {
+  local key="$1"
+  local value="$2"
+  if ! grep -q "^${key}=" "${MISELL_ENV_FILE}" 2>/dev/null; then
+    printf '%s=%s\n' "${key}" "${value}" >> "${MISELL_ENV_FILE}"
+  fi
+}
+
+copy_if_missing "${APP_DIR}/data/playlist.json" "${MISELL_DATA_DIR}/playlist.json"
+copy_if_missing "${APP_DIR}/data/config.json" "${MISELL_DATA_DIR}/config.json"
+chmod 600 "${MISELL_DATA_DIR}/config.json" 2>/dev/null || true
 
 if [[ ! -f "${MISELL_ENV_FILE}" ]]; then
   ADMIN_PASSWORD="$(openssl rand -base64 18 2>/dev/null || node -e "console.log(require('crypto').randomBytes(18).toString('base64'))")"
@@ -20,11 +45,22 @@ ADMIN_PASSWORD=${ADMIN_PASSWORD}
 REQUIRE_ADMIN_AUTH=1
 APP_ENV=production
 UPLOAD_MAX_MB=2048
+MISELL_DATA_DIR=${MISELL_DATA_DIR}
+MISELL_ASSETS_DIR=${MISELL_ASSETS_DIR}
+MISELL_LOG_DIR=${MISELL_LOG_DIR}
+MISELL_PLAYLIST_PATH=${MISELL_DATA_DIR}/playlist.json
+MISELL_DEVICE_CONFIG_PATH=${MISELL_DATA_DIR}/config.json
 EOF
   chmod 600 "${MISELL_ENV_FILE}"
   echo "Created ${MISELL_ENV_FILE}"
   echo "Initial admin login: admin / ${ADMIN_PASSWORD}"
 fi
+
+ensure_env_setting "MISELL_DATA_DIR" "${MISELL_DATA_DIR}"
+ensure_env_setting "MISELL_ASSETS_DIR" "${MISELL_ASSETS_DIR}"
+ensure_env_setting "MISELL_LOG_DIR" "${MISELL_LOG_DIR}"
+ensure_env_setting "MISELL_PLAYLIST_PATH" "${MISELL_DATA_DIR}/playlist.json"
+ensure_env_setting "MISELL_DEVICE_CONFIG_PATH" "${MISELL_DATA_DIR}/config.json"
 
 sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-player.service" \
   > "${SYSTEMD_USER_DIR}/misell-player.service"

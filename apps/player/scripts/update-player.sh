@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APP_DIR="${MISELL_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ENV_FILE="${MISELL_ENV_FILE:-${HOME}/.config/misell-player/env}"
 PORT="${PORT:-3000}"
 SERVICE_NAME="${MISELL_PLAYER_SERVICE:-misell-player.service}"
 APPLY=0
@@ -57,6 +58,13 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -f "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
 
 run() {
   echo "+ $*"
