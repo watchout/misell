@@ -127,6 +127,7 @@ scripts/emit-heartbeat.sh
 - `POST /api/admin/devices` with Basic auth
 - `GET /api/admin/devices` with Basic auth
 - `GET /api/admin/devices/:device_id` with Basic auth
+- `PATCH /api/admin/devices/:device_id` with Basic auth
 - `GET /api/admin/alerts` with Basic auth
 - `POST /api/device/heartbeat` with Bearer device token
 - `POST /api/device/playlog` with Bearer device token
