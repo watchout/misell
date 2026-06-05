@@ -142,8 +142,54 @@ td small {
   min-width: 360px;
 }
 
-.device-action button {
+.update-action {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(76px, 96px) minmax(120px, 1fr) minmax(120px, 1fr) minmax(86px, 104px) auto auto;
+  min-width: 640px;
+}
+
+.device-action button,
+.update-action button {
   min-height: 34px;
+}
+
+.update-action small {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.update-status {
+  align-self: center;
+  background: #eef2f5;
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+  color: #52616f;
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  padding: 7px 9px;
+  text-align: center;
+}
+
+.update-status-pending,
+.update-status-checking,
+.update-status-updating {
+  background: #fff1cc;
+  border-color: #f0ce6a;
+  color: #805600;
+}
+
+.update-status-success {
+  background: #dff5e7;
+  border-color: #a8dbc0;
+  color: #176b3a;
+}
+
+.update-status-failed {
+  background: #ffe1df;
+  border-color: #f0b8b3;
+  color: #a83228;
 }
 
 .pill {

@@ -26,6 +26,24 @@
     ["lost", "紛失"]
   ];
 
+  const RELEASE_CHANNEL_OPTIONS = [
+    ["", "維持"],
+    ["dev", "dev"],
+    ["staging", "staging"],
+    ["canary", "canary"],
+    ["stable", "stable"],
+    ["hold", "hold"]
+  ];
+
+  const UPDATE_STATUS_LABELS = {
+    idle: "待機",
+    pending: "予約済み",
+    checking: "確認中",
+    updating: "更新中",
+    success: "完了",
+    failed: "失敗"
+  };
+
   const els = {
     summary: document.getElementById("summary"),
     devices: document.getElementById("devices"),
@@ -98,6 +116,7 @@
             <th>空き容量</th>
             <th>メモリ</th>
             <th>再生中</th>
+            <th>更新</th>
             <th>運用</th>
           </tr>
         </thead>
@@ -108,6 +127,9 @@
     `;
     els.devices.querySelectorAll(".device-action").forEach((form) => {
       form.addEventListener("submit", handleDeviceUpdate);
+    });
+    els.devices.querySelectorAll(".update-action").forEach((form) => {
+      form.addEventListener("submit", handleUpdateRequest);
     });
   }
 
@@ -129,6 +151,23 @@
         <td>${formatNumber(device.disk_free_mb)} MB</td>
         <td>${formatNumber(device.memory_used_percent)}%</td>
         <td>${escapeHtml(device.current_item_id || "")}</td>
+        <td>
+          <form class="update-action" data-device-id="${escapeHtml(device.device_id)}">
+            <span class="update-status update-status-${escapeAttr(device.update_status || "idle")}">
+              ${escapeHtml(UPDATE_STATUS_LABELS[device.update_status] || device.update_status || "待機")}
+            </span>
+            <input name="target_update_ref" type="text" value="${escapeHtml(device.target_update_ref || "")}" placeholder="Git ref" aria-label="Git ref">
+            <input name="target_release_id" type="text" value="${escapeHtml(device.target_release_id || "")}" placeholder="Release ID" aria-label="Release ID">
+            <select name="target_release_channel" aria-label="Release channel">
+              ${RELEASE_CHANNEL_OPTIONS.map(([value, label]) => (
+                `<option value="${escapeAttr(value)}"${value === (device.target_release_channel || "") ? " selected" : ""}>${escapeHtml(label)}</option>`
+              )).join("")}
+            </select>
+            <button type="submit" name="action" value="schedule">予約</button>
+            <button type="submit" name="action" value="clear">解除</button>
+            <small>${escapeHtml(device.update_error || "")}</small>
+          </form>
+        </td>
         <td>
           <form class="device-action" data-device-id="${escapeHtml(device.device_id)}">
             <select name="status" aria-label="端末ステータス">
@@ -167,6 +206,37 @@
       window.alert(error.message || "保存に失敗しました。");
       button.disabled = false;
       button.textContent = "保存";
+    }
+  }
+
+  async function handleUpdateRequest(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitter = event.submitter || form.querySelector("button");
+    const buttons = form.querySelectorAll("button");
+    const deviceId = form.dataset.deviceId;
+    const clearTarget = submitter?.value === "clear";
+    const payload = {
+      target_update_ref: clearTarget ? "" : form.elements.target_update_ref.value,
+      target_release_id: clearTarget ? "" : form.elements.target_release_id.value,
+      target_release_channel: clearTarget ? "" : form.elements.target_release_channel.value
+    };
+
+    buttons.forEach((button) => {
+      button.disabled = true;
+    });
+    try {
+      await fetchJson(`/api/admin/devices/${encodeURIComponent(deviceId)}/update`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "更新予約に失敗しました。");
+      buttons.forEach((button) => {
+        button.disabled = false;
+      });
     }
   }
 
