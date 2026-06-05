@@ -404,6 +404,8 @@ Git pull直更新は禁止する。
 - Cloud更新ポリシー取得API
 - Cloud更新結果報告API
 - 端末更新チェックscript/timer
+- Webhookアラート通知
+- 通知履歴管理
 - release_channel/config_versionの端末env保存
 - systemd user service
 - Ubuntu security baseline script
@@ -411,20 +413,20 @@ Git pull直更新は禁止する。
 未実装で、複数端末商用前に必要なもの:
 
 - device_token失効/再発行
-- 外部通知
 - クラウドログ回収
 - release manifest
 - bundle/symlink方式の商用rollback
 - release channel単位の一括配信
+- 通知ルーティングの顧客/店舗別分離
 - Tailscale ACLの正式運用
 
 ## 次の実装候補
 
-1. warning/criticalをSlack/Discord/メールへ通知する
-2. device_token再発行/失効を管理画面へ実装する
-3. release manifest配布を実装する
-4. release channel単位の一括配信を実装する
-5. bundle/symlink方式の商用rollbackを実装する
+1. device_token再発行/失効を管理画面へ実装する
+2. release manifest配布を実装する
+3. release channel単位の一括配信を実装する
+4. bundle/symlink方式の商用rollbackを実装する
+5. 通知ルーティングを顧客/店舗単位で分離する
 
 ## MVP実装済みの運用補助
 

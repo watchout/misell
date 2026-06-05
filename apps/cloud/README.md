@@ -32,6 +32,28 @@ ADMIN_USER=admin ADMIN_PASSWORD='replace-this' DEVICE_TOKEN_PEPPER='replace-this
 
 By default the server binds to `127.0.0.1`. For a hosted environment, set `HOST=0.0.0.0` behind HTTPS.
 
+## Alert Notifications
+
+Webhook notifications are disabled by default. Set a webhook URL to notify external operations tools when alerts open, change, or resolve.
+
+```bash
+ALERT_WEBHOOK_URL=https://example.com/misell-alert-webhook
+ALERT_WEBHOOK_MIN_SEVERITY=warning
+ALERT_WEBHOOK_NOTIFY_RESOLVED=1
+ALERT_WEBHOOK_TIMEOUT_MS=5000
+```
+
+The payload includes both `text` and `content` for Slack/Discord-style receivers, plus structured `alert` and `cloud` fields.
+
+Test the configured webhook:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  http://localhost:3200/api/admin/alert-notifications/test
+```
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
@@ -130,6 +152,8 @@ scripts/emit-heartbeat.sh
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `GET /api/admin/alerts` with Basic auth
+- `GET /api/admin/alert-notifications` with Basic auth
+- `POST /api/admin/alert-notifications/test` with Basic auth
 - `POST /api/device/heartbeat` with Bearer device token
 - `GET /api/device/update-policy` with Bearer device token
 - `POST /api/device/update-result` with Bearer device token

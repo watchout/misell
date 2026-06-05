@@ -21,12 +21,17 @@ const ADMIN_USER = process.env.ADMIN_USER || process.env.MISELL_CLOUD_ADMIN_USER
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || process.env.MISELL_CLOUD_ADMIN_PASSWORD || "change-me";
 const REQUIRE_ADMIN_AUTH = process.env.REQUIRE_ADMIN_AUTH === "1" || process.env.MISELL_REQUIRE_ADMIN_AUTH === "1";
 const DEVICE_TOKEN_PEPPER = process.env.DEVICE_TOKEN_PEPPER || process.env.MISELL_DEVICE_TOKEN_PEPPER || "local-development-pepper";
+const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || process.env.MISELL_ALERT_WEBHOOK_URL || "";
+const ALERT_WEBHOOK_MIN_SEVERITY = process.env.ALERT_WEBHOOK_MIN_SEVERITY || process.env.MISELL_ALERT_WEBHOOK_MIN_SEVERITY || "warning";
+const ALERT_WEBHOOK_NOTIFY_RESOLVED = process.env.ALERT_WEBHOOK_NOTIFY_RESOLVED !== "0" && process.env.MISELL_ALERT_WEBHOOK_NOTIFY_RESOLVED !== "0";
+const ALERT_WEBHOOK_TIMEOUT_MS = Number(process.env.ALERT_WEBHOOK_TIMEOUT_MS || process.env.MISELL_ALERT_WEBHOOK_TIMEOUT_MS || 5000);
 
 const STATUS = new Set(["online", "degraded", "offline", "critical", "maintenance", "retired", "lost"]);
 const TERMINAL_STATUS = new Set(["maintenance", "retired", "lost"]);
 const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "lost"]);
 const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
+const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
 const WARNING_DISK_MB = 10240;
 const CRITICAL_DISK_MB = 2048;
 const WARNING_MEMORY_PERCENT = 85;
@@ -129,7 +134,12 @@ app.get("/api/admin/summary", requireAdminAuth, (req, res) => {
     const status = device.effective_status || device.status || "offline";
     counts[status] = (counts[status] || 0) + 1;
   }
-  res.json({ ok: true, counts, total: devices.length });
+  res.json({
+    ok: true,
+    counts,
+    total: devices.length,
+    notifications: alertNotificationConfig()
+  });
 });
 
 app.get("/api/admin/devices", requireAdminAuth, (req, res) => {
@@ -223,14 +233,89 @@ app.patch("/api/admin/devices/:device_id/update", requireAdminAuth, (req, res, n
 
 app.get("/api/admin/alerts", requireAdminAuth, (req, res) => {
   const alerts = db.prepare(`
-    SELECT * FROM alerts
-    WHERE status = 'open'
+    SELECT
+      a.*,
+      n.event AS last_notification_event,
+      n.status AS last_notification_status,
+      n.attempted_at AS last_notification_attempted_at,
+      n.delivered_at AS last_notification_delivered_at,
+      n.error AS last_notification_error
+    FROM alerts a
+    LEFT JOIN alert_notifications n ON n.id = (
+      SELECT id FROM alert_notifications
+      WHERE alert_id = a.id
+      ORDER BY id DESC
+      LIMIT 1
+    )
+    WHERE a.status = 'open'
     ORDER BY
-      CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-      last_seen DESC
+      CASE a.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+      a.last_seen DESC
     LIMIT 100
   `).all();
   res.json({ ok: true, alerts });
+});
+
+app.get("/api/admin/alert-notifications", requireAdminAuth, (req, res) => {
+  const notifications = db.prepare(`
+    SELECT
+      n.id,
+      n.alert_id,
+      n.event,
+      n.channel,
+      n.status,
+      n.attempted_at,
+      n.delivered_at,
+      n.response_status,
+      n.error,
+      n.created_at,
+      a.device_id,
+      a.alert_type,
+      a.severity,
+      a.status AS alert_status
+    FROM alert_notifications n
+    LEFT JOIN alerts a ON a.id = n.alert_id
+    ORDER BY n.created_at DESC, n.id DESC
+    LIMIT 100
+  `).all();
+  res.json({
+    ok: true,
+    config: alertNotificationConfig(),
+    notifications
+  });
+});
+
+app.post("/api/admin/alert-notifications/test", requireAdminAuth, async (req, res, next) => {
+  try {
+    if (!ALERT_WEBHOOK_URL) {
+      res.status(400).json({ error: "ALERT_WEBHOOK_URL is not configured" });
+      return;
+    }
+
+    const now = nowIso();
+    const payload = buildAlertWebhookPayload({
+      id: null,
+      device_id: cleanId(req.body?.device_id || "DEV-TEST"),
+      tenant_id: cleanId(req.body?.tenant_id || "TEN-TEST"),
+      store_id: cleanId(req.body?.store_id || "STO-TEST"),
+      severity: cleanString(req.body?.severity || "warning") || "warning",
+      alert_type: cleanString(req.body?.alert_type || "notification_test") || "notification_test",
+      message: cleanString(req.body?.message || "Misell alert notification test") || "Misell alert notification test",
+      status: "open",
+      first_seen: now,
+      last_seen: now,
+      resolved_at: null
+    }, "test");
+    const notificationId = recordAlertNotification(null, "test", payload, now);
+    await sendWebhookNotification(notificationId, payload);
+    const notification = getAlertNotification(notificationId);
+    res.status(notification.status === "delivered" ? 201 : 502).json({
+      ok: notification.status === "delivered",
+      notification
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/admin/devices", requireAdminAuth, (req, res, next) => {
@@ -650,11 +735,27 @@ function initDb() {
       metadata_json TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS alert_notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alert_id INTEGER,
+      event TEXT NOT NULL,
+      channel TEXT NOT NULL DEFAULT 'webhook',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempted_at TEXT NOT NULL,
+      delivered_at TEXT,
+      response_status INTEGER,
+      error TEXT,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_errors_device_received ON error_logs(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(status, severity, last_seen DESC);
+    CREATE INDEX IF NOT EXISTS idx_alert_notifications_alert ON alert_notifications(alert_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_alert_notifications_status ON alert_notifications(status, created_at DESC);
   `);
   migrateDevicesTable();
 }
@@ -934,26 +1035,203 @@ function updateHeartbeatAlerts(deviceId, tenantId, storeId, status, heartbeat, n
 }
 
 function openAlert(deviceId, tenantId, storeId, severity, type, message, now, metadata) {
-  const existing = db.prepare("SELECT id FROM alerts WHERE device_id = ? AND alert_type = ? AND status = 'open'").get(deviceId, type);
+  const existing = db.prepare("SELECT * FROM alerts WHERE device_id = ? AND alert_type = ? AND status = 'open'").get(deviceId, type);
   if (existing) {
     db.prepare("UPDATE alerts SET severity = ?, message = ?, last_seen = ?, metadata_json = ? WHERE id = ?")
       .run(severity, message, now, JSON.stringify(metadata || {}), existing.id);
+    if (existing.severity !== severity) {
+      scheduleAlertNotification({
+        ...existing,
+        severity,
+        message,
+        last_seen: now,
+        metadata_json: JSON.stringify(metadata || {})
+      }, "updated");
+    }
     return;
   }
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO alerts (device_id, tenant_id, store_id, severity, alert_type, message, first_seen, last_seen, metadata_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(deviceId, tenantId, storeId, severity, type, message, now, now, JSON.stringify(metadata || {}));
+  scheduleAlertNotification(db.prepare("SELECT * FROM alerts WHERE id = ?").get(result.lastInsertRowid), "opened");
 }
 
 function resolveAlert(deviceId, type, now) {
+  const alerts = db.prepare("SELECT * FROM alerts WHERE device_id = ? AND alert_type = ? AND status = 'open'").all(deviceId, type);
+  if (alerts.length === 0) return;
   db.prepare("UPDATE alerts SET status = 'resolved', resolved_at = ?, last_seen = ? WHERE device_id = ? AND alert_type = ? AND status = 'open'")
     .run(now, now, deviceId, type);
+  for (const alert of alerts) {
+    scheduleAlertNotification({
+      ...alert,
+      status: "resolved",
+      resolved_at: now,
+      last_seen: now
+    }, "resolved");
+  }
 }
 
 function resolveDeviceAlerts(deviceId, now) {
+  const alerts = db.prepare("SELECT * FROM alerts WHERE device_id = ? AND status = 'open'").all(deviceId);
+  if (alerts.length === 0) return;
   db.prepare("UPDATE alerts SET status = 'resolved', resolved_at = ?, last_seen = ? WHERE device_id = ? AND status = 'open'")
     .run(now, now, deviceId);
+  for (const alert of alerts) {
+    scheduleAlertNotification({
+      ...alert,
+      status: "resolved",
+      resolved_at: now,
+      last_seen: now
+    }, "resolved");
+  }
+}
+
+function alertNotificationConfig() {
+  return {
+    webhook_enabled: Boolean(ALERT_WEBHOOK_URL),
+    min_severity: normalizedAlertWebhookMinSeverity(),
+    notify_resolved: ALERT_WEBHOOK_NOTIFY_RESOLVED,
+    timeout_ms: normalizedWebhookTimeoutMs()
+  };
+}
+
+function scheduleAlertNotification(alert, event) {
+  if (!alert || !shouldNotifyAlert(alert, event)) return;
+  const now = nowIso();
+  const payload = buildAlertWebhookPayload(alert, event);
+  const notificationId = recordAlertNotification(alert.id || null, event, payload, now);
+  setImmediate(() => {
+    sendWebhookNotification(notificationId, payload).catch((error) => {
+      markAlertNotificationFailed(notificationId, error);
+    });
+  });
+}
+
+function shouldNotifyAlert(alert, event) {
+  if (!ALERT_WEBHOOK_URL) return false;
+  if (!ALERT_EVENTS.has(event)) return false;
+  if (event === "resolved" && !ALERT_WEBHOOK_NOTIFY_RESOLVED) return false;
+  return severityRank(alert.severity) >= severityRank(normalizedAlertWebhookMinSeverity());
+}
+
+function buildAlertWebhookPayload(alert, event) {
+  const title = `[Misell] ${event.toUpperCase()} ${alert.severity || "warning"} ${alert.alert_type || "alert"}`;
+  const text = `${title}: ${alert.device_id || "unknown-device"} ${alert.message || ""}`.trim();
+  return {
+    text,
+    content: text,
+    event,
+    alert: {
+      id: alert.id || null,
+      device_id: alert.device_id || "",
+      tenant_id: alert.tenant_id || "",
+      store_id: alert.store_id || "",
+      severity: alert.severity || "",
+      status: alert.status || "",
+      alert_type: alert.alert_type || "",
+      message: alert.message || "",
+      first_seen: alert.first_seen || "",
+      last_seen: alert.last_seen || "",
+      resolved_at: alert.resolved_at || ""
+    },
+    cloud: {
+      app: "misell-cloud",
+      version: APP_VERSION,
+      emitted_at: nowIso()
+    }
+  };
+}
+
+function recordAlertNotification(alertId, event, payload, now) {
+  const normalizedEvent = ALERT_EVENTS.has(event) ? event : "updated";
+  const result = db.prepare(`
+    INSERT INTO alert_notifications (
+      alert_id, event, channel, status, attempted_at, payload_json, created_at
+    ) VALUES (?, ?, 'webhook', 'pending', ?, ?, ?)
+  `).run(alertId, normalizedEvent, now, JSON.stringify(payload), now);
+  return result.lastInsertRowid;
+}
+
+async function sendWebhookNotification(notificationId, payload) {
+  if (!ALERT_WEBHOOK_URL) {
+    markAlertNotificationFailed(notificationId, new Error("ALERT_WEBHOOK_URL is not configured"));
+    return;
+  }
+  if (typeof fetch !== "function") {
+    markAlertNotificationFailed(notificationId, new Error("fetch is not available in this Node.js runtime"));
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), normalizedWebhookTimeoutMs());
+  let responseStatus = null;
+  try {
+    const response = await fetch(ALERT_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    responseStatus = response.status;
+    if (!response.ok) {
+      throw new Error(`Webhook returned HTTP ${response.status}`);
+    }
+    db.prepare(`
+      UPDATE alert_notifications
+      SET status = 'delivered', delivered_at = ?, response_status = ?, error = ''
+      WHERE id = ?
+    `).run(nowIso(), responseStatus, notificationId);
+  } catch (error) {
+    markAlertNotificationFailed(notificationId, error, responseStatus);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function markAlertNotificationFailed(notificationId, error, responseStatus = null) {
+  db.prepare(`
+    UPDATE alert_notifications
+    SET status = 'failed', response_status = ?, error = ?
+    WHERE id = ?
+  `).run(responseStatus, cleanString(error?.message || String(error)).slice(0, 1000), notificationId);
+}
+
+function getAlertNotification(notificationId) {
+  return db.prepare(`
+    SELECT
+      n.id,
+      n.alert_id,
+      n.event,
+      n.channel,
+      n.status,
+      n.attempted_at,
+      n.delivered_at,
+      n.response_status,
+      n.error,
+      n.created_at
+    FROM alert_notifications n
+    WHERE n.id = ?
+  `).get(notificationId);
+}
+
+function severityRank(severity) {
+  const value = cleanString(severity);
+  if (value === "critical") return 2;
+  if (value === "warning") return 1;
+  return 0;
+}
+
+function normalizedAlertWebhookMinSeverity() {
+  const severity = cleanString(ALERT_WEBHOOK_MIN_SEVERITY);
+  return severity === "critical" ? "critical" : "warning";
+}
+
+function normalizedWebhookTimeoutMs() {
+  if (!Number.isFinite(ALERT_WEBHOOK_TIMEOUT_MS) || ALERT_WEBHOOK_TIMEOUT_MS < 1000) {
+    return 5000;
+  }
+  return Math.min(ALERT_WEBHOOK_TIMEOUT_MS, 30000);
 }
 
 function upsertTenant(tenantId, name, now) {
