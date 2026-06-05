@@ -10,6 +10,8 @@
     "check": "node --check server.js && node --check public/player.js && node --check public/admin.js",
     "validate:playlist": "node server.js --validate-playlist",
     "heartbeat": "scripts/emit-heartbeat.sh",
+    "evidence": "scripts/collect-device-evidence.sh",
+    "evidence:upload": "scripts/collect-device-evidence.sh --upload",
     "rotate:logs": "scripts/rotate-logs.sh"
   },
   "dependencies": {

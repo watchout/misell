@@ -370,6 +370,30 @@ CREATE TABLE error_logs (
 );
 ```
 
+### device_log_bundles
+
+```sql
+CREATE TABLE device_log_bundles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  store_id TEXT NOT NULL,
+  screen_group_id TEXT,
+  received_at TEXT NOT NULL,
+  captured_at TEXT,
+  label TEXT,
+  reason TEXT,
+  source TEXT,
+  hostname TEXT,
+  app_version TEXT,
+  release_id TEXT,
+  release_channel TEXT,
+  entry_count INTEGER NOT NULL DEFAULT 0,
+  total_bytes INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL
+);
+```
+
 ### alerts
 
 ```sql
@@ -498,6 +522,45 @@ MVPではBasic auth。
 - `error_logs` へ保存
 - warning/critical判定
 - alert作成/更新
+
+### POST /api/device/logs
+
+障害調査用ログバンドル受信。
+
+認証:
+
+- Bearer device token必須
+
+入力:
+
+```json
+{
+  "device_id": "DEV-000001",
+  "captured_at": "2026-06-05T10:00:00+09:00",
+  "label": "incident",
+  "reason": "kiosk did not start",
+  "source": "collect-device-evidence.sh",
+  "hostname": "misell-demo",
+  "release_id": "main-ac28bf6",
+  "entries": [
+    {
+      "name": "misell_journal_player",
+      "filename": "misell_journal_player.txt",
+      "kind": "text",
+      "content": "...",
+      "bytes": 12000,
+      "original_bytes": 12000,
+      "truncated": false
+    }
+  ]
+}
+```
+
+処理:
+
+- `device_log_bundles` へ保存
+- entry件数、1 entry bytes、合計bytesに上限を設ける
+- 管理画面に直近ログ収集履歴を表示する
 
 ### GET /api/admin/devices
 
@@ -669,6 +732,7 @@ Dashboard。
 - version情報
 - token状態
 - token操作履歴
+- log bundle履歴
 - resource状態
 - open alerts
 - recent playlogs
@@ -746,11 +810,14 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - `/admin`
 - `/admin/devices`
 - `/admin/devices/:device_id`
+- `GET /api/admin/device-log-bundles`
+- `GET /api/admin/device-log-bundles/:id`
 
 ### PR 5: playlog/error ingest
 
 - `POST /api/device/playlog`
 - `POST /api/device/error`
+- `POST /api/device/logs`
 - recent logs表示
 
 ### PR 6: alerts
@@ -774,6 +841,8 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - 正しいtoken heartbeatが200
 - token失効後のheartbeatが403
 - token再発行後に旧tokenが401、新tokenが200
+- device log bundleを送信できる
+- 管理画面に直近log bundleが表示される
 - devices一覧にlast_seenが出る
 - 3分/10分判定の関数テストがある
 
@@ -783,6 +852,7 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - Cloud上で `DEV-DEMO-001` がonlineになる
 - `app_version/release_id/release_channel/playlist_version/config_version` が見える
 - tokenを無効化した端末は403になる
+- `scripts/collect-device-evidence.sh --upload` でCloudに証跡を送れる
 
 ## セキュリティ
 
@@ -810,7 +880,6 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - Release manifest
 - Pending commands
 - Screenshot upload
-- Remote log upload
 - Slack/Discord notification
 - Role-based admin
 - Tenant-separated dashboard

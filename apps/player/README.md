@@ -211,6 +211,14 @@ scripts/collect-device-evidence.sh
 
 The script writes evidence under `evidence/YYYYMMDD-HHMMSS/`.
 
+Upload the same bounded evidence bundle to Misell Cloud:
+
+```bash
+scripts/collect-device-evidence.sh --upload --label incident --reason "kiosk did not start"
+```
+
+`MISELL_LOGS_URL` can be set directly. If it is omitted and `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script posts to the same Cloud base URL at `/api/device/logs`.
+
 ## Heartbeat
 
 Print the local heartbeat/status payload:

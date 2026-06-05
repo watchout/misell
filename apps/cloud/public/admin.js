@@ -50,6 +50,7 @@
     devices: document.getElementById("devices"),
     alerts: document.getElementById("alerts"),
     notifications: document.getElementById("notifications"),
+    logBundles: document.getElementById("log-bundles"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
   };
@@ -59,11 +60,12 @@
   window.setInterval(loadDashboard, 30000);
 
   async function loadDashboard() {
-    const [summary, devices, alerts, notifications] = await Promise.all([
+    const [summary, devices, alerts, notifications, logBundles] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/alerts"),
-      fetchJson("/api/admin/alert-notifications")
+      fetchJson("/api/admin/alert-notifications"),
+      fetchJson("/api/admin/device-log-bundles")
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
@@ -71,6 +73,7 @@
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
+    renderLogBundles(logBundles.log_bundles || []);
     renderTokenResult();
   }
 
@@ -365,6 +368,41 @@
     }
   }
 
+  function renderLogBundles(logBundles) {
+    if (!els.logBundles) return;
+    if (logBundles.length === 0) {
+      els.logBundles.innerHTML = `<p class="empty">収集済みログはありません。</p>`;
+      return;
+    }
+
+    els.logBundles.innerHTML = `
+      <table class="log-bundles-table">
+        <thead>
+          <tr>
+            <th>受信</th>
+            <th>端末</th>
+            <th>内容</th>
+            <th>件数</th>
+            <th>Version</th>
+            <th>詳細</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${logBundles.slice(0, 20).map((bundle) => `
+            <tr>
+              <td>${formatTime(bundle.received_at)}<small>${formatTime(bundle.captured_at)}</small></td>
+              <td>${escapeHtml(bundle.device_id || "")}<small>${escapeHtml(bundle.hostname || "")}</small></td>
+              <td>${escapeHtml(bundle.label || "")}<small>${escapeHtml(bundle.reason || "")}</small></td>
+              <td>${formatNumber(bundle.entry_count)}<small>${formatBytes(bundle.total_bytes)}</small></td>
+              <td>${escapeHtml(bundle.release_id || "")}<small>${escapeHtml(bundle.release_channel || "")}</small></td>
+              <td><a href="/api/admin/device-log-bundles/${encodeURIComponent(bundle.id)}">JSON</a></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
   function renderTokenResult() {
     if (!els.tokenResult) return;
     if (!state.issuedToken) {
@@ -429,6 +467,14 @@
 
   function formatNumber(value) {
     return value === null || value === undefined ? "" : String(value);
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
   function escapeHtml(value) {
