@@ -67,19 +67,17 @@ derive_update_urls() {
   fi
 }
 
-json_field_line() {
-  node -e '
-    const fs = require("fs");
-    const data = JSON.parse(fs.readFileSync(0, "utf8"));
+json_policy_value() {
+  local field="$1"
+  POLICY_JSON="${policy}" FIELD="${field}" node -e '
+    const data = JSON.parse(process.env.POLICY_JSON || "{}");
     const update = data.update || {};
-    const values = [
-      update.required ? "1" : "0",
-      update.target_update_ref || "",
-      update.target_release_id || "",
-      update.target_release_channel || "",
-      update.status || ""
-    ];
-    console.log(values.map((value) => String(value).replace(/\t/g, " ")).join("\t"));
+    const field = process.env.FIELD;
+    if (field === "required") {
+      process.stdout.write(update.required ? "1" : "0");
+    } else {
+      process.stdout.write(String(update[field] || ""));
+    }
   '
 }
 
@@ -168,8 +166,11 @@ policy="$(curl -fsS --max-time 20 \
   -H "Authorization: Bearer ${DEVICE_TOKEN}" \
   "${UPDATE_URL}")"
 
-policy_line="$(printf '%s' "${policy}" | json_field_line)"
-IFS=$'\t' read -r REQUIRED TARGET_UPDATE_REF TARGET_RELEASE_ID TARGET_RELEASE_CHANNEL UPDATE_STATUS <<< "${policy_line}"
+REQUIRED="$(json_policy_value required)"
+TARGET_UPDATE_REF="$(json_policy_value target_update_ref)"
+TARGET_RELEASE_ID="$(json_policy_value target_release_id)"
+TARGET_RELEASE_CHANNEL="$(json_policy_value target_release_channel)"
+UPDATE_STATUS="$(json_policy_value status)"
 
 echo "required=${REQUIRED}"
 echo "target_update_ref=${TARGET_UPDATE_REF:-<none>}"
