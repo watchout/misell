@@ -128,10 +128,31 @@ scripts/emit-heartbeat.sh
 - `GET /api/admin/devices` with Basic auth
 - `GET /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id` with Basic auth
+- `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `GET /api/admin/alerts` with Basic auth
 - `POST /api/device/heartbeat` with Bearer device token
+- `GET /api/device/update-policy` with Bearer device token
+- `POST /api/device/update-result` with Bearer device token
 - `POST /api/device/playlog` with Bearer device token
 - `POST /api/device/error` with Bearer device token
+
+## Device Updates
+
+Schedule a Git-based MVP update from the admin API:
+
+```bash
+curl -u admin:change-me \
+  -X PATCH \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target_update_ref": "origin/main",
+    "target_release_id": "rel-20260605-001",
+    "target_release_channel": "canary"
+  }' \
+  http://localhost:3200/api/admin/devices/DEV-DEMO-001/update
+```
+
+The terminal polls `GET /api/device/update-policy` and reports `updating`, `success`, or `failed` to `POST /api/device/update-result`.
 
 ## Data
 

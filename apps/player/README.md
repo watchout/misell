@@ -168,6 +168,13 @@ INSTALL_HEARTBEAT=1 scripts/setup-autostart.sh
 systemctl --user status misell-heartbeat.timer
 ```
 
+Enable cloud update timer after heartbeat is working. `MISELL_UPDATE_URL` and `MISELL_UPDATE_RESULT_URL` are optional when `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`; the update script derives both URLs from it.
+
+```bash
+INSTALL_UPDATE=1 scripts/setup-autostart.sh
+systemctl --user status misell-update.timer
+```
+
 ## Security Baseline
 
 Dry-run:
@@ -242,6 +249,21 @@ Apply:
 
 ```bash
 scripts/update-player.sh --apply
+```
+
+Apply a specific Git ref and stamp the release metadata used by heartbeat:
+
+```bash
+scripts/update-player.sh --apply \
+  --ref origin/main \
+  --release-id rel-20260605-001 \
+  --release-channel canary
+```
+
+Check Cloud for a scheduled update:
+
+```bash
+scripts/check-update.sh --dry-run
 ```
 
 Commercial deployments should move to release bundles/manifests instead of direct Git updates.

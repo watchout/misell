@@ -25,6 +25,8 @@ const DEVICE_TOKEN_PEPPER = process.env.DEVICE_TOKEN_PEPPER || process.env.MISEL
 const STATUS = new Set(["online", "degraded", "offline", "critical", "maintenance", "retired", "lost"]);
 const TERMINAL_STATUS = new Set(["maintenance", "retired", "lost"]);
 const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "lost"]);
+const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"]);
+const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
 const WARNING_DISK_MB = 10240;
 const CRITICAL_DISK_MB = 2048;
 const WARNING_MEMORY_PERCENT = 85;
@@ -170,6 +172,55 @@ app.patch("/api/admin/devices/:device_id", requireAdminAuth, (req, res, next) =>
   }
 });
 
+app.patch("/api/admin/devices/:device_id/update", requireAdminAuth, (req, res, next) => {
+  try {
+    const deviceId = cleanId(req.params.device_id);
+    const existing = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+    if (!existing) {
+      res.status(404).json({ error: "Device not found" });
+      return;
+    }
+
+    const input = normalizeDeviceUpdateTarget(req.body || {});
+    const now = nowIso();
+    const targetReleaseId = input.target_release_id || input.target_update_ref;
+    const targetAlreadyCurrent = Boolean(targetReleaseId && targetReleaseId === cleanString(existing.release_id));
+    db.prepare(`
+      UPDATE devices SET
+        target_update_ref = ?,
+        target_release_id = ?,
+        target_release_channel = ?,
+        update_status = ?,
+        update_requested_at = ?,
+        update_started_at = NULL,
+        update_completed_at = ?,
+        update_error = '',
+        updated_at = ?
+      WHERE device_id = ?
+    `).run(
+      input.target_update_ref,
+      input.target_release_id,
+      input.target_release_channel,
+      input.target_update_ref ? (targetAlreadyCurrent ? "success" : "pending") : "idle",
+      input.target_update_ref ? now : null,
+      targetAlreadyCurrent ? now : null,
+      now,
+      deviceId
+    );
+
+    if (!input.target_update_ref || targetAlreadyCurrent) {
+      resolveAlert(deviceId, "update_failed", now);
+    }
+
+    res.json({
+      ok: true,
+      device: getDeviceDetail(deviceId)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/alerts", requireAdminAuth, (req, res) => {
   const alerts = db.prepare(`
     SELECT * FROM alerts
@@ -290,6 +341,7 @@ app.post("/api/device/heartbeat", requireDeviceAuth, (req, res, next) => {
     );
 
     updateHeartbeatAlerts(req.device.device_id, req.device.tenant_id, req.device.store_id, effectiveStatus, normalized, receivedAt);
+    syncUpdateStatusFromHeartbeat(req.device.device_id, normalized, receivedAt);
 
     res.json({
       ok: true,
@@ -297,6 +349,71 @@ app.post("/api/device/heartbeat", requireDeviceAuth, (req, res, next) => {
       status: effectiveStatus,
       received_at: receivedAt,
       next_interval_seconds: 60
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/device/update-policy", requireDeviceAuth, (req, res) => {
+  const now = nowIso();
+  db.prepare("UPDATE devices SET update_last_checked_at = ?, updated_at = ? WHERE device_id = ?")
+    .run(now, now, req.device.device_id);
+
+  const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(req.device.device_id);
+  res.json({
+    ok: true,
+    device_id: req.device.device_id,
+    current: {
+      app_version: cleanString(device.app_version),
+      release_id: cleanString(device.release_id),
+      release_channel: cleanString(device.release_channel)
+    },
+    update: buildDeviceUpdatePolicy(device)
+  });
+});
+
+app.post("/api/device/update-result", requireDeviceAuth, (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    assertPayloadDeviceMatches(req.device, payload);
+    const input = normalizeDeviceUpdateResult(payload);
+    const now = nowIso();
+
+    const setStartedAt = input.status === "updating" ? now : req.device.update_started_at;
+    const setCompletedAt = input.status === "success" || input.status === "failed" ? now : req.device.update_completed_at;
+    db.prepare(`
+      UPDATE devices SET
+        update_status = ?,
+        update_started_at = ?,
+        update_completed_at = ?,
+        update_error = ?,
+        release_id = COALESCE(NULLIF(?, ''), release_id),
+        release_channel = COALESCE(NULLIF(?, ''), release_channel),
+        updated_at = ?
+      WHERE device_id = ?
+    `).run(
+      input.status,
+      setStartedAt,
+      setCompletedAt,
+      input.status === "failed" ? input.message : "",
+      input.release_id,
+      input.release_channel,
+      now,
+      req.device.device_id
+    );
+
+    if (input.status === "failed") {
+      openAlert(req.device.device_id, req.device.tenant_id, req.device.store_id, "warning", "update_failed", input.message || "Device update failed", now, payload);
+    }
+    if (input.status === "success") {
+      resolveAlert(req.device.device_id, "update_failed", now);
+    }
+
+    res.status(201).json({
+      ok: true,
+      received_at: now,
+      update: buildDeviceUpdatePolicy(db.prepare("SELECT * FROM devices WHERE device_id = ?").get(req.device.device_id))
     });
   } catch (error) {
     next(error);
@@ -444,6 +561,15 @@ function initDb() {
       last_heartbeat_id INTEGER,
       last_error TEXT,
       notes TEXT,
+      target_update_ref TEXT,
+      target_release_id TEXT,
+      target_release_channel TEXT,
+      update_status TEXT NOT NULL DEFAULT 'idle',
+      update_requested_at TEXT,
+      update_started_at TEXT,
+      update_completed_at TEXT,
+      update_last_checked_at TEXT,
+      update_error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -530,6 +656,28 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_errors_device_received ON error_logs(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(status, severity, last_seen DESC);
   `);
+  migrateDevicesTable();
+}
+
+function migrateDevicesTable() {
+  const existingColumns = new Set(db.prepare("PRAGMA table_info(devices)").all().map((column) => column.name));
+  const columns = [
+    ["target_update_ref", "TEXT"],
+    ["target_release_id", "TEXT"],
+    ["target_release_channel", "TEXT"],
+    ["update_status", "TEXT NOT NULL DEFAULT 'idle'"],
+    ["update_requested_at", "TEXT"],
+    ["update_started_at", "TEXT"],
+    ["update_completed_at", "TEXT"],
+    ["update_last_checked_at", "TEXT"],
+    ["update_error", "TEXT"]
+  ];
+
+  for (const [name, definition] of columns) {
+    if (!existingColumns.has(name)) {
+      db.exec(`ALTER TABLE devices ADD COLUMN ${name} ${definition}`);
+    }
+  }
 }
 
 function normalizeDeviceInput(input) {
@@ -545,7 +693,7 @@ function normalizeDeviceInput(input) {
     screen_group_name: cleanString(input.screen_group_name),
     device_id: cleanId(input.device_id),
     device_name: cleanString(input.device_name || input.device_id),
-    release_channel: ["dev", "staging", "canary", "stable", "hold"].includes(releaseChannel) ? releaseChannel : "stable",
+    release_channel: RELEASE_CHANNELS.has(releaseChannel) ? releaseChannel : "stable",
     notes: cleanString(input.notes)
   };
 }
@@ -558,6 +706,47 @@ function normalizeDeviceAdminUpdate(input) {
   return {
     status,
     notes: cleanString(input.notes).slice(0, 1000)
+  };
+}
+
+function normalizeDeviceUpdateTarget(input) {
+  const targetRef = cleanGitRef(input.target_update_ref || input.target_ref || input.ref);
+  const targetReleaseId = cleanString(input.target_release_id || input.release_id).slice(0, 120);
+  const targetReleaseChannel = cleanString(input.target_release_channel || input.release_channel);
+  if (!targetRef) {
+    return {
+      target_update_ref: "",
+      target_release_id: "",
+      target_release_channel: ""
+    };
+  }
+  if (targetReleaseChannel && !RELEASE_CHANNELS.has(targetReleaseChannel)) {
+    throw new Error(`target_release_channel must be one of: ${Array.from(RELEASE_CHANNELS).join(", ")}`);
+  }
+  return {
+    target_update_ref: targetRef,
+    target_release_id: targetReleaseId || targetRef,
+    target_release_channel: targetReleaseChannel
+  };
+}
+
+function normalizeDeviceUpdateResult(input) {
+  const status = cleanString(input.status);
+  if (!UPDATE_RESULT_STATUS.has(status)) {
+    throw new Error(`status must be one of: ${Array.from(UPDATE_RESULT_STATUS).join(", ")}`);
+  }
+  const releaseChannel = cleanString(input.release_channel);
+  if (releaseChannel && !RELEASE_CHANNELS.has(releaseChannel)) {
+    throw new Error(`release_channel must be one of: ${Array.from(RELEASE_CHANNELS).join(", ")}`);
+  }
+  return {
+    status,
+    target_update_ref: cleanGitRef(input.target_update_ref || input.target_ref || input.ref),
+    target_release_id: cleanString(input.target_release_id || input.release_id).slice(0, 120),
+    release_id: cleanString(input.release_id).slice(0, 120),
+    release_channel: releaseChannel,
+    previous_release_id: cleanString(input.previous_release_id).slice(0, 120),
+    message: cleanString(input.message || input.error).slice(0, 1000)
   };
 }
 
@@ -661,6 +850,44 @@ function evaluateStatus(device, heartbeat) {
   }
 
   return "online";
+}
+
+function buildDeviceUpdatePolicy(device) {
+  const targetRef = cleanString(device.target_update_ref);
+  const targetReleaseId = cleanString(device.target_release_id) || targetRef;
+  const currentReleaseId = cleanString(device.release_id);
+  const required = Boolean(targetRef && targetReleaseId && currentReleaseId !== targetReleaseId);
+  return {
+    required,
+    status: cleanString(device.update_status) || "idle",
+    target_update_ref: targetRef,
+    target_release_id: targetReleaseId,
+    target_release_channel: cleanString(device.target_release_channel),
+    requested_at: cleanString(device.update_requested_at),
+    started_at: cleanString(device.update_started_at),
+    completed_at: cleanString(device.update_completed_at),
+    last_checked_at: cleanString(device.update_last_checked_at),
+    error: cleanString(device.update_error)
+  };
+}
+
+function syncUpdateStatusFromHeartbeat(deviceId, heartbeat, now) {
+  const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+  if (!device) return;
+
+  const targetReleaseId = cleanString(device.target_release_id) || cleanString(device.target_update_ref);
+  if (!targetReleaseId) return;
+  if (cleanString(heartbeat.release_id) !== targetReleaseId) return;
+
+  db.prepare(`
+    UPDATE devices SET
+      update_status = 'success',
+      update_completed_at = COALESCE(update_completed_at, ?),
+      update_error = '',
+      updated_at = ?
+    WHERE device_id = ?
+  `).run(now, now, deviceId);
+  resolveAlert(deviceId, "update_failed", now);
 }
 
 function updateHeartbeatAlerts(deviceId, tenantId, storeId, status, heartbeat, now) {
@@ -797,6 +1024,18 @@ function cleanId(value) {
   return cleanString(value).replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 100);
 }
 
+function cleanGitRef(value) {
+  const ref = cleanString(value).slice(0, 160);
+  if (!ref) return "";
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(ref)) {
+    throw new Error("target_update_ref must be a safe git ref, tag, or commit hash");
+  }
+  if (ref.includes("..") || ref.includes("//") || ref.includes("@{") || ref.endsWith(".lock")) {
+    throw new Error("target_update_ref contains an invalid git ref sequence");
+  }
+  return ref;
+}
+
 function asInteger(value) {
   if (value === undefined || value === null || value === "") return null;
   const number = Number.parseInt(value, 10);
@@ -860,7 +1099,16 @@ function renderDeviceDetailPage(device) {
               release_id: device.release_id,
               release_channel: device.release_channel,
               playlist_version: device.playlist_version,
-              config_version: device.config_version
+              config_version: device.config_version,
+              target_update_ref: device.target_update_ref,
+              target_release_id: device.target_release_id,
+              target_release_channel: device.target_release_channel,
+              update_status: device.update_status,
+              update_requested_at: device.update_requested_at,
+              update_started_at: device.update_started_at,
+              update_completed_at: device.update_completed_at,
+              update_last_checked_at: device.update_last_checked_at,
+              update_error: device.update_error
             }, null, 2))}</pre>
           </article>
         </section>

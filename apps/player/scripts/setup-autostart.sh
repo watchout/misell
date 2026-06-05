@@ -11,6 +11,7 @@ MISELL_ASSETS_DIR="${MISELL_ASSETS_DIR:-${MISELL_RUNTIME_DIR}/assets}"
 MISELL_LOG_DIR="${MISELL_LOG_DIR:-${MISELL_RUNTIME_DIR}/logs}"
 INSTALL_KIOSK="${INSTALL_KIOSK:-1}"
 INSTALL_HEARTBEAT="${INSTALL_HEARTBEAT:-0}"
+INSTALL_UPDATE="${INSTALL_UPDATE:-0}"
 INSTALL_LOG_ROTATE="${INSTALL_LOG_ROTATE:-1}"
 
 mkdir -p "${SYSTEMD_USER_DIR}"
@@ -77,6 +78,13 @@ if [[ "${INSTALL_HEARTBEAT}" == "1" ]]; then
     > "${SYSTEMD_USER_DIR}/misell-heartbeat.timer"
 fi
 
+if [[ "${INSTALL_UPDATE}" == "1" ]]; then
+  sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-update.service" \
+    > "${SYSTEMD_USER_DIR}/misell-update.service"
+  sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-update.timer" \
+    > "${SYSTEMD_USER_DIR}/misell-update.timer"
+fi
+
 if [[ "${INSTALL_LOG_ROTATE}" == "1" ]]; then
   sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-log-rotate.service" \
     > "${SYSTEMD_USER_DIR}/misell-log-rotate.service"
@@ -98,6 +106,10 @@ if [[ "${INSTALL_HEARTBEAT}" == "1" ]]; then
   systemctl --user enable --now misell-heartbeat.timer
 fi
 
+if [[ "${INSTALL_UPDATE}" == "1" ]]; then
+  systemctl --user enable --now misell-update.timer
+fi
+
 if [[ "${INSTALL_LOG_ROTATE}" == "1" ]]; then
   systemctl --user enable --now misell-log-rotate.timer
 fi
@@ -106,5 +118,6 @@ echo "Installed user services in ${SYSTEMD_USER_DIR}"
 echo "Server status: systemctl --user status misell-player.service"
 echo "Kiosk status:  systemctl --user status misell-kiosk.service"
 echo "Heartbeat timer: systemctl --user status misell-heartbeat.timer"
+echo "Update timer: systemctl --user status misell-update.timer"
 echo "Log rotate timer: systemctl --user status misell-log-rotate.timer"
 echo "For boot without manual login, consider: sudo loginctl enable-linger ${USER}"

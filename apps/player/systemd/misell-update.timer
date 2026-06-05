@@ -1,0 +1,11 @@
+[Unit]
+Description=misell-player update checker timer
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=300
+AccuracySec=30
+Unit=misell-update.service
+
+[Install]
+WantedBy=timers.target
