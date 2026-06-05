@@ -1,0 +1,21 @@
+{
+  "name": "misell-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloud monitoring MVP for Misell signage devices.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js",
+    "check": "node --check server.js && node --check public/admin.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "express-basic-auth": "^1.2.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

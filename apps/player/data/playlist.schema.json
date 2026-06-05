@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://misell.local/schemas/playlist.schema.json",
+  "title": "Misell MVP Playlist",
+  "type": "object",
+  "required": ["playlist_version", "items"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": ["integer", "string"]
+    },
+    "playlist_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updatedAt": {
+      "type": "string"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/threeZoneItem" },
+          { "$ref": "#/$defs/wideItem" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "baseItem": {
+      "type": "object",
+      "required": ["item_id", "layout", "enabled", "duration"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "layout": {
+          "enum": ["three-zone", "wide"]
+        },
+        "duration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "start": {
+          "type": "string",
+          "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "end": {
+          "type": "string",
+          "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "days_of_week": {
+          "type": "array",
+          "items": {
+            "enum": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+          },
+          "uniqueItems": true
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "asset_id": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "left": { "$ref": "#/$defs/source" },
+        "center": { "$ref": "#/$defs/source" },
+        "right": { "$ref": "#/$defs/source" },
+        "wide": { "$ref": "#/$defs/source" }
+      }
+    },
+    "threeZoneItem": {
+      "allOf": [
+        { "$ref": "#/$defs/baseItem" },
+        {
+          "type": "object",
+          "required": ["left", "center", "right"],
+          "properties": {
+            "layout": {
+              "const": "three-zone"
+            },
+            "left": { "$ref": "#/$defs/source" },
+            "center": { "$ref": "#/$defs/source" },
+            "right": { "$ref": "#/$defs/source" }
+          }
+        }
+      ]
+    },
+    "wideItem": {
+      "allOf": [
+        { "$ref": "#/$defs/baseItem" },
+        {
+          "type": "object",
+          "required": ["wide"],
+          "properties": {
+            "layout": {
+              "const": "wide"
+            },
+            "wide": { "$ref": "#/$defs/source" }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "string",
+      "minLength": 0,
+      "not": {
+        "pattern": "\\.\\."
+      }
+    }
+  }
+}

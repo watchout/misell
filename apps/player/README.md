@@ -1,0 +1,235 @@
+# misell-player
+
+Ubuntu kiosk terminals for Misell local signage MVP.
+
+## Requirements
+
+- Node.js 20+
+- npm
+- Chromium or Google Chrome
+- xrandr on Ubuntu/X11 for 3-display output
+
+## Local Development
+
+```bash
+npm install
+npm start
+```
+
+URLs:
+
+- Player: http://localhost:3000/player
+- Preview: http://localhost:3000/player?preview=1
+- Admin: http://localhost:3000/admin
+
+Default admin auth:
+
+- User: `admin`
+- Password: `change-me`
+
+Set a real password before connecting the terminal to a store LAN.
+
+```bash
+ADMIN_USER=admin ADMIN_PASSWORD='replace-this' npm start
+```
+
+## Scripts
+
+```bash
+npm run check
+npm run validate:playlist
+```
+
+## Data Files
+
+- `data/config.json`: local device identity defaults
+- `data/playlist.json`: local playlist
+- `data/playlist.schema.json`: playlist validation schema
+- `assets/images/`: uploaded images
+- `assets/videos/`: uploaded videos
+- `logs/playlog.jsonl`: playback log
+- `logs/admin.log`: admin operation log
+- `logs/error.log`: server/API error log
+- `logs/burn-in.log`: burn-in check log
+- `logs/heartbeat.log`: optional heartbeat operation log
+
+Actual store terminals should override identity with environment variables in `~/.config/misell-player/env`.
+
+## API
+
+- `GET /player`
+- `GET /admin` with Basic auth
+- `GET /api/config`
+- `GET /api/status`
+- `GET /api/heartbeat`
+- `GET /api/playlist`
+- `POST /api/playlist` with Basic auth
+- `GET /api/assets` with Basic auth
+- `POST /api/assets/upload` with Basic auth
+- `POST /api/log/play`
+
+## Upload Rules
+
+Allowed:
+
+- `jpg`
+- `jpeg`
+- `png`
+- `mp4`
+- `webm`
+
+Rejected:
+
+- HTML
+- JavaScript
+- shell scripts
+- executables
+- zip files
+- files with mismatched MIME type or file signature
+
+## Ubuntu Device Setup
+
+Dry-run:
+
+```bash
+scripts/setup-ubuntu-device.sh
+```
+
+Apply after reviewing output:
+
+```bash
+scripts/setup-ubuntu-device.sh --apply
+```
+
+If Node.js 20+ is not already available from the approved package source:
+
+```bash
+MISELL_INSTALL_NODESOURCE=1 scripts/setup-ubuntu-device.sh --apply
+```
+
+Enroll a real store terminal:
+
+```bash
+scripts/enroll-device.sh \
+  --tenant-id TEN-0001 \
+  --store-id STO-0001 \
+  --location-id LOC-LOBBY-001 \
+  --screen-group-id SG-000001 \
+  --device-id DEV-000001
+```
+
+Apply after reviewing output:
+
+```bash
+scripts/enroll-device.sh \
+  --apply \
+  --tenant-id TEN-0001 \
+  --store-id STO-0001 \
+  --location-id LOC-LOBBY-001 \
+  --screen-group-id SG-000001 \
+  --device-id DEV-000001
+```
+
+Configure displays:
+
+```bash
+xrandr --query
+scripts/set-display-3x.sh
+```
+
+Install systemd user services:
+
+```bash
+scripts/setup-autostart.sh
+```
+
+Check services:
+
+```bash
+systemctl --user status misell-player.service
+systemctl --user status misell-kiosk.service
+systemctl --user status misell-log-rotate.timer
+```
+
+Enable cloud heartbeat timer only after setting `MISELL_HEARTBEAT_URL` and `MISELL_DEVICE_TOKEN` in `~/.config/misell-player/env`.
+
+```bash
+INSTALL_HEARTBEAT=1 scripts/setup-autostart.sh
+systemctl --user status misell-heartbeat.timer
+```
+
+## Security Baseline
+
+Dry-run:
+
+```bash
+MISELL_LAN_CIDR=192.168.1.0/24 scripts/setup-ubuntu-security.sh
+```
+
+Apply:
+
+```bash
+MISELL_LAN_CIDR=192.168.1.0/24 scripts/setup-ubuntu-security.sh --apply
+```
+
+## Burn-in
+
+Default duration is 6 hours.
+
+```bash
+scripts/burn-in-check.sh
+```
+
+Short test:
+
+```bash
+MISELL_BURN_IN_DURATION_SECONDS=300 MISELL_BURN_IN_INTERVAL_SECONDS=30 scripts/burn-in-check.sh
+```
+
+## Evidence
+
+```bash
+scripts/collect-device-evidence.sh
+```
+
+The script writes evidence under `evidence/YYYYMMDD-HHMMSS/`.
+
+## Heartbeat
+
+Print the local heartbeat/status payload:
+
+```bash
+npm run heartbeat
+```
+
+If `MISELL_HEARTBEAT_URL` is set, the script posts the payload with `Authorization: Bearer $MISELL_DEVICE_TOKEN`.
+
+## Log Rotation
+
+Rotate oversized local logs:
+
+```bash
+npm run rotate:logs
+```
+
+Force rotation for verification:
+
+```bash
+scripts/rotate-logs.sh --force
+```
+
+## MVP Update Flow
+
+Dry-run:
+
+```bash
+scripts/update-player.sh
+```
+
+Apply:
+
+```bash
+scripts/update-player.sh --apply
+```
+
+Commercial deployments should move to release bundles/manifests instead of direct Git updates.

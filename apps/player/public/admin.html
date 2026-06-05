@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>misell admin</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="admin-body">
+    <header class="admin-header">
+      <div>
+        <p class="eyebrow">misell-player</p>
+        <h1>LAN管理画面</h1>
+      </div>
+      <nav class="admin-actions" aria-label="管理操作">
+        <a class="button secondary" href="/player" target="_blank" rel="noreferrer">Player</a>
+        <button id="reload-player" class="button secondary" type="button">プレイヤー再読み込み</button>
+        <button id="save-playlist" class="button primary" type="button">保存</button>
+      </nav>
+    </header>
+
+    <main class="admin-shell">
+      <section class="panel upload-panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Assets</p>
+            <h2>素材</h2>
+          </div>
+          <span id="asset-count" class="count-badge">0</span>
+        </div>
+
+        <form id="upload-form" class="upload-form">
+          <input id="asset-input" name="asset" type="file" accept=".jpg,.jpeg,.png,.mp4,.webm,image/jpeg,image/png,video/mp4,video/webm">
+          <button class="button primary" type="submit">アップロード</button>
+        </form>
+
+        <div class="asset-list-wrap">
+          <table class="asset-table">
+            <thead>
+              <tr>
+                <th>Preview</th>
+                <th>Path</th>
+                <th>Size</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="asset-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel playlist-panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Playlist</p>
+            <h2>配信順</h2>
+          </div>
+          <div class="segmented-actions">
+            <button id="add-three-zone" class="button secondary" type="button">3ゾーン追加</button>
+            <button id="add-wide" class="button secondary" type="button">ワイド追加</button>
+          </div>
+        </div>
+
+        <div id="validation-errors" class="validation-errors" hidden></div>
+        <div id="playlist-editor" class="playlist-editor"></div>
+      </section>
+
+      <section class="panel json-panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Raw JSON</p>
+            <h2>playlist.json</h2>
+          </div>
+          <button id="apply-json" class="button secondary" type="button">JSONを反映</button>
+        </div>
+        <textarea id="json-editor" spellcheck="false"></textarea>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/admin.js"></script>
+  </body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "playlist_version": "local-001",
+  "updatedAt": "2026-06-02T00:00:00.000Z",
+  "items": [
+    {
+      "id": "demo-three-zone",
+      "item_id": "demo-three-zone",
+      "name": "3ゾーン デモ",
+      "enabled": true,
+      "layout": "three-zone",
+      "duration": 12,
+      "start": "",
+      "end": "",
+      "days_of_week": [],
+      "campaign_id": "",
+      "asset_id": "",
+      "priority": 0,
+      "left": "/demo/left.html",
+      "center": "/demo/center.html",
+      "right": "/demo/right.html",
+      "wide": ""
+    },
+    {
+      "id": "demo-wide",
+      "item_id": "demo-wide",
+      "name": "ワイド デモ",
+      "enabled": true,
+      "layout": "wide",
+      "duration": 12,
+      "start": "",
+      "end": "",
+      "days_of_week": [],
+      "campaign_id": "",
+      "asset_id": "",
+      "priority": 0,
+      "left": "",
+      "center": "",
+      "right": "",
+      "wide": "/demo/wide.html"
+    }
+  ]
+}

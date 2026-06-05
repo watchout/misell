@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Misell 端末監視</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <h1>Misell 端末監視</h1>
+        <button id="refresh" type="button">更新</button>
+      </header>
+      <main>
+        <section class="section">
+          <h2>稼働状況</h2>
+          <div id="summary" class="metrics"></div>
+        </section>
+        <section class="section">
+          <h2>未対応アラート</h2>
+          <div id="alerts"></div>
+        </section>
+        <section class="section">
+          <h2>端末一覧</h2>
+          <div id="devices"></div>
+        </section>
+      </main>
+    </div>
+    <script src="/admin.js"></script>
+  </body>
+</html>

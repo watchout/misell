@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>misell player</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="player-body">
+    <main id="stage" class="player-stage" aria-live="polite">
+      <section id="left-zone" class="player-zone zone-left" data-zone="left"></section>
+      <section id="center-zone" class="player-zone zone-center" data-zone="center"></section>
+      <section id="right-zone" class="player-zone zone-right" data-zone="right"></section>
+      <section id="wide-zone" class="player-wide" data-zone="wide" hidden></section>
+    </main>
+    <aside id="player-status" class="player-status"></aside>
+    <div id="preload-bin" class="preload-bin" aria-hidden="true"></div>
+    <script src="/player.js"></script>
+  </body>
+</html>

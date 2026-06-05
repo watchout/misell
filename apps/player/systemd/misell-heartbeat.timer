@@ -1,0 +1,11 @@
+[Unit]
+Description=misell-player heartbeat timer
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10
+Unit=misell-heartbeat.service
+
+[Install]
+WantedBy=timers.target
