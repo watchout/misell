@@ -2,6 +2,7 @@
   const state = {
     devices: [],
     summary: null,
+    releaseManifests: [],
     issuedToken: null
   };
 
@@ -36,6 +37,19 @@
     ["hold", "hold"]
   ];
 
+  const RELEASE_MANIFEST_CHANNEL_OPTIONS = [
+    ["stable", "stable"],
+    ["canary", "canary"],
+    ["staging", "staging"],
+    ["dev", "dev"]
+  ];
+
+  const RELEASE_MANIFEST_STATUS_OPTIONS = [
+    ["draft", "draft"],
+    ["active", "active"],
+    ["retired", "retired"]
+  ];
+
   const UPDATE_STATUS_LABELS = {
     idle: "待機",
     pending: "予約済み",
@@ -50,6 +64,7 @@
     devices: document.getElementById("devices"),
     alerts: document.getElementById("alerts"),
     notifications: document.getElementById("notifications"),
+    releaseManifests: document.getElementById("release-manifests"),
     logBundles: document.getElementById("log-bundles"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
@@ -60,19 +75,22 @@
   window.setInterval(loadDashboard, 30000);
 
   async function loadDashboard() {
-    const [summary, devices, alerts, notifications, logBundles] = await Promise.all([
+    const [summary, devices, alerts, notifications, releaseManifests, logBundles] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/alerts"),
       fetchJson("/api/admin/alert-notifications"),
+      fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/device-log-bundles")
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
+    state.releaseManifests = releaseManifests.release_manifests || [];
     renderSummary(summary);
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
+    renderReleaseManifests(state.releaseManifests);
     renderLogBundles(logBundles.log_bundles || []);
     renderTokenResult();
   }
@@ -170,6 +188,7 @@
             <span class="update-status update-status-${escapeAttr(device.update_status || "idle")}">
               ${escapeHtml(UPDATE_STATUS_LABELS[device.update_status] || device.update_status || "待機")}
             </span>
+            ${device.update_manifest_id ? `<small>manifest ${escapeHtml(device.update_manifest_id)}</small>` : ""}
             <input name="target_update_ref" type="text" value="${escapeHtml(device.target_update_ref || "")}" placeholder="Git ref" aria-label="Git ref">
             <input name="target_release_id" type="text" value="${escapeHtml(device.target_release_id || "")}" placeholder="Release ID" aria-label="Release ID">
             <select name="target_release_channel" aria-label="Release channel">
@@ -368,6 +387,133 @@
     }
   }
 
+  function renderReleaseManifests(releaseManifests) {
+    if (!els.releaseManifests) return;
+    els.releaseManifests.innerHTML = `
+      <form class="release-manifest-create">
+        <input name="manifest_id" type="text" placeholder="Manifest ID" aria-label="Manifest ID">
+        <input name="release_id" type="text" placeholder="Release ID" aria-label="Release ID" required>
+        <input name="update_ref" type="text" placeholder="Git ref" aria-label="Git ref" required>
+        <select name="release_channel" aria-label="Release channel">
+          ${RELEASE_MANIFEST_CHANNEL_OPTIONS.map(([value, label]) => (
+            `<option value="${escapeAttr(value)}">${escapeHtml(label)}</option>`
+          )).join("")}
+        </select>
+        <select name="status" aria-label="Manifest status">
+          ${RELEASE_MANIFEST_STATUS_OPTIONS.map(([value, label]) => (
+            `<option value="${escapeAttr(value)}"${value === "active" ? " selected" : ""}>${escapeHtml(label)}</option>`
+          )).join("")}
+        </select>
+        <input name="app_version" type="text" placeholder="App version" aria-label="App version">
+        <input name="notes" type="text" placeholder="Notes" aria-label="Notes">
+        <button type="submit">作成</button>
+      </form>
+      ${releaseManifests.length === 0 ? `<p class="empty">release manifestはまだありません。</p>` : `
+        <table class="release-manifests-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Channel</th>
+              <th>Manifest</th>
+              <th>Release</th>
+              <th>Git ref</th>
+              <th>Version</th>
+              <th>Published</th>
+              <th>運用</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${releaseManifests.slice(0, 30).map(renderReleaseManifestRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+
+    els.releaseManifests.querySelector(".release-manifest-create")?.addEventListener("submit", handleReleaseManifestCreate);
+    els.releaseManifests.querySelectorAll(".release-manifest-action").forEach((form) => {
+      form.addEventListener("submit", handleReleaseManifestUpdate);
+    });
+  }
+
+  function renderReleaseManifestRow(manifest) {
+    return `
+      <tr>
+        <td>
+          <span class="update-status update-status-${escapeAttr(releaseManifestStatusClass(manifest.status))}">
+            ${escapeHtml(manifest.status || "")}
+          </span>
+        </td>
+        <td>${escapeHtml(manifest.release_channel || "")}</td>
+        <td>${escapeHtml(manifest.manifest_id || "")}<small>${escapeHtml(manifest.notes || "")}</small></td>
+        <td>${escapeHtml(manifest.release_id || "")}</td>
+        <td>${escapeHtml(manifest.update_ref || "")}</td>
+        <td>${escapeHtml(manifest.app_version || "")}</td>
+        <td>${formatTime(manifest.published_at || manifest.updated_at)}</td>
+        <td>
+          <form class="release-manifest-action" data-manifest-id="${escapeHtml(manifest.manifest_id || "")}">
+            <select name="status" aria-label="Manifest status">
+              ${RELEASE_MANIFEST_STATUS_OPTIONS.map(([value, label]) => (
+                `<option value="${escapeAttr(value)}"${value === manifest.status ? " selected" : ""}>${escapeHtml(label)}</option>`
+              )).join("")}
+            </select>
+            <button type="submit">保存</button>
+          </form>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function handleReleaseManifestCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const payload = {
+      manifest_id: form.elements.manifest_id.value,
+      release_id: form.elements.release_id.value,
+      update_ref: form.elements.update_ref.value,
+      release_channel: form.elements.release_channel.value,
+      status: form.elements.status.value,
+      app_version: form.elements.app_version.value,
+      notes: form.elements.notes.value
+    };
+
+    button.disabled = true;
+    button.textContent = "作成中";
+    try {
+      await fetchJson("/api/admin/release-manifests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "release manifestの作成に失敗しました。");
+      button.disabled = false;
+      button.textContent = "作成";
+    }
+  }
+
+  async function handleReleaseManifestUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const manifestId = form.dataset.manifestId;
+    button.disabled = true;
+    button.textContent = "保存中";
+    try {
+      await fetchJson(`/api/admin/release-manifests/${encodeURIComponent(manifestId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: form.elements.status.value })
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "release manifestの保存に失敗しました。");
+      button.disabled = false;
+      button.textContent = "保存";
+    }
+  }
+
   function renderLogBundles(logBundles) {
     if (!els.logBundles) return;
     if (logBundles.length === 0) {
@@ -475,6 +621,12 @@
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function releaseManifestStatusClass(status) {
+    if (status === "active") return "success";
+    if (status === "retired") return "idle";
+    return "pending";
   }
 
   function escapeHtml(value) {

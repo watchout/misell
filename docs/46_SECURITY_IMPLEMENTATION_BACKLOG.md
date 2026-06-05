@@ -145,10 +145,12 @@
 
 ### Issue: アプリリリース管理
 
+- MVP実装済み: Cloud release manifestによるGit ref配信
 - version.json
 - rollback
 - staging端末
 - 先行1台適用
+- 商用前: artifact bundleとsymlink rollback
 
 ## Epic 8: バックアップ/復元
 

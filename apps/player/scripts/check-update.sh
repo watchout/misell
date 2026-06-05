@@ -87,6 +87,7 @@ json_payload() {
   local release_id="${3:-}"
   STATUS="${status}" \
   MESSAGE="${message}" \
+  TARGET_MANIFEST_ID="${TARGET_MANIFEST_ID:-}" \
   TARGET_UPDATE_REF="${TARGET_UPDATE_REF:-}" \
   TARGET_RELEASE_ID="${TARGET_RELEASE_ID:-}" \
   RELEASE_ID="${release_id}" \
@@ -95,6 +96,7 @@ json_payload() {
     const payload = {
       status: process.env.STATUS,
       message: process.env.MESSAGE,
+      target_manifest_id: process.env.TARGET_MANIFEST_ID,
       target_update_ref: process.env.TARGET_UPDATE_REF,
       target_release_id: process.env.TARGET_RELEASE_ID,
       release_id: process.env.RELEASE_ID,
@@ -167,12 +169,16 @@ policy="$(curl -fsS --max-time 20 \
   "${UPDATE_URL}")"
 
 REQUIRED="$(json_policy_value required)"
+UPDATE_SOURCE="$(json_policy_value source)"
+TARGET_MANIFEST_ID="$(json_policy_value target_manifest_id)"
 TARGET_UPDATE_REF="$(json_policy_value target_update_ref)"
 TARGET_RELEASE_ID="$(json_policy_value target_release_id)"
 TARGET_RELEASE_CHANNEL="$(json_policy_value target_release_channel)"
 UPDATE_STATUS="$(json_policy_value status)"
 
 echo "required=${REQUIRED}"
+echo "source=${UPDATE_SOURCE:-<none>}"
+echo "target_manifest_id=${TARGET_MANIFEST_ID:-<none>}"
 echo "target_update_ref=${TARGET_UPDATE_REF:-<none>}"
 echo "target_release_id=${TARGET_RELEASE_ID:-<none>}"
 echo "target_release_channel=${TARGET_RELEASE_CHANNEL:-<unchanged>}"

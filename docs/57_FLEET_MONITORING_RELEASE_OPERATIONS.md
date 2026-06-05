@@ -275,7 +275,7 @@ scripts/collect-device-evidence.sh --upload --label incident --reason "kiosk did
 
 ### MVP
 
-1〜2台では手動更新、またはCloudから端末ごとのGit refを予約するMVP更新でよい。
+1〜2台では手動更新、Cloudから端末ごとのGit refを予約するMVP更新、またはrelease channel単位のactive manifest配信でよい。
 
 ただし、必ず以下を実施する。
 
@@ -299,6 +299,14 @@ Cloud更新予約を使う場合:
 3. 更新が必要な端末は `scripts/update-player.sh --apply --ref ...` を実行する
 4. 端末は `POST /api/device/update-result` へ `updating`、`success`、`failed` を報告する
 5. 失敗時は `update-player.sh` が前のGit refへ戻し、Cloudに `update_failed` アラートを出す
+
+Release manifest配信を使う場合:
+
+1. Cloud管理画面で `release_id`、`release_channel`、`update_ref` を持つmanifestを作成する
+2. `status=active` にしたmanifestは同じchannelの旧active manifestを自動退役する
+3. 端末個別の `target_update_ref` がなければ、端末の `release_channel` に一致するactive manifestがupdate policyとして返る
+4. 端末は更新結果に `target_manifest_id` を含め、Cloudは `devices.update_manifest_id` に記録する
+5. `hold` channel端末にはactive manifestを配信しない
 
 ### 商用
 
@@ -443,6 +451,8 @@ Git pull直更新は禁止する。
 - Cloud更新ポリシー取得API
 - Cloud更新結果報告API
 - 端末更新チェックscript/timer
+- release manifest管理API
+- release channel単位の一括配信
 - Webhookアラート通知
 - 通知履歴管理
 - クラウドログ回収
@@ -452,18 +462,17 @@ Git pull直更新は禁止する。
 
 未実装で、複数端末商用前に必要なもの:
 
-- release manifest
 - bundle/symlink方式の商用rollback
-- release channel単位の一括配信
+- artifact storage付き商用release bundle
 - 通知ルーティングの顧客/店舗別分離
 - Tailscale ACLの正式運用
 
 ## 次の実装候補
 
-1. release manifest配布を実装する
-2. release channel単位の一括配信を実装する
-3. bundle/symlink方式の商用rollbackを実装する
-4. 通知ルーティングを顧客/店舗単位で分離する
+1. bundle/symlink方式の商用rollbackを実装する
+2. artifact storage付き商用release bundleを実装する
+3. 通知ルーティングを顧客/店舗単位で分離する
+4. Tailscale ACLと端末権限の正式運用手順を固める
 
 ## MVP実装済みの運用補助
 

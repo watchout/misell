@@ -279,6 +279,16 @@ CREATE TABLE devices (
   last_heartbeat_id INTEGER,
   last_error TEXT,
   notes TEXT,
+  target_update_ref TEXT,
+  target_release_id TEXT,
+  target_release_channel TEXT,
+  update_manifest_id TEXT,
+  update_status TEXT NOT NULL DEFAULT 'idle',
+  update_requested_at TEXT,
+  update_started_at TEXT,
+  update_completed_at TEXT,
+  update_last_checked_at TEXT,
+  update_error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -294,6 +304,24 @@ CREATE TABLE device_token_events (
   token_generation INTEGER,
   reason TEXT,
   created_at TEXT NOT NULL
+);
+```
+
+### release_manifests
+
+```sql
+CREATE TABLE release_manifests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  manifest_id TEXT NOT NULL UNIQUE,
+  release_id TEXT NOT NULL,
+  release_channel TEXT NOT NULL,
+  update_ref TEXT NOT NULL,
+  app_version TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  published_at TEXT
 );
 ```
 
@@ -684,6 +712,102 @@ MVPでは管理者がJSONで登録してもよい。
 }
 ```
 
+### PATCH /api/admin/devices/:device_id/update
+
+端末個別のGit ref更新を予約する。個別予約はrelease manifestより優先される。
+
+入力:
+
+```json
+{
+  "target_update_ref": "origin/main",
+  "target_release_id": "rel-20260605-001",
+  "target_release_channel": "canary"
+}
+```
+
+空の `target_update_ref` を送ると個別予約を解除する。
+
+### GET /api/admin/release-manifests
+
+release manifest一覧を返す。
+
+### POST /api/admin/release-manifests
+
+release channel単位の更新manifestを作成する。
+
+入力:
+
+```json
+{
+  "manifest_id": "rel-20260605-canary-001",
+  "release_id": "rel-20260605-001",
+  "release_channel": "canary",
+  "update_ref": "origin/main",
+  "status": "active",
+  "app_version": "0.1.0",
+  "notes": "canary rollout"
+}
+```
+
+`status=active` の場合、同一 `release_channel` の旧active manifestは `retired` へ変更する。`hold` channelにactive manifestは作成しない。
+
+### PATCH /api/admin/release-manifests/:manifest_id
+
+manifestの `release_id`、`release_channel`、`update_ref`、`app_version`、`status`、`notes` を更新する。既存manifestを `active` にした場合も同一channelの旧active manifestを退役する。
+
+### GET /api/device/update-policy
+
+端末が更新ポリシーをpullする。
+
+優先順位:
+
+1. 端末個別の `target_update_ref`
+2. 端末の `release_channel` に一致するactive release manifest
+3. 更新なし
+
+レスポンス例:
+
+```json
+{
+  "ok": true,
+  "device_id": "DEV-000001",
+  "current": {
+    "app_version": "0.1.0",
+    "release_id": "main-ac28bf6",
+    "release_channel": "canary"
+  },
+  "update": {
+    "required": true,
+    "status": "pending",
+    "source": "release_manifest",
+    "target_manifest_id": "rel-20260605-canary-001",
+    "target_update_ref": "origin/main",
+    "target_release_id": "rel-20260605-001",
+    "target_release_channel": "canary"
+  }
+}
+```
+
+### POST /api/device/update-result
+
+端末が更新結果を報告する。
+
+入力:
+
+```json
+{
+  "status": "success",
+  "target_manifest_id": "rel-20260605-canary-001",
+  "target_update_ref": "origin/main",
+  "target_release_id": "rel-20260605-001",
+  "release_id": "rel-20260605-001",
+  "release_channel": "canary"
+}
+```
+
+`status=failed` の場合は `update_failed` alertを作成し、`message` を `devices.update_error` に残す。
+
 ## 管理画面
 
 ### /admin
@@ -699,6 +823,8 @@ Dashboard。
 - app_version分布
 - release_channel分布
 - 最新alerts
+- release manifest一覧/作成
+- log bundle履歴
 
 ### /admin/devices
 
@@ -827,6 +953,13 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - open/resolved
 - notification stub
 
+### PR 7: release operations
+
+- `release_manifests` table
+- release manifest管理API
+- release channel単位のupdate policy
+- update resultへの `target_manifest_id` 記録
+
 ## 受け入れ条件
 
 ### Local Cloud Pass
@@ -853,6 +986,8 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - `app_version/release_id/release_channel/playlist_version/config_version` が見える
 - tokenを無効化した端末は403になる
 - `scripts/collect-device-evidence.sh --upload` でCloudに証跡を送れる
+- active release manifestを作成すると同じchannelの端末update policyが `required=true` になる
+- 端末がupdate resultを送ると `update_manifest_id` と `release_id` が更新される
 
 ## セキュリティ
 
@@ -877,7 +1012,7 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 ## 将来拡張
 
 - Cloud playlist sync
-- Release manifest
+- Artifact-backed release bundle
 - Pending commands
 - Screenshot upload
 - Slack/Discord notification

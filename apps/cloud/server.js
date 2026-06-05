@@ -30,6 +30,7 @@ const STATUS = new Set(["online", "degraded", "offline", "critical", "maintenanc
 const TERMINAL_STATUS = new Set(["maintenance", "retired", "lost"]);
 const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "lost"]);
 const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"]);
+const RELEASE_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
 const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
 const WARNING_DISK_MB = 10240;
@@ -183,6 +184,105 @@ app.get("/api/admin/device-log-bundles/:id", requireAdminAuth, (req, res) => {
   res.json({ ok: true, log_bundle: bundle });
 });
 
+app.get("/api/admin/release-manifests", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, release_manifests: listReleaseManifests() });
+});
+
+app.post("/api/admin/release-manifests", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeReleaseManifestInput(req.body || {});
+    const existing = db.prepare("SELECT manifest_id FROM release_manifests WHERE manifest_id = ?").get(input.manifest_id);
+    if (existing) {
+      res.status(409).json({ error: "Release manifest already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    const createManifest = db.transaction(() => {
+      if (input.status === "active") {
+        retireActiveReleaseManifests(input.release_channel, now);
+      }
+      db.prepare(`
+        INSERT INTO release_manifests (
+          manifest_id, release_id, release_channel, update_ref, app_version,
+          status, notes, created_at, updated_at, published_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.manifest_id,
+        input.release_id,
+        input.release_channel,
+        input.update_ref,
+        input.app_version,
+        input.status,
+        input.notes,
+        now,
+        now,
+        input.status === "active" ? now : null
+      );
+    });
+    createManifest();
+
+    res.status(201).json({
+      ok: true,
+      release_manifest: getReleaseManifest(input.manifest_id)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/release-manifests/:manifest_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const manifestId = cleanId(req.params.manifest_id);
+    const existing = db.prepare("SELECT * FROM release_manifests WHERE manifest_id = ?").get(manifestId);
+    if (!existing) {
+      res.status(404).json({ error: "Release manifest not found" });
+      return;
+    }
+
+    const input = normalizeReleaseManifestInput(req.body || {}, existing);
+    const now = nowIso();
+    const publishedAt = input.status === "active"
+      ? (existing.status === "active" && existing.published_at ? existing.published_at : now)
+      : existing.published_at;
+    const updateManifest = db.transaction(() => {
+      if (input.status === "active") {
+        retireActiveReleaseManifests(input.release_channel, now, manifestId);
+      }
+      db.prepare(`
+        UPDATE release_manifests SET
+          release_id = ?,
+          release_channel = ?,
+          update_ref = ?,
+          app_version = ?,
+          status = ?,
+          notes = ?,
+          updated_at = ?,
+          published_at = ?
+        WHERE manifest_id = ?
+      `).run(
+        input.release_id,
+        input.release_channel,
+        input.update_ref,
+        input.app_version,
+        input.status,
+        input.notes,
+        now,
+        publishedAt,
+        manifestId
+      );
+    });
+    updateManifest();
+
+    res.json({
+      ok: true,
+      release_manifest: getReleaseManifest(manifestId)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/admin/devices/:device_id", requireAdminAuth, (req, res, next) => {
   try {
     const deviceId = cleanId(req.params.device_id);
@@ -246,6 +346,7 @@ app.patch("/api/admin/devices/:device_id/update", requireAdminAuth, (req, res, n
         target_update_ref = ?,
         target_release_id = ?,
         target_release_channel = ?,
+        update_manifest_id = '',
         update_status = ?,
         update_requested_at = ?,
         update_started_at = NULL,
@@ -597,6 +698,7 @@ app.post("/api/device/update-result", requireDeviceAuth, (req, res, next) => {
         update_started_at = ?,
         update_completed_at = ?,
         update_error = ?,
+        update_manifest_id = COALESCE(NULLIF(?, ''), update_manifest_id),
         release_id = COALESCE(NULLIF(?, ''), release_id),
         release_channel = COALESCE(NULLIF(?, ''), release_channel),
         updated_at = ?
@@ -606,6 +708,7 @@ app.post("/api/device/update-result", requireDeviceAuth, (req, res, next) => {
       setStartedAt,
       setCompletedAt,
       input.status === "failed" ? input.message : "",
+      input.target_manifest_id,
       input.release_id,
       input.release_channel,
       now,
@@ -841,6 +944,7 @@ function initDb() {
       target_update_ref TEXT,
       target_release_id TEXT,
       target_release_channel TEXT,
+      update_manifest_id TEXT,
       update_status TEXT NOT NULL DEFAULT 'idle',
       update_requested_at TEXT,
       update_started_at TEXT,
@@ -970,6 +1074,20 @@ function initDb() {
       raw_json TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS release_manifests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      manifest_id TEXT NOT NULL UNIQUE,
+      release_id TEXT NOT NULL,
+      release_channel TEXT NOT NULL,
+      update_ref TEXT NOT NULL,
+      app_version TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      published_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -980,6 +1098,8 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_device_token_events_device ON device_token_events(device_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_device_log_bundles_device ON device_log_bundles(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_device_log_bundles_received ON device_log_bundles(received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_release_manifests_channel ON release_manifests(release_channel, status, published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_release_manifests_status ON release_manifests(status, updated_at DESC);
   `);
   migrateDevicesTable();
   db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
@@ -997,6 +1117,7 @@ function migrateDevicesTable() {
     ["target_update_ref", "TEXT"],
     ["target_release_id", "TEXT"],
     ["target_release_channel", "TEXT"],
+    ["update_manifest_id", "TEXT"],
     ["update_status", "TEXT NOT NULL DEFAULT 'idle'"],
     ["update_requested_at", "TEXT"],
     ["update_started_at", "TEXT"],
@@ -1093,6 +1214,48 @@ function normalizeDeviceUpdateTarget(input) {
   };
 }
 
+function normalizeReleaseManifestInput(input, existing = {}) {
+  const releaseId = cleanString(input.release_id ?? existing.release_id).slice(0, 120);
+  if (!releaseId) {
+    throw new Error("release_id is required");
+  }
+
+  const releaseChannel = cleanString(input.release_channel ?? existing.release_channel ?? "stable");
+  if (!RELEASE_CHANNELS.has(releaseChannel)) {
+    throw new Error(`release_channel must be one of: ${Array.from(RELEASE_CHANNELS).join(", ")}`);
+  }
+
+  const updateRef = cleanGitRef(input.update_ref || input.target_update_ref || input.ref || existing.update_ref);
+  if (!updateRef) {
+    throw new Error("update_ref is required");
+  }
+
+  const status = cleanString(input.status ?? existing.status ?? "draft");
+  if (!RELEASE_MANIFEST_STATUS.has(status)) {
+    throw new Error(`status must be one of: ${Array.from(RELEASE_MANIFEST_STATUS).join(", ")}`);
+  }
+  if (status === "active" && releaseChannel === "hold") {
+    throw new Error("hold channel cannot have an active release manifest");
+  }
+
+  const manifestId = existing.manifest_id
+    ? cleanId(existing.manifest_id)
+    : cleanId(input.manifest_id || releaseId);
+  if (!manifestId) {
+    throw new Error("manifest_id is required");
+  }
+
+  return {
+    manifest_id: manifestId,
+    release_id: releaseId,
+    release_channel: releaseChannel,
+    update_ref: updateRef,
+    app_version: cleanString(input.app_version ?? existing.app_version).slice(0, 80),
+    status,
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
 function normalizeDeviceUpdateResult(input) {
   const status = cleanString(input.status);
   if (!UPDATE_RESULT_STATUS.has(status)) {
@@ -1104,6 +1267,7 @@ function normalizeDeviceUpdateResult(input) {
   }
   return {
     status,
+    target_manifest_id: cleanId(input.target_manifest_id || input.manifest_id),
     target_update_ref: cleanGitRef(input.target_update_ref || input.target_ref || input.ref),
     target_release_id: cleanString(input.target_release_id || input.release_id).slice(0, 120),
     release_id: cleanString(input.release_id).slice(0, 120),
@@ -1290,6 +1454,64 @@ function publicDeviceLogBundle(row) {
   return publicFields;
 }
 
+function listReleaseManifests(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM release_manifests
+    ORDER BY
+      CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicReleaseManifest);
+}
+
+function getReleaseManifest(manifestId) {
+  const row = db.prepare("SELECT * FROM release_manifests WHERE manifest_id = ?").get(cleanId(manifestId));
+  return row ? publicReleaseManifest(row) : null;
+}
+
+function getActiveReleaseManifest(releaseChannel) {
+  const channel = cleanString(releaseChannel);
+  if (!RELEASE_CHANNELS.has(channel) || channel === "hold") return null;
+  const row = db.prepare(`
+    SELECT * FROM release_manifests
+    WHERE release_channel = ?
+      AND status = 'active'
+    ORDER BY published_at DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get(channel);
+  return row ? publicReleaseManifest(row) : null;
+}
+
+function retireActiveReleaseManifests(releaseChannel, now, exceptManifestId = "") {
+  const channel = cleanString(releaseChannel);
+  if (!RELEASE_CHANNELS.has(channel) || channel === "hold") return;
+  db.prepare(`
+    UPDATE release_manifests
+    SET status = 'retired', updated_at = ?
+    WHERE release_channel = ?
+      AND status = 'active'
+      AND manifest_id != ?
+  `).run(now, channel, cleanId(exceptManifestId));
+}
+
+function publicReleaseManifest(row) {
+  return {
+    id: row.id,
+    manifest_id: cleanString(row.manifest_id),
+    release_id: cleanString(row.release_id),
+    release_channel: cleanString(row.release_channel),
+    update_ref: cleanString(row.update_ref),
+    app_version: cleanString(row.app_version),
+    status: cleanString(row.status),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    published_at: cleanString(row.published_at)
+  };
+}
+
 function evaluateStatus(device, heartbeat) {
   if (TERMINAL_STATUS.has(device.status)) return device.status;
   if (!device.last_seen) return "offline";
@@ -1315,21 +1537,37 @@ function evaluateStatus(device, heartbeat) {
 }
 
 function buildDeviceUpdatePolicy(device) {
-  const targetRef = cleanString(device.target_update_ref);
-  const targetReleaseId = cleanString(device.target_release_id) || targetRef;
+  const explicitTargetRef = cleanString(device.target_update_ref);
+  const manifest = explicitTargetRef ? null : getActiveReleaseManifest(device.release_channel);
+  const source = explicitTargetRef ? "device" : (manifest ? "release_manifest" : "none");
+  const targetRef = explicitTargetRef || cleanString(manifest?.update_ref);
+  const targetReleaseId = cleanString(device.target_release_id) || cleanString(manifest?.release_id) || targetRef;
+  const targetReleaseChannel = cleanString(device.target_release_channel) || cleanString(manifest?.release_channel);
+  const targetManifestId = manifest ? cleanString(manifest.manifest_id) : cleanString(device.update_manifest_id);
   const currentReleaseId = cleanString(device.release_id);
   const required = Boolean(targetRef && targetReleaseId && currentReleaseId !== targetReleaseId);
+  let status = cleanString(device.update_status) || "idle";
+  if (targetRef && targetReleaseId && currentReleaseId === targetReleaseId) {
+    status = "success";
+  } else if (required && (status === "idle" || status === "success")) {
+    status = "pending";
+  }
+
   return {
     required,
-    status: cleanString(device.update_status) || "idle",
+    status,
+    source,
+    target_manifest_id: targetManifestId,
     target_update_ref: targetRef,
     target_release_id: targetReleaseId,
-    target_release_channel: cleanString(device.target_release_channel),
-    requested_at: cleanString(device.update_requested_at),
+    target_release_channel: targetReleaseChannel,
+    target_app_version: cleanString(manifest?.app_version),
+    requested_at: cleanString(device.update_requested_at) || cleanString(manifest?.published_at) || cleanString(manifest?.updated_at),
     started_at: cleanString(device.update_started_at),
     completed_at: cleanString(device.update_completed_at),
     last_checked_at: cleanString(device.update_last_checked_at),
-    error: cleanString(device.update_error)
+    error: cleanString(device.update_error),
+    manifest
   };
 }
 
@@ -1337,7 +1575,13 @@ function syncUpdateStatusFromHeartbeat(deviceId, heartbeat, now) {
   const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
   if (!device) return;
 
-  const targetReleaseId = cleanString(device.target_release_id) || cleanString(device.target_update_ref);
+  let targetReleaseId = cleanString(device.target_release_id) || cleanString(device.target_update_ref);
+  let targetManifestId = cleanString(device.update_manifest_id);
+  if (!targetReleaseId) {
+    const manifest = getActiveReleaseManifest(device.release_channel);
+    targetReleaseId = cleanString(manifest?.release_id);
+    targetManifestId = cleanString(manifest?.manifest_id);
+  }
   if (!targetReleaseId) return;
   if (cleanString(heartbeat.release_id) !== targetReleaseId) return;
 
@@ -1346,9 +1590,10 @@ function syncUpdateStatusFromHeartbeat(deviceId, heartbeat, now) {
       update_status = 'success',
       update_completed_at = COALESCE(update_completed_at, ?),
       update_error = '',
+      update_manifest_id = COALESCE(NULLIF(?, ''), update_manifest_id),
       updated_at = ?
     WHERE device_id = ?
-  `).run(now, now, deviceId);
+  `).run(now, targetManifestId, now, deviceId);
   resolveAlert(deviceId, "update_failed", now);
 }
 
@@ -1804,6 +2049,7 @@ function renderDeviceDetailPage(device) {
               target_update_ref: device.target_update_ref,
               target_release_id: device.target_release_id,
               target_release_channel: device.target_release_channel,
+              update_manifest_id: device.update_manifest_id,
               update_status: device.update_status,
               update_requested_at: device.update_requested_at,
               update_started_at: device.update_started_at,
