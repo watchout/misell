@@ -61,14 +61,19 @@ function updatePreviewScale() {
 
 async function loadPlaylist({ reset }) {
   try {
-    const response = await fetch(`/api/playlist?ts=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`playlist HTTP ${response.status}`);
+    const localPreview = loadLocalPreviewPlaylist();
+    if (localPreview) {
+      PLAYER.playlist = normalizePlaylist(localPreview);
+    } else {
+      const response = await fetch(`/api/playlist?ts=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`playlist HTTP ${response.status}`);
 
-    const payload = await response.json();
-    if (payload && payload.ok === false) {
-      throw new Error((payload.errors || []).join("; ") || "playlist validation failed");
+      const payload = await response.json();
+      if (payload && payload.ok === false) {
+        throw new Error((payload.errors || []).join("; ") || "playlist validation failed");
+      }
+      PLAYER.playlist = normalizePlaylist(payload?.playlist || payload);
     }
-    PLAYER.playlist = normalizePlaylist(payload?.playlist || payload);
     PLAYER.activeItems = getActiveItems(PLAYER.playlist.items);
 
     if (reset || !PLAYER.currentItem || !PLAYER.activeItems.some((item) => item.id === PLAYER.currentItem.id)) {
@@ -77,6 +82,16 @@ async function loadPlaylist({ reset }) {
     }
   } catch (error) {
     showEmptyState(`playlistを読み込めません: ${error.message}`);
+  }
+}
+
+function loadLocalPreviewPlaylist() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("local_preview") !== "1") return null;
+  try {
+    return JSON.parse(localStorage.getItem("misell_preview_playlist") || "");
+  } catch {
+    return null;
   }
 }
 
@@ -94,6 +109,7 @@ function normalizePlaylist(playlist) {
       duration: clamp(Number.parseInt(item.duration, 10) || 10, 1, 300),
       start: item.start || "",
       end: item.end || "",
+      days_of_week: normalizeDaysOfWeek(item.days_of_week),
       campaign_id: item.campaign_id || "",
       asset_id: item.asset_id || "",
       left: item.left || "",
@@ -115,6 +131,10 @@ function getActiveItems(items) {
 
 function isInSchedule(item) {
   const now = new Date();
+  if (Array.isArray(item.days_of_week) && item.days_of_week.length > 0) {
+    const today = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][now.getDay()];
+    if (!item.days_of_week.includes(today)) return false;
+  }
   const start = parseScheduleValue(item.start, now);
   const end = parseScheduleValue(item.end, now);
 
@@ -135,6 +155,14 @@ function isInSchedule(item) {
   }
   if (startMinutes !== null) return nowMinutes >= startMinutes;
   return nowMinutes <= endMinutes;
+}
+
+function normalizeDaysOfWeek(value) {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]);
+  return value
+    .map((day) => String(day || "").trim().toLowerCase())
+    .filter((day, index, days) => allowed.has(day) && days.indexOf(day) === index);
 }
 
 function parseScheduleValue(value, now) {

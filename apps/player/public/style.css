@@ -515,7 +515,8 @@ code {
 }
 
 .item-grid,
-.source-grid {
+.source-grid,
+.day-grid {
   display: grid;
   gap: 12px;
   margin-top: 14px;
@@ -531,6 +532,41 @@ code {
 
 .source-grid label:only-child {
   grid-column: 1 / 4;
+}
+
+.day-grid {
+  grid-template-columns: repeat(7, minmax(42px, 1fr)) minmax(140px, 1.3fr);
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.day-grid legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.day-grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.day-grid input {
+  width: 16px;
+  min-height: 16px;
+}
+
+.day-grid label span {
+  margin: 0;
+}
+
+.day-grid small {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 label span {
@@ -621,6 +657,7 @@ label span {
 
   .item-grid,
   .source-grid,
+  .day-grid,
   .source-grid label:only-child {
     grid-template-columns: 1fr;
     grid-column: auto;

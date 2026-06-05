@@ -3,6 +3,7 @@
     devices: [],
     summary: null,
     releaseManifests: [],
+    contentManifests: [],
     issuedToken: null
   };
 
@@ -65,6 +66,7 @@
     alerts: document.getElementById("alerts"),
     notifications: document.getElementById("notifications"),
     releaseManifests: document.getElementById("release-manifests"),
+    contentManifests: document.getElementById("content-manifests"),
     logBundles: document.getElementById("log-bundles"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
@@ -75,22 +77,25 @@
   window.setInterval(loadDashboard, 30000);
 
   async function loadDashboard() {
-    const [summary, devices, alerts, notifications, releaseManifests, logBundles] = await Promise.all([
+    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, logBundles] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/alerts"),
       fetchJson("/api/admin/alert-notifications"),
       fetchJson("/api/admin/release-manifests"),
+      fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/device-log-bundles")
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
+    state.contentManifests = contentManifests.content_manifests || [];
     renderSummary(summary);
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
     renderReleaseManifests(state.releaseManifests);
+    renderContentManifests(state.contentManifests);
     renderLogBundles(logBundles.log_bundles || []);
     renderTokenResult();
   }
@@ -514,6 +519,134 @@
     }
   }
 
+  function renderContentManifests(contentManifests) {
+    if (!els.contentManifests) return;
+    els.contentManifests.innerHTML = `
+      <form class="content-manifest-create">
+        <div class="content-manifest-grid">
+          <input name="content_id" type="text" placeholder="Content ID" aria-label="Content ID">
+          <input name="playlist_version" type="text" value="${escapeAttr(nextPlaylistVersion())}" placeholder="Playlist version" aria-label="Playlist version" required>
+          <input name="title" type="text" placeholder="Title" aria-label="Title">
+          <select name="release_channel" aria-label="Release channel">
+            ${RELEASE_MANIFEST_CHANNEL_OPTIONS.map(([value, label]) => (
+              `<option value="${escapeAttr(value)}">${escapeHtml(label)}</option>`
+            )).join("")}
+          </select>
+          <select name="status" aria-label="Manifest status">
+            ${RELEASE_MANIFEST_STATUS_OPTIONS.map(([value, label]) => (
+              `<option value="${escapeAttr(value)}"${value === "draft" ? " selected" : ""}>${escapeHtml(label)}</option>`
+            )).join("")}
+          </select>
+          <input name="notes" type="text" placeholder="Notes" aria-label="Notes">
+          <button type="submit">作成</button>
+        </div>
+        <textarea name="playlist_json" spellcheck="false" aria-label="Playlist JSON">${escapeHtml(JSON.stringify(defaultPlaylistTemplate(), null, 2))}</textarea>
+      </form>
+      ${contentManifests.length === 0 ? `<p class="empty">content manifestはまだありません。</p>` : `
+        <table class="content-manifests-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Channel</th>
+              <th>Content</th>
+              <th>Playlist</th>
+              <th>Items</th>
+              <th>Published</th>
+              <th>運用</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${contentManifests.slice(0, 30).map(renderContentManifestRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+
+    els.contentManifests.querySelector(".content-manifest-create")?.addEventListener("submit", handleContentManifestCreate);
+    els.contentManifests.querySelectorAll(".content-manifest-action").forEach((form) => {
+      form.addEventListener("submit", handleContentManifestUpdate);
+    });
+  }
+
+  function renderContentManifestRow(manifest) {
+    const itemCount = Array.isArray(manifest.playlist?.items) ? manifest.playlist.items.length : "";
+    return `
+      <tr>
+        <td>
+          <span class="update-status update-status-${escapeAttr(releaseManifestStatusClass(manifest.status))}">
+            ${escapeHtml(manifest.status || "")}
+          </span>
+        </td>
+        <td>${escapeHtml(manifest.release_channel || "")}</td>
+        <td>${escapeHtml(manifest.content_id || "")}<small>${escapeHtml(manifest.title || manifest.notes || "")}</small></td>
+        <td>${escapeHtml(manifest.playlist_version || "")}</td>
+        <td>${formatNumber(itemCount)}</td>
+        <td>${formatTime(manifest.published_at || manifest.updated_at)}</td>
+        <td>
+          <form class="content-manifest-action" data-content-id="${escapeHtml(manifest.content_id || "")}">
+            <select name="status" aria-label="Manifest status">
+              ${RELEASE_MANIFEST_STATUS_OPTIONS.map(([value, label]) => (
+                `<option value="${escapeAttr(value)}"${value === manifest.status ? " selected" : ""}>${escapeHtml(label)}</option>`
+              )).join("")}
+            </select>
+            <button type="submit">保存</button>
+          </form>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function handleContentManifestCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+
+    button.disabled = true;
+    button.textContent = "作成中";
+    try {
+      const payload = {
+        content_id: form.elements.content_id.value,
+        playlist_version: form.elements.playlist_version.value,
+        title: form.elements.title.value,
+        release_channel: form.elements.release_channel.value,
+        status: form.elements.status.value,
+        notes: form.elements.notes.value,
+        playlist: JSON.parse(form.elements.playlist_json.value)
+      };
+      await fetchJson("/api/admin/content-manifests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "content manifestの作成に失敗しました。");
+      button.disabled = false;
+      button.textContent = "作成";
+    }
+  }
+
+  async function handleContentManifestUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const contentId = form.dataset.contentId;
+    button.disabled = true;
+    button.textContent = "保存中";
+    try {
+      await fetchJson(`/api/admin/content-manifests/${encodeURIComponent(contentId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: form.elements.status.value })
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "content manifestの保存に失敗しました。");
+      button.disabled = false;
+      button.textContent = "保存";
+    }
+  }
+
   function renderLogBundles(logBundles) {
     if (!els.logBundles) return;
     if (logBundles.length === 0) {
@@ -602,6 +735,35 @@
       button.disabled = false;
       button.textContent = "テスト送信";
     }
+  }
+
+  function defaultPlaylistTemplate() {
+    return {
+      version: 1,
+      playlist_version: nextPlaylistVersion(),
+      updatedAt: new Date().toISOString(),
+      items: [
+        {
+          id: "demo-wide",
+          item_id: "demo-wide",
+          name: "ワイド デモ",
+          enabled: true,
+          layout: "wide",
+          duration: 12,
+          start: "",
+          end: "",
+          days_of_week: [],
+          wide: "/demo/wide.html",
+          left: "",
+          center: "",
+          right: ""
+        }
+      ]
+    };
+  }
+
+  function nextPlaylistVersion(date = new Date()) {
+    return `pl-${date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`;
   }
 
   function formatTime(value) {

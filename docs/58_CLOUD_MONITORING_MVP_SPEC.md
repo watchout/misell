@@ -325,6 +325,24 @@ CREATE TABLE release_manifests (
 );
 ```
 
+### content_manifests
+
+```sql
+CREATE TABLE content_manifests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id TEXT NOT NULL UNIQUE,
+  playlist_version TEXT NOT NULL,
+  release_channel TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  title TEXT,
+  notes TEXT,
+  playlist_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  published_at TEXT
+);
+```
+
 ### heartbeats
 
 ```sql
@@ -808,6 +826,53 @@ manifestの `release_id`、`release_channel`、`update_ref`、`app_version`、`s
 
 `status=failed` の場合は `update_failed` alertを作成し、`message` を `devices.update_error` に残す。
 
+### GET /api/admin/content-manifests
+
+Cloud playlist manifest一覧を返す。
+
+### POST /api/admin/content-manifests
+
+release channel単位のplaylist manifestを作成する。
+
+入力:
+
+```json
+{
+  "content_id": "content-20260605-staging-001",
+  "playlist_version": "pl-20260605-001",
+  "release_channel": "staging",
+  "status": "active",
+  "title": "staging playlist",
+  "playlist": {
+    "version": 1,
+    "playlist_version": "pl-20260605-001",
+    "items": [
+      {
+        "item_id": "demo-wide",
+        "layout": "wide",
+        "enabled": true,
+        "duration": 12,
+        "wide": "/demo/wide.html"
+      }
+    ]
+  }
+}
+```
+
+`status=active` の場合、同一 `release_channel` の旧active content manifestは `retired` へ変更する。MVPではplaylist JSON配信のみを扱い、Cloud asset storage/syncは次段階とする。
+
+### PATCH /api/admin/content-manifests/:content_id
+
+content manifestの `playlist_version`、`release_channel`、`status`、`title`、`notes`、`playlist` を更新する。
+
+### GET /api/device/content-policy
+
+端末がplaylist同期ポリシーをpullする。端末の `release_channel` に一致するactive content manifestがあり、`playlist_version` が端末の現行値と異なる場合に `required=true` を返す。
+
+### POST /api/device/content-result
+
+端末がplaylist同期結果を報告する。`status=failed` の場合は `content_sync_failed` alertを作成する。
+
 ## 管理画面
 
 ### /admin
@@ -824,6 +889,7 @@ Dashboard。
 - release_channel分布
 - 最新alerts
 - release manifest一覧/作成
+- content manifest一覧/作成
 - log bundle履歴
 
 ### /admin/devices
@@ -960,6 +1026,14 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - release channel単位のupdate policy
 - update resultへの `target_manifest_id` 記録
 
+### PR 8: content operations
+
+- `content_manifests` table
+- content manifest管理API
+- device content policy/result API
+- 端末content sync script/timer
+- 端末コンテンツバックアップscript/API
+
 ## 受け入れ条件
 
 ### Local Cloud Pass
@@ -988,6 +1062,8 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 - `scripts/collect-device-evidence.sh --upload` でCloudに証跡を送れる
 - active release manifestを作成すると同じchannelの端末update policyが `required=true` になる
 - 端末がupdate resultを送ると `update_manifest_id` と `release_id` が更新される
+- active content manifestを作成すると同じchannelの端末content policyが `required=true` になる
+- 端末がcontent resultを送ると `playlist_version` が更新される
 
 ## セキュリティ
 
@@ -1011,7 +1087,7 @@ MISELL_CONFIG_VERSION=cfg-20260605-001
 
 ## 将来拡張
 
-- Cloud playlist sync
+- Cloud asset storage/sync
 - Artifact-backed release bundle
 - Pending commands
 - Screenshot upload

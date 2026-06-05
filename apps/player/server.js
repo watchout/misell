@@ -1,9 +1,11 @@
 require("dotenv").config({ quiet: true });
 
+const { execFile } = require("child_process");
 const fs = require("fs");
 const fsp = fs.promises;
 const os = require("os");
 const path = require("path");
+const util = require("util");
 
 const Ajv = require("ajv/dist/2020");
 const express = require("express");
@@ -19,6 +21,7 @@ const ASSETS_DIR = runtimePath("MISELL_ASSETS_DIR", path.join(ROOT_DIR, "assets"
 const IMAGE_DIR = path.join(ASSETS_DIR, "images");
 const VIDEO_DIR = path.join(ASSETS_DIR, "videos");
 const LOG_DIR = runtimePath("MISELL_LOG_DIR", path.join(ROOT_DIR, "logs"));
+const CONTENT_BACKUP_DIR = runtimePath("MISELL_CONTENT_BACKUP_DIR", path.join(DATA_DIR, "backups"));
 const PLAYLIST_PATH = runtimePath("MISELL_PLAYLIST_PATH", path.join(DATA_DIR, "playlist.json"));
 const PLAYLIST_SCHEMA_PATH = runtimePath("MISELL_PLAYLIST_SCHEMA_PATH", path.join(ROOT_DIR, "data", "playlist.schema.json"));
 const DEVICE_CONFIG_PATH = runtimePath("MISELL_DEVICE_CONFIG_PATH", path.join(DATA_DIR, "config.json"));
@@ -34,6 +37,7 @@ const LOG_FILES = {
 const PORT = Number(process.env.PORT || 3000);
 const UPLOAD_MAX_MB = Number(process.env.UPLOAD_MAX_MB || 500);
 const UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
+const CONTENT_BACKUP_RETENTION = normalizedLimit(process.env.MISELL_CONTENT_BACKUP_RETENTION, 30, 1, 365);
 const ADMIN_USER = process.env.MISELL_ADMIN_USER || process.env.ADMIN_USER || "admin";
 const ADMIN_PASSWORD = process.env.MISELL_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "change-me";
 const ADMIN_AUTH_ENABLED = process.env.MISELL_DISABLE_ADMIN_AUTH !== "1";
@@ -60,6 +64,7 @@ const ALLOWED_MIME_BY_EXTENSION = new Map([
   [".webm", new Set(["video/webm", "video/x-matroska"])]
 ]);
 const sseClients = new Set();
+const execFileAsync = util.promisify(execFile);
 let deviceIdentity = null;
 let deviceSecrets = null;
 let validatePlaylistDocument = null;
@@ -108,6 +113,7 @@ async function ensureRuntimeFiles() {
     fsp.mkdir(path.dirname(DEVICE_CONFIG_PATH), { recursive: true }),
     fsp.mkdir(IMAGE_DIR, { recursive: true }),
     fsp.mkdir(VIDEO_DIR, { recursive: true }),
+    fsp.mkdir(CONTENT_BACKUP_DIR, { recursive: true }),
     fsp.mkdir(LOG_DIR, { recursive: true })
   ]);
 
@@ -156,6 +162,110 @@ async function appendJsonl(logKey, entry) {
   });
   const filePath = logFilePath(logKey);
   await fsp.appendFile(filePath, `${line}\n`, "utf8");
+}
+
+async function createContentBackup(reason = "manual") {
+  await fsp.mkdir(CONTENT_BACKUP_DIR, { recursive: true });
+  const timestamp = compactTimestamp();
+  const safeReason = cleanId(reason) || "manual";
+  const filename = `misell-content-${timestamp}-${safeReason}.tar.gz`;
+  const targetPath = path.join(CONTENT_BACKUP_DIR, filename);
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "misell-content-backup-"));
+
+  try {
+    const stagingDataDir = path.join(tempDir, "data");
+    const stagingAssetsDir = path.join(tempDir, "assets");
+    await Promise.all([
+      fsp.mkdir(stagingDataDir, { recursive: true }),
+      fsp.mkdir(path.join(stagingAssetsDir, "images"), { recursive: true }),
+      fsp.mkdir(path.join(stagingAssetsDir, "videos"), { recursive: true })
+    ]);
+
+    await Promise.all([
+      copyFileIfExists(PLAYLIST_PATH, path.join(stagingDataDir, "playlist.json")),
+      copyFileIfExists(DEVICE_CONFIG_PATH, path.join(stagingDataDir, "config.json")),
+      copyDirIfExists(IMAGE_DIR, path.join(stagingAssetsDir, "images")),
+      copyDirIfExists(VIDEO_DIR, path.join(stagingAssetsDir, "videos"))
+    ]);
+
+    await writeJsonAtomic(path.join(tempDir, "backup-manifest.json"), {
+      app: "misell-player",
+      created_at: new Date().toISOString(),
+      reason: safeReason,
+      playlist_path: PLAYLIST_PATH,
+      device_config_path: DEVICE_CONFIG_PATH,
+      assets_dir: ASSETS_DIR,
+      device: deviceIdentity || {}
+    });
+
+    await execFileAsync("tar", ["-czf", targetPath, "-C", tempDir, "."]);
+    const stat = await fsp.stat(targetPath);
+    await pruneContentBackups();
+    await appendJsonl(ADMIN_LOG_KEY, {
+      action: "content.backup",
+      reason: safeReason,
+      backup: {
+        name: filename,
+        path: targetPath,
+        size: stat.size
+      }
+    }).catch(() => {});
+    return {
+      name: filename,
+      path: targetPath,
+      size: stat.size,
+      created_at: new Date().toISOString(),
+      reason: safeReason
+    };
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function copyFileIfExists(source, destination) {
+  try {
+    await fsp.mkdir(path.dirname(destination), { recursive: true });
+    await fsp.copyFile(source, destination);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+async function copyDirIfExists(source, destination) {
+  try {
+    await fsp.cp(source, destination, {
+      recursive: true,
+      force: true,
+      filter: (filePath) => path.basename(filePath) !== ".gitkeep"
+    });
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+async function listContentBackups() {
+  await fsp.mkdir(CONTENT_BACKUP_DIR, { recursive: true });
+  const entries = await fsp.readdir(CONTENT_BACKUP_DIR, { withFileTypes: true });
+  const backups = await Promise.all(entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".tar.gz"))
+    .map(async (entry) => {
+      const filePath = path.join(CONTENT_BACKUP_DIR, entry.name);
+      const stat = await fsp.stat(filePath);
+      return {
+        name: entry.name,
+        path: filePath,
+        size: stat.size,
+        created_at: stat.mtime.toISOString()
+      };
+    }));
+  return backups.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
+async function pruneContentBackups() {
+  const backups = await listContentBackups();
+  await Promise.all(backups.slice(CONTENT_BACKUP_RETENTION).map((backup) => (
+    fsp.unlink(backup.path).catch(() => {})
+  )));
 }
 
 async function loadDeviceIdentity(fileConfig = {}) {
@@ -481,6 +591,12 @@ function clampInt(value, fallback, min, max) {
   return Math.min(Math.max(number, min), max);
 }
 
+function normalizedLimit(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(number, max));
+}
+
 function parseInteger(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   const number = Number.parseInt(value, 10);
@@ -494,6 +610,10 @@ function cleanString(value) {
 function cleanId(value) {
   if (typeof value !== "string") return "";
   return value.trim().replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 80);
+}
+
+function compactTimestamp(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
 function classifyFilename(filename) {
@@ -772,14 +892,16 @@ async function savePlaylistHandler(req, res, next) {
       touch: true,
       validateSourceExists: true
     });
+    const backup = await createContentBackup("before-playlist-save");
     await writeJsonAtomic(PLAYLIST_PATH, playlist);
     await appendJsonl(ADMIN_LOG_KEY, {
       action: "playlist.save",
       ip: req.ip,
-      itemCount: playlist.items.length
+      itemCount: playlist.items.length,
+      backup: backup.name
     });
     broadcastReload("playlist-saved");
-    res.json(playlistResponse(playlist));
+    res.json({ ...playlistResponse(playlist), backup });
   } catch (error) {
     next(error);
   }
@@ -824,12 +946,14 @@ function uploadAssetHandler(req, res, next) {
         size: req.file.size,
         updatedAt: new Date().toISOString()
       };
+      const backup = await createContentBackup("after-asset-upload");
       await appendJsonl(ADMIN_LOG_KEY, {
         action: "asset.upload",
         ip: req.ip,
-        asset
+        asset,
+        backup: backup.name
       });
-      res.status(201).json(asset);
+      res.status(201).json({ ...asset, backup });
     } catch (uploadError) {
       await fsp.unlink(req.file.path).catch(() => {});
       next(uploadError);
@@ -844,14 +968,38 @@ app.delete("/api/assets", requireAdminAuth, async (req, res, next) => {
   try {
     const assetPath = req.query.path || req.body?.path;
     const filePath = resolveAssetPath(assetPath);
+    const backup = await createContentBackup("before-asset-delete");
     await fsp.unlink(filePath);
     await appendJsonl(ADMIN_LOG_KEY, {
       action: "asset.delete",
       ip: req.ip,
-      path: assetPath
+      path: assetPath,
+      backup: backup.name
     });
     broadcastReload("asset-deleted");
-    res.json({ ok: true });
+    res.json({ ok: true, backup });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/content-backups", requireAdminAuth, async (req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      backup_dir: CONTENT_BACKUP_DIR,
+      retention: CONTENT_BACKUP_RETENTION,
+      backups: await listContentBackups()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/content-backups", requireAdminAuth, async (req, res, next) => {
+  try {
+    const backup = await createContentBackup(req.body?.reason || "manual");
+    res.status(201).json({ ok: true, backup });
   } catch (error) {
     next(error);
   }

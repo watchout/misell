@@ -31,6 +31,7 @@ const TERMINAL_STATUS = new Set(["maintenance", "retired", "lost"]);
 const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "lost"]);
 const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"]);
 const RELEASE_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
+const CONTENT_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
 const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
 const WARNING_DISK_MB = 10240;
@@ -277,6 +278,105 @@ app.patch("/api/admin/release-manifests/:manifest_id", requireAdminAuth, (req, r
     res.json({
       ok: true,
       release_manifest: getReleaseManifest(manifestId)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/content-manifests", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, content_manifests: listContentManifests() });
+});
+
+app.post("/api/admin/content-manifests", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeContentManifestInput(req.body || {});
+    const existing = db.prepare("SELECT content_id FROM content_manifests WHERE content_id = ?").get(input.content_id);
+    if (existing) {
+      res.status(409).json({ error: "Content manifest already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    const createManifest = db.transaction(() => {
+      if (input.status === "active") {
+        retireActiveContentManifests(input.release_channel, now);
+      }
+      db.prepare(`
+        INSERT INTO content_manifests (
+          content_id, playlist_version, release_channel, status, title, notes,
+          playlist_json, created_at, updated_at, published_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.content_id,
+        input.playlist_version,
+        input.release_channel,
+        input.status,
+        input.title,
+        input.notes,
+        JSON.stringify(input.playlist),
+        now,
+        now,
+        input.status === "active" ? now : null
+      );
+    });
+    createManifest();
+
+    res.status(201).json({
+      ok: true,
+      content_manifest: getContentManifest(input.content_id, true)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const contentId = cleanId(req.params.content_id);
+    const existing = db.prepare("SELECT * FROM content_manifests WHERE content_id = ?").get(contentId);
+    if (!existing) {
+      res.status(404).json({ error: "Content manifest not found" });
+      return;
+    }
+
+    const input = normalizeContentManifestInput(req.body || {}, existing);
+    const now = nowIso();
+    const publishedAt = input.status === "active"
+      ? (existing.status === "active" && existing.published_at ? existing.published_at : now)
+      : existing.published_at;
+    const updateManifest = db.transaction(() => {
+      if (input.status === "active") {
+        retireActiveContentManifests(input.release_channel, now, contentId);
+      }
+      db.prepare(`
+        UPDATE content_manifests SET
+          playlist_version = ?,
+          release_channel = ?,
+          status = ?,
+          title = ?,
+          notes = ?,
+          playlist_json = ?,
+          updated_at = ?,
+          published_at = ?
+        WHERE content_id = ?
+      `).run(
+        input.playlist_version,
+        input.release_channel,
+        input.status,
+        input.title,
+        input.notes,
+        JSON.stringify(input.playlist),
+        now,
+        publishedAt,
+        contentId
+      );
+    });
+    updateManifest();
+
+    res.json({
+      ok: true,
+      content_manifest: getContentManifest(contentId, true)
     });
   } catch (error) {
     next(error);
@@ -732,6 +832,55 @@ app.post("/api/device/update-result", requireDeviceAuth, (req, res, next) => {
   }
 });
 
+app.get("/api/device/content-policy", requireDeviceAuth, (req, res) => {
+  const now = nowIso();
+  db.prepare("UPDATE devices SET updated_at = ? WHERE device_id = ?")
+    .run(now, req.device.device_id);
+
+  const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(req.device.device_id);
+  res.json({
+    ok: true,
+    device_id: req.device.device_id,
+    current: {
+      playlist_version: cleanString(device.playlist_version),
+      release_channel: cleanString(device.release_channel)
+    },
+    content: buildDeviceContentPolicy(device)
+  });
+});
+
+app.post("/api/device/content-result", requireDeviceAuth, (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    assertPayloadDeviceMatches(req.device, payload);
+    const input = normalizeDeviceContentResult(payload);
+    const now = nowIso();
+
+    if (input.status === "success") {
+      db.prepare(`
+        UPDATE devices SET
+          playlist_version = COALESCE(NULLIF(?, ''), playlist_version),
+          last_error = '',
+          updated_at = ?
+        WHERE device_id = ?
+      `).run(input.playlist_version, now, req.device.device_id);
+      resolveAlert(req.device.device_id, "content_sync_failed", now);
+    } else if (input.status === "failed") {
+      db.prepare("UPDATE devices SET last_error = ?, updated_at = ? WHERE device_id = ?")
+        .run(input.message, now, req.device.device_id);
+      openAlert(req.device.device_id, req.device.tenant_id, req.device.store_id, "warning", "content_sync_failed", input.message || "Device content sync failed", now, payload);
+    }
+
+    res.status(201).json({
+      ok: true,
+      received_at: now,
+      content: buildDeviceContentPolicy(db.prepare("SELECT * FROM devices WHERE device_id = ?").get(req.device.device_id))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
   try {
     const payload = req.body || {};
@@ -1088,6 +1237,20 @@ function initDb() {
       published_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS content_manifests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content_id TEXT NOT NULL UNIQUE,
+      playlist_version TEXT NOT NULL,
+      release_channel TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      title TEXT,
+      notes TEXT,
+      playlist_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      published_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -1100,6 +1263,8 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_device_log_bundles_received ON device_log_bundles(received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_release_manifests_channel ON release_manifests(release_channel, status, published_at DESC);
     CREATE INDEX IF NOT EXISTS idx_release_manifests_status ON release_manifests(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_content_manifests_channel ON content_manifests(release_channel, status, published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_content_manifests_status ON content_manifests(status, updated_at DESC);
   `);
   migrateDevicesTable();
   db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
@@ -1256,6 +1421,134 @@ function normalizeReleaseManifestInput(input, existing = {}) {
   };
 }
 
+function normalizeContentManifestInput(input, existing = {}) {
+  const existingPlaylist = parseJson(existing.playlist_json, null);
+  const playlist = normalizeCloudPlaylist(input.playlist || input.playlist_json || existingPlaylist);
+  const playlistVersion = cleanString(input.playlist_version ?? playlist.playlist_version ?? existing.playlist_version).slice(0, 120);
+  if (!playlistVersion) {
+    throw new Error("playlist_version is required");
+  }
+  playlist.playlist_version = playlistVersion;
+
+  const releaseChannel = cleanString(input.release_channel ?? existing.release_channel ?? "stable");
+  if (!RELEASE_CHANNELS.has(releaseChannel)) {
+    throw new Error(`release_channel must be one of: ${Array.from(RELEASE_CHANNELS).join(", ")}`);
+  }
+
+  const status = cleanString(input.status ?? existing.status ?? "draft");
+  if (!CONTENT_MANIFEST_STATUS.has(status)) {
+    throw new Error(`status must be one of: ${Array.from(CONTENT_MANIFEST_STATUS).join(", ")}`);
+  }
+  if (status === "active" && releaseChannel === "hold") {
+    throw new Error("hold channel cannot have an active content manifest");
+  }
+
+  const contentId = existing.content_id
+    ? cleanId(existing.content_id)
+    : cleanId(input.content_id || playlistVersion);
+  if (!contentId) {
+    throw new Error("content_id is required");
+  }
+
+  return {
+    content_id: contentId,
+    playlist_version: playlistVersion,
+    release_channel: releaseChannel,
+    status,
+    title: cleanString(input.title ?? existing.title).slice(0, 160),
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000),
+    playlist
+  };
+}
+
+function normalizeCloudPlaylist(value) {
+  const source = typeof value === "string" ? parseJson(value, null) : value;
+  if (!source || typeof source !== "object") {
+    throw new Error("playlist must be an object");
+  }
+  if (!Array.isArray(source.items)) {
+    throw new Error("playlist.items must be an array");
+  }
+
+  const playlist = {
+    version: Number(source.version || 1),
+    playlist_version: cleanString(source.playlist_version),
+    updatedAt: cleanString(source.updatedAt) || nowIso(),
+    items: source.items.map((item, index) => normalizeCloudPlaylistItem(item, index))
+  };
+  if (!playlist.playlist_version) {
+    playlist.playlist_version = `pl-${compactTimestamp()}`;
+  }
+  return playlist;
+}
+
+function normalizeCloudPlaylistItem(item, index) {
+  const value = item || {};
+  const layout = value.layout === "wide" ? "wide" : "three-zone";
+  const id = cleanId(value.item_id || value.id || `item-${Date.now()}-${index + 1}`);
+  const normalized = {
+    id,
+    item_id: id,
+    name: cleanString(value.name || id).slice(0, 160),
+    enabled: value.enabled !== false,
+    layout,
+    duration: normalizedLimit(value.duration, 10, 1, 300),
+    start: cleanString(value.start),
+    end: cleanString(value.end),
+    days_of_week: normalizeDaysOfWeek(value.days_of_week),
+    campaign_id: cleanString(value.campaign_id).slice(0, 120),
+    asset_id: cleanString(value.asset_id).slice(0, 120),
+    priority: normalizedLimit(value.priority, 0, 0, 100),
+    left: cleanString(value.left),
+    center: cleanString(value.center),
+    right: cleanString(value.right),
+    wide: cleanString(value.wide)
+  };
+
+  if (normalized.start && !isValidScheduleTime(normalized.start)) {
+    throw new Error(`items[${index}].start must be HH:mm or empty`);
+  }
+  if (normalized.end && !isValidScheduleTime(normalized.end)) {
+    throw new Error(`items[${index}].end must be HH:mm or empty`);
+  }
+
+  if (layout === "wide") {
+    validateCloudSource(`items[${index}].wide`, normalized.wide, normalized.enabled);
+  } else {
+    validateCloudSource(`items[${index}].left`, normalized.left, normalized.enabled);
+    validateCloudSource(`items[${index}].center`, normalized.center, normalized.enabled);
+    validateCloudSource(`items[${index}].right`, normalized.right, normalized.enabled);
+  }
+  return normalized;
+}
+
+function validateCloudSource(label, source, required) {
+  const value = cleanString(source);
+  if (!value) {
+    if (required) throw new Error(`${label} is required for enabled playlist items`);
+    return;
+  }
+  if (value.includes("..")) {
+    throw new Error(`${label} cannot contain '..'`);
+  }
+  if (value.startsWith("/assets/images/") || value.startsWith("/assets/videos/") || value.startsWith("/demo/")) {
+    return;
+  }
+  throw new Error(`${label} must be an /assets/images, /assets/videos, or /demo path`);
+}
+
+function normalizeDaysOfWeek(value) {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]);
+  return value
+    .map((day) => cleanString(day).toLowerCase())
+    .filter((day, index, days) => allowed.has(day) && days.indexOf(day) === index);
+}
+
+function isValidScheduleTime(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value));
+}
+
 function normalizeDeviceUpdateResult(input) {
   const status = cleanString(input.status);
   if (!UPDATE_RESULT_STATUS.has(status)) {
@@ -1273,6 +1566,19 @@ function normalizeDeviceUpdateResult(input) {
     release_id: cleanString(input.release_id).slice(0, 120),
     release_channel: releaseChannel,
     previous_release_id: cleanString(input.previous_release_id).slice(0, 120),
+    message: cleanString(input.message || input.error).slice(0, 1000)
+  };
+}
+
+function normalizeDeviceContentResult(input) {
+  const status = cleanString(input.status);
+  if (!UPDATE_RESULT_STATUS.has(status)) {
+    throw new Error(`status must be one of: ${Array.from(UPDATE_RESULT_STATUS).join(", ")}`);
+  }
+  return {
+    status,
+    content_id: cleanId(input.content_id || input.manifest_id),
+    playlist_version: cleanString(input.playlist_version).slice(0, 120),
     message: cleanString(input.message || input.error).slice(0, 1000)
   };
 }
@@ -1512,6 +1818,67 @@ function publicReleaseManifest(row) {
   };
 }
 
+function listContentManifests(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM content_manifests
+    ORDER BY
+      CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      id DESC
+    LIMIT ?
+  `).all(boundedLimit).map((row) => publicContentManifest(row, true));
+}
+
+function getContentManifest(contentId, includePlaylist = false) {
+  const row = db.prepare("SELECT * FROM content_manifests WHERE content_id = ?").get(cleanId(contentId));
+  return row ? publicContentManifest(row, includePlaylist) : null;
+}
+
+function getActiveContentManifest(releaseChannel) {
+  const channel = cleanString(releaseChannel);
+  if (!RELEASE_CHANNELS.has(channel) || channel === "hold") return null;
+  const row = db.prepare(`
+    SELECT * FROM content_manifests
+    WHERE release_channel = ?
+      AND status = 'active'
+    ORDER BY published_at DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `).get(channel);
+  return row ? publicContentManifest(row, true) : null;
+}
+
+function retireActiveContentManifests(releaseChannel, now, exceptContentId = "") {
+  const channel = cleanString(releaseChannel);
+  if (!RELEASE_CHANNELS.has(channel) || channel === "hold") return;
+  db.prepare(`
+    UPDATE content_manifests
+    SET status = 'retired', updated_at = ?
+    WHERE release_channel = ?
+      AND status = 'active'
+      AND content_id != ?
+  `).run(now, channel, cleanId(exceptContentId));
+}
+
+function publicContentManifest(row, includePlaylist = false) {
+  const publicFields = {
+    id: row.id,
+    content_id: cleanString(row.content_id),
+    playlist_version: cleanString(row.playlist_version),
+    release_channel: cleanString(row.release_channel),
+    status: cleanString(row.status),
+    title: cleanString(row.title),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    published_at: cleanString(row.published_at)
+  };
+  if (includePlaylist) {
+    publicFields.playlist = parseJson(row.playlist_json, null);
+  }
+  return publicFields;
+}
+
 function evaluateStatus(device, heartbeat) {
   if (TERMINAL_STATUS.has(device.status)) return device.status;
   if (!device.last_seen) return "offline";
@@ -1568,6 +1935,23 @@ function buildDeviceUpdatePolicy(device) {
     last_checked_at: cleanString(device.update_last_checked_at),
     error: cleanString(device.update_error),
     manifest
+  };
+}
+
+function buildDeviceContentPolicy(device) {
+  const manifest = getActiveContentManifest(device.release_channel);
+  const currentPlaylistVersion = cleanString(device.playlist_version);
+  const targetPlaylistVersion = cleanString(manifest?.playlist_version);
+  const required = Boolean(manifest && targetPlaylistVersion && currentPlaylistVersion !== targetPlaylistVersion);
+  return {
+    required,
+    status: required ? "pending" : "idle",
+    source: manifest ? "content_manifest" : "none",
+    content_id: cleanString(manifest?.content_id),
+    playlist_version: targetPlaylistVersion,
+    release_channel: cleanString(manifest?.release_channel),
+    published_at: cleanString(manifest?.published_at),
+    playlist: required ? manifest.playlist : null
   };
 }
 
@@ -1977,6 +2361,10 @@ function normalizedLimit(value, fallback, min, max) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function compactTimestamp(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
 function parseJson(value, fallback) {

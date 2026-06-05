@@ -67,14 +67,23 @@ button.danger {
 }
 
 select,
-input {
+input,
+textarea {
   background: #ffffff;
   border: 1px solid #cbd5df;
   border-radius: 6px;
   color: #1f2933;
   font: inherit;
+}
+
+select,
+input {
   min-height: 34px;
   padding: 0 8px;
+}
+
+textarea {
+  padding: 8px;
 }
 
 main {
@@ -123,7 +132,8 @@ table {
 }
 
 #devices,
-#release-manifests {
+#release-manifests,
+#content-manifests {
   overflow-x: auto;
 }
 
@@ -258,7 +268,8 @@ td small {
 }
 
 .release-manifest-create button,
-.release-manifest-action button {
+.release-manifest-action button,
+.content-manifest-action button {
   min-height: 34px;
 }
 
@@ -267,6 +278,43 @@ td small {
 }
 
 .release-manifest-action {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(92px, 1fr) auto;
+  min-width: 170px;
+}
+
+.content-manifest-create {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-width: 1040px;
+  padding: 10px;
+}
+
+.content-manifest-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(140px, 1fr) minmax(150px, 1fr) minmax(140px, 1fr) minmax(92px, 110px) minmax(92px, 110px) minmax(160px, 1.2fr) auto;
+}
+
+.content-manifest-create textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  min-height: 220px;
+  resize: vertical;
+  width: 100%;
+}
+
+.content-manifests-table {
+  table-layout: fixed;
+}
+
+.content-manifest-action {
   display: grid;
   gap: 6px;
   grid-template-columns: minmax(92px, 1fr) auto;
