@@ -14,14 +14,14 @@ const { nanoid } = require("nanoid");
 const app = express();
 const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
-const DATA_DIR = path.join(ROOT_DIR, "data");
-const ASSETS_DIR = path.join(ROOT_DIR, "assets");
+const DATA_DIR = runtimePath("MISELL_DATA_DIR", path.join(ROOT_DIR, "data"));
+const ASSETS_DIR = runtimePath("MISELL_ASSETS_DIR", path.join(ROOT_DIR, "assets"));
 const IMAGE_DIR = path.join(ASSETS_DIR, "images");
 const VIDEO_DIR = path.join(ASSETS_DIR, "videos");
-const LOG_DIR = path.join(ROOT_DIR, "logs");
-const PLAYLIST_PATH = path.join(DATA_DIR, "playlist.json");
-const PLAYLIST_SCHEMA_PATH = path.join(DATA_DIR, "playlist.schema.json");
-const DEVICE_CONFIG_PATH = path.join(DATA_DIR, "config.json");
+const LOG_DIR = runtimePath("MISELL_LOG_DIR", path.join(ROOT_DIR, "logs"));
+const PLAYLIST_PATH = runtimePath("MISELL_PLAYLIST_PATH", path.join(DATA_DIR, "playlist.json"));
+const PLAYLIST_SCHEMA_PATH = runtimePath("MISELL_PLAYLIST_SCHEMA_PATH", path.join(ROOT_DIR, "data", "playlist.schema.json"));
+const DEVICE_CONFIG_PATH = runtimePath("MISELL_DEVICE_CONFIG_PATH", path.join(DATA_DIR, "config.json"));
 const PLAYLOG_KEY = "playlog";
 const ADMIN_LOG_KEY = "admin";
 const ERROR_LOG_KEY = "error";
@@ -104,6 +104,8 @@ const defaultPlaylist = {
 async function ensureRuntimeFiles() {
   await Promise.all([
     fsp.mkdir(DATA_DIR, { recursive: true }),
+    fsp.mkdir(path.dirname(PLAYLIST_PATH), { recursive: true }),
+    fsp.mkdir(path.dirname(DEVICE_CONFIG_PATH), { recursive: true }),
     fsp.mkdir(IMAGE_DIR, { recursive: true }),
     fsp.mkdir(VIDEO_DIR, { recursive: true }),
     fsp.mkdir(LOG_DIR, { recursive: true })
@@ -124,6 +126,12 @@ async function ensureRuntimeFiles() {
     ensureFile(logFilePath(ADMIN_LOG_KEY)),
     ensureFile(logFilePath(ERROR_LOG_KEY))
   ]);
+}
+
+function runtimePath(envName, fallbackPath) {
+  const value = process.env[envName];
+  if (!value) return fallbackPath;
+  return path.isAbsolute(value) ? value : path.resolve(ROOT_DIR, value);
 }
 
 async function ensureFile(filePath) {

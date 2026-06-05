@@ -55,6 +55,16 @@ npm run validate:playlist
 
 Actual store terminals should override identity with environment variables in `~/.config/misell-player/env`.
 
+Store terminals should keep runtime files outside the Git checkout:
+
+- `MISELL_DATA_DIR`: default `~/.local/share/misell-player/data`
+- `MISELL_ASSETS_DIR`: default `~/.local/share/misell-player/assets`
+- `MISELL_LOG_DIR`: default `~/.local/share/misell-player/logs`
+- `MISELL_PLAYLIST_PATH`: default `$MISELL_DATA_DIR/playlist.json`
+- `MISELL_DEVICE_CONFIG_PATH`: default `$MISELL_DATA_DIR/config.json`
+
+`scripts/setup-autostart.sh` and `scripts/enroll-device.sh` write these paths to `~/.config/misell-player/env`. This keeps device identity, playlist, uploads, and logs out of the Git working tree.
+
 ## API
 
 - `GET /player`
@@ -219,6 +229,8 @@ scripts/rotate-logs.sh --force
 ```
 
 ## MVP Update Flow
+
+For Git-based MVP updates, keep `apps/player` as a clean checkout and keep runtime files under `~/.local/share/misell-player`.
 
 Dry-run:
 
