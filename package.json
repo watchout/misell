@@ -1,0 +1,21 @@
+{
+  "name": "misell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Misell signage delivery QA and CI orchestration.",
+  "scripts": {
+    "check:player": "npm --prefix apps/player run check",
+    "check:cloud": "npm --prefix apps/cloud run check",
+    "check:shell": "bash -n apps/player/scripts/*.sh apps/cloud/scripts/*.sh",
+    "validate:playlist": "npm --prefix apps/player run validate:playlist",
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.js",
+    "test:e2e:headed": "playwright test --config tests/e2e/playwright.config.js --headed",
+    "test:ci": "npm run check:player && npm run validate:playlist && npm run check:cloud && npm run check:shell && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
