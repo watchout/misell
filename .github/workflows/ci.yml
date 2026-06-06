@@ -71,3 +71,48 @@ jobs:
 
       - name: Check shell script syntax
         run: bash -n apps/player/scripts/*.sh apps/cloud/scripts/*.sh
+
+  e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/player/package-lock.json
+            apps/cloud/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Audit root dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Install player dependencies
+        run: npm ci --prefix apps/player
+
+      - name: Install cloud dependencies
+        run: npm ci --prefix apps/cloud
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser E2E
+        run: npm run test:e2e
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-artifacts
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore

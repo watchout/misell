@@ -301,6 +301,7 @@
     const buttons = form.querySelectorAll("button");
     const deviceId = form.dataset.deviceId;
     const action = submitter?.value === "revoke" ? "revoke" : "rotate";
+    const reason = form.elements.reason.value;
     const confirmed = window.confirm(
       action === "rotate"
         ? `${deviceId} の端末トークンを再発行します。旧トークンは使えなくなります。`
@@ -315,7 +316,7 @@
       const result = await fetchJson(`/api/admin/devices/${encodeURIComponent(deviceId)}/token/${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: form.elements.reason.value })
+        body: JSON.stringify({ reason })
       });
       if (result.device_token) {
         state.issuedToken = {

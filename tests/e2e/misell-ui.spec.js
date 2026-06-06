@@ -1,0 +1,599 @@
+const { test, expect } = require("@playwright/test");
+const { spawn } = require("node:child_process");
+const fsp = require("node:fs/promises");
+const path = require("node:path");
+
+const repoRoot = path.resolve(__dirname, "../..");
+const outputDir = path.resolve(process.env.MISELL_E2E_OUTPUT_DIR || path.join(repoRoot, "test-results/e2e/misell-ui"));
+const screenshotsDir = path.join(outputDir, "screenshots");
+const artifactsDir = path.join(outputDir, "artifacts");
+const tmpDir = path.join(outputDir, "tmp");
+const playerDataDir = path.join(tmpDir, "player-data");
+const cloudDataDir = path.join(tmpDir, "cloud-data");
+const playerPort = Number(process.env.MISELL_E2E_PLAYER_PORT || 3300);
+const cloudPort = Number(process.env.MISELL_E2E_CLOUD_PORT || 3301);
+const user = "admin";
+const password = "browser-ui-test-password";
+const playerBase = `http://127.0.0.1:${playerPort}`;
+const cloudBase = `http://127.0.0.1:${cloudPort}`;
+
+const actions = [];
+const consoleEvents = [];
+const networkEvents = [];
+const serverLogs = [];
+const failures = [];
+const servers = [];
+
+function action(message) {
+  actions.push(`${new Date().toISOString()} ${message}`);
+}
+
+function recordFailure(message) {
+  failures.push(`${new Date().toISOString()} ${message}`);
+}
+
+function expectedHttpResponse(response) {
+  const method = response.request().method();
+  const url = response.url();
+  const status = response.status();
+  return (
+    (status === 401 && method === "GET" && url === `${playerBase}/admin`) ||
+    (status === 401 && method === "GET" && url === `${cloudBase}/admin`) ||
+    (status === 400 && method === "POST" && url === `${playerBase}/api/assets/upload`) ||
+    (status === 413 && method === "POST" && url === `${playerBase}/api/assets/upload`) ||
+    (status === 400 && method === "PATCH" && url === `${cloudBase}/api/admin/devices/DEV-BROWSER-001/update`)
+  );
+}
+
+async function ensureDirs() {
+  await fsp.mkdir(screenshotsDir, { recursive: true });
+  await fsp.mkdir(artifactsDir, { recursive: true });
+  await fsp.mkdir(playerDataDir, { recursive: true });
+  await fsp.mkdir(cloudDataDir, { recursive: true });
+}
+
+async function writeFixtureFiles() {
+  const playlist = {
+    version: 1,
+    playlist_version: "browser-ui-001",
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: "browser-three-zone",
+        item_id: "browser-three-zone",
+        name: "Browser three-zone",
+        enabled: true,
+        layout: "three-zone",
+        duration: 1,
+        start: "",
+        end: "",
+        days_of_week: [],
+        campaign_id: "cmp-browser",
+        asset_id: "asset-browser-three",
+        priority: 0,
+        left: "/demo/left.html",
+        center: "/demo/center.html",
+        right: "/demo/right.html",
+        wide: ""
+      },
+      {
+        id: "browser-wide",
+        item_id: "browser-wide",
+        name: "Browser wide",
+        enabled: true,
+        layout: "wide",
+        duration: 1,
+        start: "",
+        end: "",
+        days_of_week: [],
+        campaign_id: "cmp-browser",
+        asset_id: "asset-browser-wide",
+        priority: 0,
+        left: "",
+        center: "",
+        right: "",
+        wide: "/demo/wide.html"
+      }
+    ]
+  };
+
+  const config = {
+    tenant_id: "TEN-BROWSER",
+    store_id: "STO-BROWSER",
+    location_id: "LOC-BROWSER",
+    screen_group_id: "SG-BROWSER",
+    device_id: "DEV-BROWSER-001",
+    device_name: "browser-ui-local",
+    environment: "test",
+    release_id: "browser-ui",
+    release_channel: "test",
+    config_version: "cfg-browser-ui"
+  };
+
+  await fsp.writeFile(path.join(playerDataDir, "playlist.json"), `${JSON.stringify(playlist, null, 2)}\n`);
+  await fsp.writeFile(path.join(playerDataDir, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lZz9xwAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  await fsp.writeFile(path.join(artifactsDir, "valid-1x1.png"), png);
+  await fsp.writeFile(path.join(artifactsDir, "invalid.txt"), "not an allowed upload\n");
+  await fsp.writeFile(path.join(artifactsDir, "too-large.png"), Buffer.concat([png, Buffer.alloc(1024 * 1024 + 1)]));
+}
+
+function spawnServer(name, cwd, env) {
+  const child = spawn("npm", ["start"], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  servers.push(child);
+  child.stdout.on("data", (data) => serverLogs.push(`[${name} stdout] ${data.toString().trimEnd()}`));
+  child.stderr.on("data", (data) => serverLogs.push(`[${name} stderr] ${data.toString().trimEnd()}`));
+  child.on("exit", (code, signal) => serverLogs.push(`[${name} exit] code=${code} signal=${signal}`));
+  return child;
+}
+
+async function waitForHealth(baseUrl) {
+  const deadline = Date.now() + 30000;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${baseUrl}/api/health`);
+      if (res.ok) return;
+      lastError = `HTTP ${res.status}`;
+    } catch (error) {
+      lastError = error.message;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Timed out waiting for ${baseUrl}/api/health: ${lastError}`);
+}
+
+async function startServers() {
+  spawnServer("player", path.join(repoRoot, "apps/player"), {
+    PORT: String(playerPort),
+    MISELL_DATA_DIR: playerDataDir,
+    MISELL_ASSETS_DIR: path.join(tmpDir, "player-assets"),
+    MISELL_LOG_DIR: path.join(tmpDir, "player-logs"),
+    ADMIN_USER: user,
+    ADMIN_PASSWORD: password,
+    REQUIRE_ADMIN_AUTH: "1",
+    UPLOAD_MAX_MB: "1",
+    NODE_ENV: "test"
+  });
+  spawnServer("cloud", path.join(repoRoot, "apps/cloud"), {
+    HOST: "127.0.0.1",
+    PORT: String(cloudPort),
+    MISELL_CLOUD_DATA_DIR: cloudDataDir,
+    DB_PATH: path.join(cloudDataDir, "misell-cloud.sqlite"),
+    ADMIN_USER: user,
+    ADMIN_PASSWORD: password,
+    REQUIRE_ADMIN_AUTH: "1",
+    DEVICE_TOKEN_PEPPER: "browser-ui-pepper",
+    NODE_ENV: "test"
+  });
+  await Promise.all([waitForHealth(playerBase), waitForHealth(cloudBase)]);
+}
+
+async function stopServers() {
+  await Promise.all(servers.map((child) => new Promise((resolve) => {
+    if (child.exitCode !== null || child.killed) {
+      resolve();
+      return;
+    }
+    child.once("exit", resolve);
+    child.kill("SIGTERM");
+    setTimeout(() => {
+      if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+    }, 3000);
+  })));
+}
+
+function wirePage(page, name) {
+  page.on("console", (msg) => {
+    const type = msg.type();
+    const text = msg.text();
+    consoleEvents.push(`${new Date().toISOString()} [${name}] ${type}: ${text}`);
+    const expectedBrowserResourceError =
+      /Failed to load resource: the server responded with a status of (400|401|413)/.test(text);
+    if (type === "error" && !expectedBrowserResourceError) {
+      recordFailure(`[${name}] console error: ${text}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    consoleEvents.push(`${new Date().toISOString()} [${name}] pageerror: ${error.message}`);
+    recordFailure(`[${name}] page error: ${error.message}`);
+  });
+  page.on("requestfailed", (request) => {
+    const failure = request.failure();
+    networkEvents.push(`${new Date().toISOString()} [${name}] FAILED ${request.method()} ${request.url()} ${failure?.errorText || ""}`);
+    const expectedSseAbort = request.url().endsWith("/api/events") && failure?.errorText === "net::ERR_ABORTED";
+    if (!expectedSseAbort) {
+      recordFailure(`[${name}] request failed: ${request.url()} ${failure?.errorText || ""}`);
+    }
+  });
+  page.on("response", (response) => {
+    const status = response.status();
+    if (status >= 400) {
+      networkEvents.push(`${new Date().toISOString()} [${name}] HTTP ${status} ${response.request().method()} ${response.url()}`);
+      if (!expectedHttpResponse(response)) {
+        recordFailure(`[${name}] unexpected HTTP ${status}: ${response.request().method()} ${response.url()}`);
+      }
+    }
+  });
+}
+
+async function authedRequest(baseUrl, endpoint, options = {}) {
+  const headers = {
+    Authorization: `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`,
+    ...(options.headers || {})
+  };
+  const res = await fetch(`${baseUrl}${endpoint}`, { ...options, headers });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { ok: res.ok, status: res.status, text, json };
+}
+
+async function seedCloudDevice() {
+  action("Seed cloud device through admin API");
+  const create = await authedRequest(cloudBase, "/api/admin/devices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      tenant_name: "Browser Tenant",
+      store_id: "STO-BROWSER",
+      store_name: "Browser Store",
+      location_id: "LOC-BROWSER",
+      location_name: "Browser Location",
+      screen_group_id: "SG-BROWSER",
+      screen_group_name: "Browser Screen Group",
+      device_id: "DEV-BROWSER-001",
+      device_name: "browser-ui-device",
+      release_channel: "stable",
+      notes: "seeded for browser UI evidence"
+    })
+  });
+  expect(create.status, create.text).toBe(201);
+  const token = create.json.device_token;
+  const heartbeat = await fetch(`${cloudBase}/api/device/heartbeat`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      location_id: "LOC-BROWSER",
+      screen_group_id: "SG-BROWSER",
+      device_id: "DEV-BROWSER-001",
+      device_name: "browser-ui-device",
+      status: "online",
+      app_version: "0.1.0",
+      release_id: "browser-ui",
+      release_channel: "stable",
+      playlist_version: "browser-ui-001",
+      disk_free_mb: 64000,
+      memory_used_percent: 12,
+      current_item_id: "browser-three-zone"
+    })
+  });
+  expect(heartbeat.status, await heartbeat.text()).toBe(200);
+}
+
+test.beforeAll(async () => {
+  await fsp.rm(outputDir, { recursive: true, force: true });
+  await ensureDirs();
+  await writeFixtureFiles();
+  await startServers();
+  await seedCloudDevice();
+});
+
+test.afterAll(async () => {
+  await fsp.mkdir(outputDir, { recursive: true });
+  await fsp.writeFile(path.join(outputDir, "actions.log"), `${actions.join("\n")}\n`);
+  await fsp.writeFile(path.join(outputDir, "console.log"), `${consoleEvents.join("\n")}\n`);
+  await fsp.writeFile(path.join(outputDir, "network.log"), `${networkEvents.join("\n")}\n`);
+  await fsp.writeFile(path.join(outputDir, "server.log"), `${serverLogs.join("\n")}\n`);
+
+  const playerAfter = await authedRequest(playerBase, "/api/playlist").catch((error) => ({ error: error.message }));
+  const cloudDevices = await authedRequest(cloudBase, "/api/admin/devices").catch((error) => ({ error: error.message }));
+  const releaseManifests = await authedRequest(cloudBase, "/api/admin/release-manifests").catch((error) => ({ error: error.message }));
+  const contentManifests = await authedRequest(cloudBase, "/api/admin/content-manifests").catch((error) => ({ error: error.message }));
+  await fsp.writeFile(path.join(outputDir, "api_after.json"), `${JSON.stringify({
+    player_playlist: playerAfter.json || playerAfter,
+    cloud_devices: cloudDevices.json || cloudDevices,
+    release_manifests: releaseManifests.json || releaseManifests,
+    content_manifests: contentManifests.json || contentManifests
+  }, null, 2)}\n`);
+  await fsp.writeFile(path.join(outputDir, "qa-summary.json"), `${JSON.stringify({
+    result: failures.length === 0 ? "PASS" : "FAIL",
+    failures,
+    output_dir: outputDir,
+    generated_at: new Date().toISOString()
+  }, null, 2)}\n`);
+  await stopServers();
+  if (failures.length > 0) {
+    throw new Error(`Unexpected browser QA events:\n${failures.join("\n")}`);
+  }
+});
+
+test("player UI renders preview mode, rotates layouts, and supports local admin operations", async ({ browser }) => {
+  const unauth = await browser.newPage();
+  wirePage(unauth, "player-unauth");
+  action("Check local admin unauthenticated 401");
+  const unauthRes = await unauth.goto(`${playerBase}/admin`, { waitUntil: "domcontentloaded" });
+  expect(unauthRes.status()).toBe(401);
+  await unauth.close();
+
+  const context = await browser.newContext({
+    httpCredentials: { username: user, password },
+    viewport: { width: 1440, height: 900 }
+  });
+  const page = await context.newPage();
+  wirePage(page, "player");
+
+  action("Open /player?preview=1 and verify three-zone layout");
+  await page.goto(`${playerBase}/player?preview=1`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#left-zone")).toBeVisible();
+  await expect(page.locator("#center-zone")).toBeVisible();
+  await expect(page.locator("#right-zone")).toBeVisible();
+  await expect(page.locator("#player-status")).toContainText("Browser three-zone");
+  await page.screenshot({ path: path.join(screenshotsDir, "player-three-zone-preview.png"), fullPage: true });
+
+  action("Wait for playlist rotation to wide layout");
+  await expect(page.locator("#wide-zone")).toBeVisible({ timeout: 4000 });
+  await expect(page.locator("#player-status")).toContainText("Browser wide", { timeout: 4000 });
+  await page.screenshot({ path: path.join(screenshotsDir, "player-wide-preview.png"), fullPage: true });
+
+  action("Open local admin and verify loaded controls");
+  await page.goto(`${playerBase}/admin`, { waitUntil: "networkidle" });
+  await expect(page.locator("h1")).toHaveText("LAN管理画面");
+  await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(2);
+  const initialAssetCount = Number.parseInt(await page.locator("#asset-count").innerText(), 10) || 0;
+  await page.screenshot({ path: path.join(screenshotsDir, "player-admin-loaded.png"), fullPage: true });
+
+  action("Upload valid PNG asset through local admin UI");
+  await page.locator("#asset-input").setInputFiles(path.join(artifactsDir, "valid-1x1.png"));
+  await page.locator("#upload-form button[type='submit']").click();
+  await expect(page.locator("#toast")).toContainText("素材をアップロードしました", { timeout: 5000 });
+  await expect(page.locator("#asset-count")).toHaveText(String(initialAssetCount + 1));
+  await page.screenshot({ path: path.join(screenshotsDir, "player-admin-uploaded-asset.png"), fullPage: true });
+  const uploadedAssetPath = await page.locator("[data-delete-asset]").first().getAttribute("data-delete-asset");
+  expect(uploadedAssetPath).toMatch(/^\/assets\/images\/.+valid-1x1\.png$/);
+
+  action("Save playlist using uploaded asset and delete it with usage warning");
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='left']").fill(uploadedAssetPath);
+  await page.locator("#save-playlist").click();
+  await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
+  let deleteDialogMessage = "";
+  page.once("dialog", async (dialog) => {
+    deleteDialogMessage = dialog.message();
+    await dialog.accept();
+  });
+  await page.locator(`[data-delete-asset="${uploadedAssetPath}"]`).click();
+  expect(deleteDialogMessage).toContain("この素材は 1 件のplaylist itemで使用中です");
+  await expect(page.locator("#toast")).toContainText("素材を削除しました", { timeout: 5000 });
+  await expect(page.locator("#asset-count")).toHaveText(String(initialAssetCount));
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='left']").fill("/demo/left.html");
+  await page.locator("#save-playlist").click();
+  await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
+
+  action("Reject invalid TXT upload through local admin UI");
+  await page.locator("#asset-input").setInputFiles(path.join(artifactsDir, "invalid.txt"));
+  await page.locator("#upload-form button[type='submit']").click();
+  await expect(page.locator("#toast")).toContainText(/Unsupported file type|MIME/, { timeout: 5000 });
+
+  action("Reject oversized PNG upload through local admin UI");
+  await page.locator("#asset-input").setInputFiles(path.join(artifactsDir, "too-large.png"));
+  await page.locator("#upload-form button[type='submit']").click();
+  await expect(page.locator("#toast")).toContainText(/File too large|file size/i, { timeout: 5000 });
+
+  action("Exercise playlist add, duplicate, move, edit, JSON error, and save");
+  await page.locator("#add-three-zone").click();
+  await page.locator("#add-wide").click();
+  await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(4);
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-duplicate]").click();
+  await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(5);
+  await page.locator("#playlist-editor .playlist-item").nth(4).locator("[data-delete]").click();
+  await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(4);
+  await page.locator("#playlist-editor .playlist-item").nth(1).locator("[data-move='up']").click();
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='name']").fill("Browser edited item");
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='duration']").fill("2");
+  await page.locator("#json-editor").fill("{");
+  await page.locator("#apply-json").click();
+  await expect(page.locator("#toast")).toContainText("JSONエラー");
+
+  await page.locator("#add-three-zone").click();
+  await page.locator("#save-playlist").click();
+  await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
+  const validationVisible = await page.locator("#validation-errors").isVisible();
+  if (validationVisible) recordFailure("Local admin showed validation errors after save attempt");
+  await page.screenshot({ path: path.join(screenshotsDir, "player-admin-edited.png"), fullPage: true });
+
+  action("Open local preview from admin");
+  await page.reload({ waitUntil: "networkidle" });
+  const popupPromise = context.waitForEvent("page");
+  await page.locator("#preview-playlist").click();
+  const preview = await popupPromise;
+  wirePage(preview, "player-preview-popup");
+  await preview.waitForLoadState("domcontentloaded");
+  await expect(preview.locator("#player-status")).toContainText(/Browser|ゾーン|ワイド/, { timeout: 5000 });
+  await preview.screenshot({ path: path.join(screenshotsDir, "player-admin-local-preview-popup.png"), fullPage: true });
+  await context.close();
+});
+
+test("cloud admin UI renders dashboard and supports operational forms", async ({ browser }) => {
+  const unauth = await browser.newPage();
+  wirePage(unauth, "cloud-unauth");
+  action("Check cloud admin unauthenticated 401");
+  const unauthRes = await unauth.goto(`${cloudBase}/admin`, { waitUntil: "domcontentloaded" });
+  expect(unauthRes.status()).toBe(401);
+  await unauth.close();
+
+  const context = await browser.newContext({
+    httpCredentials: { username: user, password },
+    viewport: { width: 1600, height: 1000 }
+  });
+  const page = await context.newPage();
+  wirePage(page, "cloud");
+  const dialogs = [];
+  page.on("dialog", async (dialog) => {
+    dialogs.push(dialog.message());
+    action(`Accept dialog: ${dialog.message()}`);
+    await dialog.accept();
+  });
+
+  action("Open cloud admin dashboard");
+  await page.goto(`${cloudBase}/admin`, { waitUntil: "networkidle" });
+  await expect(page.locator("h1")).toHaveText("Misell 端末監視");
+  await expect(page.locator("#devices")).toContainText("DEV-BROWSER-001");
+  await expect(page.locator("#summary")).toContainText("正常");
+  await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-dashboard.png"), fullPage: true });
+
+  action("Update device status and notes through dashboard form");
+  const deviceForm = page.locator("form.device-action").first();
+  await deviceForm.locator("select[name='status']").selectOption("maintenance");
+  await deviceForm.locator("input[name='notes']").fill("browser ui updated note");
+  await deviceForm.locator("button[type='submit']").click();
+  await expect(page.locator("#devices")).toContainText("メンテナンス中", { timeout: 5000 });
+  await expect(page.locator("form.device-action").first().locator("input[name='notes']")).toHaveValue("browser ui updated note");
+  const deviceAfterNotes = await authedRequest(cloudBase, "/api/admin/devices/DEV-BROWSER-001");
+  expect(deviceAfterNotes.json.device.notes).toBe("browser ui updated note");
+
+  action("Schedule and clear update target through dashboard form");
+  const updateForm = page.locator("form.update-action").first();
+  await updateForm.locator("input[name='target_update_ref']").fill("main");
+  await updateForm.locator("input[name='target_release_id']").fill("browser-release");
+  await updateForm.locator("select[name='target_release_channel']").selectOption("stable");
+  await updateForm.locator("button[value='schedule']").click();
+  await expect(page.locator("#devices")).toContainText("予約済み", { timeout: 5000 });
+  await page.locator("form.update-action").first().locator("button[value='clear']").click();
+  await expect(page.locator("#devices")).toContainText("待機", { timeout: 5000 });
+
+  action("Reject invalid update ref through cloud admin UI");
+  await page.locator("form.update-action").first().locator("input[name='target_update_ref']").fill("bad..ref");
+  await page.locator("form.update-action").first().locator("button[value='schedule']").click();
+  await expect.poll(() => dialogs.some((message) => message.includes("invalid git ref sequence"))).toBe(true);
+
+  action("Rotate token through cloud admin UI");
+  const tokenForm = page.locator("form.token-action").first();
+  await tokenForm.locator("input[name='reason']").fill("browser ui rotation evidence");
+  await tokenForm.locator("button[value='rotate']").click();
+  await expect(page.locator("#token-result")).toContainText("DEV-BROWSER-001", { timeout: 5000 });
+  const rotatedDevice = await authedRequest(cloudBase, "/api/admin/devices/DEV-BROWSER-001");
+  expect(rotatedDevice.json.device.token_generation).toBe(2);
+  expect(rotatedDevice.json.device.token_status).toBe("active");
+
+  action("Create release manifest through cloud admin UI");
+  const releaseForm = page.locator("form.release-manifest-create");
+  await releaseForm.locator("input[name='manifest_id']").fill("browser-release-manifest");
+  await releaseForm.locator("input[name='release_id']").fill("browser-release");
+  await releaseForm.locator("input[name='update_ref']").fill("main");
+  await releaseForm.locator("input[name='app_version']").fill("0.1.0");
+  await releaseForm.locator("input[name='notes']").fill("browser UI evidence");
+  await releaseForm.locator("button[type='submit']").click();
+  await expect(page.locator("#release-manifests")).toContainText("browser-release-manifest", { timeout: 5000 });
+
+  action("Update release manifest status through cloud admin UI");
+  const releaseAction = page.locator("form.release-manifest-action", { hasText: "保存" }).first();
+  await releaseAction.locator("select[name='status']").selectOption("retired");
+  await releaseAction.locator("button[type='submit']").click();
+  await expect(page.locator("#release-manifests")).toContainText("retired", { timeout: 5000 });
+
+  action("Create content manifest through cloud admin UI");
+  await expect(page.locator("#content-manifests form.content-manifest-create button[type='submit']")).toHaveText("作成");
+  await page.waitForTimeout(500);
+  await page.locator("#content-manifests form.content-manifest-create input[name='content_id']").fill("browser-content-manifest");
+  await page.locator("#content-manifests form.content-manifest-create input[name='playlist_version']").fill("browser-content-001");
+  await page.locator("#content-manifests form.content-manifest-create input[name='title']").fill("Browser content");
+  await page.locator("#content-manifests form.content-manifest-create input[name='notes']").fill("browser UI content evidence");
+  await expect(page.locator("#content-manifests form.content-manifest-create input[name='content_id']")).toHaveValue("browser-content-manifest");
+  await expect(page.locator("#content-manifests form.content-manifest-create input[name='playlist_version']")).toHaveValue("browser-content-001");
+  await expect(page.locator("#content-manifests form.content-manifest-create input[name='title']")).toHaveValue("Browser content");
+  await page.locator("#content-manifests form.content-manifest-create button[type='submit']").click();
+  await expect(page.locator("#content-manifests")).toContainText("browser-content-manifest", { timeout: 5000 });
+
+  action("Reject invalid content manifest payload through cloud admin API");
+  const invalidContent = await authedRequest(cloudBase, "/api/admin/content-manifests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content_id: "browser-invalid-content",
+      playlist_version: "browser-invalid-content",
+      release_channel: "stable",
+      status: "draft",
+      playlist: { version: 1, playlist_version: "browser-invalid-content", items: "not-an-array" }
+    })
+  });
+  expect(invalidContent.status, invalidContent.text).toBe(400);
+  expect(invalidContent.text).toContain("playlist.items must be an array");
+
+  action("Update content manifest status through cloud admin UI");
+  const contentAction = page.locator("form.content-manifest-action").first();
+  await contentAction.locator("select[name='status']").selectOption("active");
+  await contentAction.locator("button[type='submit']").click();
+  await expect(page.locator("#content-manifests")).toContainText("active", { timeout: 5000 });
+
+  action("Revoke token through cloud admin UI");
+  const revokeForm = page.locator('form.token-action[data-device-id="DEV-BROWSER-001"]');
+  await expect(revokeForm).toHaveCount(1);
+  await revokeForm.locator("input[name='reason']").fill("browser ui revoke evidence");
+  await expect(revokeForm.locator("input[name='reason']")).toHaveValue("browser ui revoke evidence");
+  const revokeRequestPromise = page.waitForRequest((request) => (
+    request.method() === "POST" && request.url() === `${cloudBase}/api/admin/devices/DEV-BROWSER-001/token/revoke`
+  ));
+  await revokeForm.evaluate((form, reason) => {
+    form.elements.reason.value = reason;
+    form.querySelector("button[value='revoke']").click();
+  }, "browser ui revoke evidence");
+  const revokeRequest = await revokeRequestPromise;
+  expect(revokeRequest.postData()).toContain("browser ui revoke evidence");
+  await expect(page.locator("#devices")).toContainText("失効済み", { timeout: 5000 });
+  const revokedDevice = await authedRequest(cloudBase, "/api/admin/devices/DEV-BROWSER-001");
+  expect(revokedDevice.json.device.token_status).toBe("revoked");
+  expect(revokedDevice.json.device.token_revoked_reason).toBe("browser ui revoke evidence");
+
+  action("Open device detail page");
+  await page.locator("#devices a", { hasText: "DEV-BROWSER-001" }).click();
+  await expect(page.locator("h1")).toHaveText("DEV-BROWSER-001");
+  await expect(page.locator("body")).toContainText("browser-ui-device");
+  await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-device-detail.png"), fullPage: true });
+  await context.close();
+});
+
+test("critical UIs render on mobile viewport", async ({ browser }) => {
+  const context = await browser.newContext({
+    httpCredentials: { username: user, password },
+    viewport: { width: 390, height: 844 },
+    isMobile: true
+  });
+  const page = await context.newPage();
+  wirePage(page, "mobile");
+
+  action("Open mobile player preview");
+  await page.goto(`${playerBase}/player?preview=1`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#player-status")).toContainText(/Browser/);
+  await page.screenshot({ path: path.join(screenshotsDir, "mobile-player-preview.png"), fullPage: true });
+
+  action("Open mobile local admin");
+  await page.goto(`${playerBase}/admin`, { waitUntil: "networkidle" });
+  await expect(page.locator("h1")).toHaveText("LAN管理画面");
+  await expect(page.locator("#playlist-editor .playlist-item").first()).toBeVisible();
+  await page.screenshot({ path: path.join(screenshotsDir, "mobile-player-admin.png"), fullPage: true });
+
+  action("Open mobile cloud admin");
+  await page.goto(`${cloudBase}/admin`, { waitUntil: "networkidle" });
+  await expect(page.locator("h1")).toHaveText("Misell 端末監視");
+  await expect(page.locator("#devices")).toContainText("DEV-BROWSER-001");
+  await page.screenshot({ path: path.join(screenshotsDir, "mobile-cloud-admin.png"), fullPage: true });
+  await context.close();
+});
