@@ -74,7 +74,17 @@
 
   els.refresh.addEventListener("click", loadDashboard);
   loadDashboard();
-  window.setInterval(loadDashboard, 30000);
+  window.setInterval(refreshDashboardIfIdle, 30000);
+
+  function refreshDashboardIfIdle() {
+    if (isEditingDashboardForm()) return;
+    loadDashboard();
+  }
+
+  function isEditingDashboardForm() {
+    const activeElement = document.activeElement;
+    return Boolean(activeElement?.closest?.("form"));
+  }
 
   async function loadDashboard() {
     const [summary, devices, alerts, notifications, releaseManifests, contentManifests, logBundles] = await Promise.all([
