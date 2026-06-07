@@ -13,6 +13,7 @@ const express = require("express");
 const basicAuth = require("express-basic-auth");
 const multer = require("multer");
 const { nanoid } = require("nanoid");
+const QRCode = require("qrcode");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -23,6 +24,8 @@ const IMAGE_DIR = path.join(ASSETS_DIR, "images");
 const VIDEO_DIR = path.join(ASSETS_DIR, "videos");
 const LOG_DIR = runtimePath("MISELL_LOG_DIR", path.join(ROOT_DIR, "logs"));
 const GENERATED_DIR = runtimePath("MISELL_GENERATED_DIR", path.join(DATA_DIR, "generated"));
+const QR_CATALOG_PATH = runtimePath("MISELL_QR_CATALOG_PATH", path.join(DATA_DIR, "qrs.json"));
+const QR_GENERATED_DIR = path.join(GENERATED_DIR, "qrs");
 const CONTENT_BACKUP_DIR = runtimePath("MISELL_CONTENT_BACKUP_DIR", path.join(DATA_DIR, "backups"));
 const PLAYLIST_PATH = runtimePath("MISELL_PLAYLIST_PATH", path.join(DATA_DIR, "playlist.json"));
 const PLAYLIST_SCHEMA_PATH = runtimePath("MISELL_PLAYLIST_SCHEMA_PATH", path.join(ROOT_DIR, "data", "playlist.schema.json"));
@@ -119,9 +122,11 @@ async function ensureRuntimeFiles() {
     fsp.mkdir(DATA_DIR, { recursive: true }),
     fsp.mkdir(path.dirname(PLAYLIST_PATH), { recursive: true }),
     fsp.mkdir(path.dirname(DEVICE_CONFIG_PATH), { recursive: true }),
+    fsp.mkdir(path.dirname(QR_CATALOG_PATH), { recursive: true }),
     fsp.mkdir(IMAGE_DIR, { recursive: true }),
     fsp.mkdir(VIDEO_DIR, { recursive: true }),
     fsp.mkdir(GENERATED_DIR, { recursive: true }),
+    fsp.mkdir(QR_GENERATED_DIR, { recursive: true }),
     fsp.mkdir(CONTENT_BACKUP_DIR, { recursive: true }),
     fsp.mkdir(LOG_DIR, { recursive: true })
   ]);
@@ -130,6 +135,12 @@ async function ensureRuntimeFiles() {
     await fsp.access(PLAYLIST_PATH, fs.constants.F_OK);
   } catch {
     await writeJsonAtomic(PLAYLIST_PATH, defaultPlaylist);
+  }
+
+  try {
+    await fsp.access(QR_CATALOG_PATH, fs.constants.F_OK);
+  } catch {
+    await writeJsonAtomic(QR_CATALOG_PATH, { version: 1, qrs: [] });
   }
 
   const deviceConfig = await readDeviceConfigFile();
@@ -194,6 +205,7 @@ async function createContentBackup(reason = "manual") {
     await Promise.all([
       copyFileIfExists(PLAYLIST_PATH, path.join(stagingDataDir, "playlist.json")),
       copyFileIfExists(DEVICE_CONFIG_PATH, path.join(stagingDataDir, "config.json")),
+      copyFileIfExists(QR_CATALOG_PATH, path.join(stagingDataDir, "qrs.json")),
       copyDirIfExists(GENERATED_DIR, path.join(stagingDataDir, "generated")),
       copyDirIfExists(IMAGE_DIR, path.join(stagingAssetsDir, "images")),
       copyDirIfExists(VIDEO_DIR, path.join(stagingAssetsDir, "videos"))
@@ -784,6 +796,174 @@ function normalizePromoFeatures(source) {
 
 function boundedString(value, maxLength) {
   return cleanString(value).replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+async function readQrCatalog() {
+  let raw = "";
+  try {
+    raw = await fsp.readFile(QR_CATALOG_PATH, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return { version: 1, qrs: [] };
+    throw error;
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("qrs.json is invalid JSON");
+  }
+
+  const qrs = Array.isArray(parsed?.qrs)
+    ? parsed.qrs.map(normalizeStoredQrRecord).filter(Boolean)
+    : [];
+  return {
+    version: Number(parsed?.version || 1),
+    qrs
+  };
+}
+
+function normalizeStoredQrRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  const qrId = cleanId(record.qr_id || record.qrId);
+  const campaignId = cleanId(record.campaign_id || record.campaignId);
+  const lpUrl = cleanString(record.lp_url || record.lpUrl).slice(0, 500);
+  if (!qrId || !campaignId || !lpUrl) return null;
+  return {
+    qr_id: qrId,
+    campaign_id: campaignId,
+    label: boundedString(record.label || record.name, 80),
+    lp_url: lpUrl,
+    image_path: cleanString(record.image_path || record.imagePath) || `/generated/qrs/${encodeURIComponent(`${qrId}.png`)}`,
+    created_at: cleanString(record.created_at || record.createdAt),
+    updated_at: cleanString(record.updated_at || record.updatedAt)
+  };
+}
+
+async function writeQrCatalog(catalog) {
+  await fsp.mkdir(path.dirname(QR_CATALOG_PATH), { recursive: true });
+  await writeJsonAtomic(QR_CATALOG_PATH, {
+    version: Number(catalog?.version || 1),
+    qrs: Array.isArray(catalog?.qrs) ? catalog.qrs : []
+  });
+}
+
+function normalizeQrInput(body) {
+  const source = body || {};
+  const campaignId = cleanId(source.campaign_id || source.campaignId);
+  if (!campaignId) {
+    throw new Error("campaign_id is required");
+  }
+
+  const requestedQrId = cleanId(source.qr_id || source.qrId);
+  if ((source.qr_id || source.qrId) && !isSafeQrId(requestedQrId)) {
+    throw new Error("qr_id is invalid");
+  }
+
+  return {
+    campaign_id: campaignId,
+    qr_id: requestedQrId,
+    label: boundedString(source.label || source.name, 80),
+    lp_url: normalizeQrLpUrl(source.lp_url || source.lpUrl)
+  };
+}
+
+function normalizeQrLpUrl(value) {
+  const rawUrl = cleanString(value).replace(/[\u0000-\u001f\u007f]/g, "");
+  if (!rawUrl) {
+    throw new Error("lp_url is required");
+  }
+  if (rawUrl.length > 500) {
+    throw new Error("lp_url must be 500 characters or less");
+  }
+
+  if (rawUrl.startsWith("/")) {
+    if (rawUrl.startsWith("//")) {
+      throw new Error("lp_url local paths must start with a single slash");
+    }
+    const pathOnly = sourcePathname(rawUrl);
+    let decodedPath = pathOnly;
+    try {
+      decodedPath = decodeURIComponent(pathOnly);
+    } catch {
+      throw new Error("lp_url local path is invalid");
+    }
+    if (!decodedPath.startsWith("/") || decodedPath.includes("\\") || decodedPath.split("/").includes("..")) {
+      throw new Error("lp_url local path is invalid");
+    }
+    return rawUrl;
+  }
+
+  let parsed = null;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("lp_url must be an http(s) URL or local path");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("lp_url must be an http(s) URL or local path");
+  }
+  return parsed.toString();
+}
+
+function isSafeQrId(value) {
+  const normalized = String(value || "");
+  return Boolean(normalized) && normalized !== "." && normalized !== ".." && !normalized.startsWith(".");
+}
+
+function nextQrId(campaignId, catalog, requestedQrId) {
+  const existingIds = new Set((catalog.qrs || []).map((qr) => qr.qr_id).filter(Boolean));
+  if (requestedQrId) {
+    if (existingIds.has(requestedQrId)) {
+      throw new Error("qr_id already exists");
+    }
+    return requestedQrId;
+  }
+
+  const baseId = campaignId.slice(0, 60) || "qr";
+  for (let index = 0; index < 5; index += 1) {
+    const candidate = cleanId(`${baseId}-${nanoid(8)}`);
+    if (isSafeQrId(candidate) && !existingIds.has(candidate)) return candidate;
+  }
+  throw new Error("Could not generate a unique qr_id");
+}
+
+async function createQrCode(body) {
+  const catalog = await readQrCatalog();
+  const input = normalizeQrInput(body);
+  const qrId = nextQrId(input.campaign_id, catalog, input.qr_id);
+  const imageFilename = `${qrId}.png`;
+  const imageFilePath = path.join(QR_GENERATED_DIR, imageFilename);
+  const imagePath = `/generated/qrs/${encodeURIComponent(imageFilename)}`;
+  const timestamp = new Date().toISOString();
+
+  await fsp.mkdir(QR_GENERATED_DIR, { recursive: true });
+  await QRCode.toFile(imageFilePath, input.lp_url, {
+    type: "png",
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 512,
+    color: {
+      dark: "#111827",
+      light: "#ffffff"
+    }
+  });
+  await fsp.chmod(imageFilePath, 0o644);
+
+  const record = {
+    qr_id: qrId,
+    campaign_id: input.campaign_id,
+    label: input.label,
+    lp_url: input.lp_url,
+    image_path: imagePath,
+    created_at: timestamp,
+    updated_at: timestamp
+  };
+  await writeQrCatalog({
+    version: 1,
+    qrs: [record, ...(catalog.qrs || []).filter((qr) => qr.qr_id !== qrId)]
+  });
+  return record;
 }
 
 function createPromoDraftFromPrompt(body) {
@@ -1919,6 +2099,39 @@ async function savePlaylistHandler(req, res, next) {
 
 app.put("/api/playlist", requireAdminAuth, savePlaylistHandler);
 app.post("/api/playlist", requireAdminAuth, savePlaylistHandler);
+
+app.get("/api/qrs", requireAdminAuth, async (req, res, next) => {
+  try {
+    const catalog = await readQrCatalog();
+    res.json({
+      ok: true,
+      version: catalog.version,
+      qrs: catalog.qrs
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/qrs", requireAdminAuth, async (req, res, next) => {
+  try {
+    const input = normalizeQrInput(req.body || {});
+    const backup = await createContentBackup("before-qr-generate");
+    const qr = await createQrCode(input);
+    await appendJsonl(ADMIN_LOG_KEY, {
+      action: "qr.generate",
+      ip: req.ip,
+      qr_id: qr.qr_id,
+      campaign_id: qr.campaign_id,
+      lp_url: qr.lp_url,
+      image_path: qr.image_path,
+      backup: backup.name
+    });
+    res.status(201).json({ ok: true, qr, backup });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/promo-campaigns", requireAdminAuth, async (req, res, next) => {
   try {

@@ -84,7 +84,8 @@
 
 ## QR/POPタグテスト
 
-- QR生成
+- QR生成（campaign_id、qr_id、LP URL、PNG画像）
+- QR画像ダウンロード
 - スマホ読み取り
 - LP表示
 - アクセスログ保存

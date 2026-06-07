@@ -20,6 +20,9 @@ apps/cloud/logs/*.jsonl
 apps/cloud/logs/*.log
 !apps/cloud/logs/.gitkeep
 
+apps/player/data/qrs.json
+apps/player/data/generated/
+
 apps/cloud/data/*.sqlite
 apps/cloud/data/*.sqlite-*
 apps/cloud/data/*.db

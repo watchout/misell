@@ -15,6 +15,7 @@
       <nav class="admin-actions" aria-label="管理操作">
         <a class="button secondary" href="/player" target="_blank" rel="noreferrer">Player</a>
         <a class="button secondary" href="#promo-builder">PR作成</a>
+        <a class="button secondary" href="#qr-builder">QR作成</a>
         <button id="preview-playlist" class="button secondary" type="button">保存前プレビュー</button>
         <button id="backup-content" class="button secondary" type="button">バックアップ</button>
         <button id="reload-player" class="button secondary" type="button">プレイヤー再読み込み</button>
@@ -138,6 +139,54 @@
         </form>
 
         <div id="promo-storyboard" class="promo-storyboard" hidden></div>
+      </section>
+
+      <section id="qr-builder" class="panel qr-panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">QR</p>
+            <h2>QR発行</h2>
+          </div>
+          <span id="qr-count" class="count-badge">0</span>
+        </div>
+
+        <form id="qr-form" class="qr-form">
+          <label>
+            <span>キャンペーンID</span>
+            <input id="qr-campaign-id" name="campaign_id" type="text" maxlength="80" required>
+          </label>
+          <label>
+            <span>QR ID</span>
+            <input id="qr-id" name="qr_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
+          </label>
+          <label>
+            <span>表示名</span>
+            <input id="qr-label" name="label" type="text" maxlength="80">
+          </label>
+          <label>
+            <span>LP URL</span>
+            <input id="qr-lp-url" name="lp_url" type="text" maxlength="500" required>
+          </label>
+          <div class="qr-actions">
+            <button id="generate-qr" class="button primary" type="submit">QR発行</button>
+          </div>
+        </form>
+
+        <div id="qr-result" class="qr-result" hidden></div>
+
+        <div class="qr-list-wrap">
+          <table class="asset-table qr-table">
+            <thead>
+              <tr>
+                <th>QR</th>
+                <th>Campaign</th>
+                <th>LP URL</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="qr-list"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="panel playlist-panel">

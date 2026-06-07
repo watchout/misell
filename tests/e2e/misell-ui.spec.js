@@ -361,6 +361,26 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   const initialAssetCount = Number.parseInt(await page.locator("#asset-count").innerText(), 10) || 0;
   await page.screenshot({ path: path.join(screenshotsDir, "player-admin-loaded.png"), fullPage: true });
 
+  action("Generate campaign QR through local admin UI");
+  await expect(page.locator("#qr-count")).toHaveText("0");
+  await page.locator("#qr-campaign-id").fill("browser-qr-campaign");
+  await page.locator("#qr-label").fill("Browser QR");
+  await page.locator("#qr-lp-url").fill("https://misell.example/browser-qr");
+  await page.locator("#qr-form button[type='submit']").click();
+  await expect(page.locator("#toast")).toContainText("QRを発行しました", { timeout: 5000 });
+  await expect(page.locator("#qr-result")).toContainText("browser-qr-campaign");
+  await expect(page.locator("#qr-list")).toContainText("browser-qr-campaign");
+  await expect(page.locator("#qr-count")).toHaveText("1");
+  const qrImagePath = await page.locator("#qr-result img.qr-preview").getAttribute("src");
+  expect(qrImagePath).toMatch(/^\/generated\/qrs\/.+\.png$/);
+  const qrImageResponse = await page.request.get(`${playerBase}${qrImagePath}`);
+  expect(qrImageResponse.ok()).toBeTruthy();
+  expect(qrImageResponse.headers()["content-type"]).toContain("image/png");
+  const qrImage = await qrImageResponse.body();
+  expect(qrImage.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  await fsp.writeFile(path.join(artifactsDir, "campaign-qr.png"), qrImage);
+  await page.screenshot({ path: path.join(screenshotsDir, "player-admin-generated-qr.png"), fullPage: true });
+
   action("Upload valid PNG asset through local admin UI");
   await page.locator("#asset-input").setInputFiles(path.join(artifactsDir, "valid-1x1.png"));
   await page.locator("#upload-form button[type='submit']").click();
