@@ -22,6 +22,7 @@ const assetInput = document.getElementById("asset-input");
 const promoForm = document.getElementById("promo-form");
 const promoProductAsset = document.getElementById("promo-product-asset");
 const promoStoryboard = document.getElementById("promo-storyboard");
+const replacePromoButton = document.getElementById("replace-promo");
 const playlistEditor = document.getElementById("playlist-editor");
 const validationErrorsEl = document.getElementById("validation-errors");
 const jsonEditor = document.getElementById("json-editor");
@@ -155,9 +156,11 @@ function renderPromoStoryboard() {
   if (!promo) {
     promoStoryboard.hidden = true;
     promoStoryboard.replaceChildren();
+    replacePromoButton.disabled = true;
     return;
   }
 
+  replacePromoButton.disabled = false;
   promoStoryboard.hidden = false;
   promoStoryboard.innerHTML = `
     <h3>${escapeHtml(promo.product_name)} / ${escapeHtml(promo.pattern)}</h3>
@@ -444,7 +447,8 @@ async function uploadAsset(event) {
 async function generatePromoCuts(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const button = form.querySelector("button[type='submit']");
+  const button = event.submitter || form.querySelector("button[type='submit']");
+  const isReplace = button?.value === "replace" && ADMIN.lastPromo;
   const payload = {
     pattern: form.elements.pattern.value,
     product_name: form.elements.product_name.value,
@@ -458,8 +462,13 @@ async function generatePromoCuts(event) {
     duration_per_cut: Number.parseInt(form.elements.duration_per_cut.value, 10) || 5,
     campaign_id: form.elements.campaign_id.value
   };
+  if (isReplace) {
+    payload.promo_id = ADMIN.lastPromo.id;
+    payload.campaign_id = payload.campaign_id || ADMIN.lastPromo.campaign_id;
+  }
 
   button.disabled = true;
+  const buttonLabel = button.textContent;
   button.textContent = "生成中";
   try {
     const response = await fetch("/api/promo-campaigns", {
@@ -475,17 +484,31 @@ async function generatePromoCuts(event) {
     const data = await response.json();
     const promo = data.promo;
     const items = promo.playlist_items || [];
+    if (isReplace) {
+      ADMIN.playlist.items = removePromoItems(ADMIN.playlist.items || [], ADMIN.lastPromo);
+    }
     ADMIN.playlist.items = [...(ADMIN.playlist.items || []), ...items];
     ADMIN.lastPromo = promo;
     ADMIN.validationErrors = [];
     renderAll();
-    showToast(`${items.length}件のPRカットをplaylistへ追加しました`);
+    const actionLabel = isReplace ? "置換" : "追加";
+    showToast(`${items.length}件のPRカットをplaylistへ${actionLabel}しました`);
   } catch (error) {
     showToast(error.message || "PRカットの生成に失敗しました", true);
   } finally {
     button.disabled = false;
-    button.textContent = "カット生成";
+    button.textContent = buttonLabel;
+    renderPromoStoryboard();
   }
+}
+
+function removePromoItems(items, promo) {
+  const itemIds = new Set((promo.playlist_items || []).map((item) => item.item_id || item.id).filter(Boolean));
+  const generatedPrefix = `/generated/promos/${promo.id}/`;
+  return items.filter((item) => {
+    if (itemIds.has(item.item_id || item.id)) return false;
+    return !["left", "center", "right", "wide"].some((field) => String(item[field] || "").startsWith(generatedPrefix));
+  });
 }
 
 async function savePlaylist() {

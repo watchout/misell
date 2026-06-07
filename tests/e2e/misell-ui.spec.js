@@ -430,6 +430,20 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   await expect(page.locator("#promo-storyboard")).toContainText("ブラウザPR商品");
   await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(9);
   await expect(page.locator("#json-editor")).toHaveValue(/\/generated\/promos\//);
+
+  action("Regenerate the same product PR and replace existing generated cuts");
+  await page.locator("#promo-price").fill("1,280円");
+  await page.locator("#replace-promo").click();
+  await expect(page.locator("#toast")).toContainText("PRカットをplaylistへ置換しました", { timeout: 5000 });
+  await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(9);
+  const playlistAfterPromoReplace = JSON.parse(await page.locator("#json-editor").inputValue());
+  const generatedItem = playlistAfterPromoReplace.items.find((item) => String(item.right || item.wide || "").includes("/generated/promos/"));
+  expect(generatedItem).toBeTruthy();
+  const generatedPath = generatedItem.right || generatedItem.wide;
+  const generatedResponse = await page.request.get(`${playerBase}${generatedPath}`);
+  expect(generatedResponse.ok()).toBeTruthy();
+  expect(await generatedResponse.text()).toContain("1,280円");
+
   await page.locator("#save-playlist").click();
   await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
   await page.screenshot({ path: path.join(screenshotsDir, "player-admin-edited.png"), fullPage: true });
