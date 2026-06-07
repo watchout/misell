@@ -387,6 +387,38 @@ iframe.media-fill {
   grid-column: 1 / 3;
 }
 
+.promo-workflow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f9fafb;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.promo-workflow strong {
+  color: var(--ink);
+}
+
+.promo-workflow ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style-position: inside;
+}
+
+.promo-workflow li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .promo-form {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -725,6 +757,8 @@ label span {
   .item-grid,
   .source-grid,
   .promo-form,
+  .promo-workflow,
+  .promo-workflow ol,
   .promo-actions,
   .day-grid,
   .source-grid label:only-child {
