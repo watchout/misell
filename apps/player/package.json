@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check public/player.js && node --check public/admin.js",
+    "check": "node --check server.js && node --check public/player.js && node --check public/admin.js && node --check public/demo/industry-demo.js",
     "validate:playlist": "node server.js --validate-playlist",
     "heartbeat": "scripts/emit-heartbeat.sh",
     "evidence": "scripts/collect-device-evidence.sh",
