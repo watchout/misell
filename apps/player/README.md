@@ -111,6 +111,15 @@ Generated source paths use:
 
 Use the normal preview and save buttons to review and persist the generated cuts. Content backups include generated HTML cuts, playlist JSON, device config, and uploaded assets.
 
+After generating a promo, use `WebM書き出し` in the storyboard panel to export the current promo cuts as a silent WebM video for demos or sales materials. The default `確認用 WebM 1280x720` export preserves the 3-screen 48:9 stage with letterboxing. `3面 WebM 5760x1080` exports the full 3-screen canvas.
+
+WebM export requires:
+
+- `ffmpeg`
+- Chromium (`chromium-browser`, `chromium`, `google-chrome-stable`, or `google-chrome`)
+
+Override binary paths with `MISELL_FFMPEG_BIN` or `MISELL_CHROMIUM_BIN` if needed. Local development and CI can fall back to Playwright when no Chromium binary is available.
+
 ## Ubuntu Device Setup
 
 Dry-run:
