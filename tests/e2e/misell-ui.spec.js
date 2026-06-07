@@ -417,6 +417,21 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
   const validationVisible = await page.locator("#validation-errors").isVisible();
   if (validationVisible) recordFailure("Local admin showed validation errors after save attempt");
+
+  action("Generate product PR cuts from local admin UI");
+  await page.locator("#promo-product-name").fill("ブラウザPR商品");
+  await page.locator("#promo-price").fill("980円");
+  await page.locator("#promo-offer").fill("今だけ店頭限定");
+  await page.locator("#promo-feature-1").fill("3画面訴求");
+  await page.locator("#promo-feature-2").fill("中央商品");
+  await page.locator("#promo-feature-3").fill("右CTA");
+  await page.locator("#generate-promo").click();
+  await expect(page.locator("#toast")).toContainText("PRカットをplaylistへ追加しました", { timeout: 5000 });
+  await expect(page.locator("#promo-storyboard")).toContainText("ブラウザPR商品");
+  await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(9);
+  await expect(page.locator("#json-editor")).toHaveValue(/\/generated\/promos\//);
+  await page.locator("#save-playlist").click();
+  await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
   await page.screenshot({ path: path.join(screenshotsDir, "player-admin-edited.png"), fullPage: true });
 
   action("Open local preview from admin");

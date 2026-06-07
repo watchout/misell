@@ -14,6 +14,7 @@
       </div>
       <nav class="admin-actions" aria-label="管理操作">
         <a class="button secondary" href="/player" target="_blank" rel="noreferrer">Player</a>
+        <a class="button secondary" href="#promo-builder">PR作成</a>
         <button id="preview-playlist" class="button secondary" type="button">保存前プレビュー</button>
         <button id="backup-content" class="button secondary" type="button">バックアップ</button>
         <button id="reload-player" class="button secondary" type="button">プレイヤー再読み込み</button>
@@ -49,6 +50,70 @@
             <tbody id="asset-list"></tbody>
           </table>
         </div>
+      </section>
+
+      <section id="promo-builder" class="panel promo-panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Product PR</p>
+            <h2>PR作成</h2>
+          </div>
+          <span class="count-badge">3面</span>
+        </div>
+
+        <form id="promo-form" class="promo-form">
+          <label>
+            <span>構成</span>
+            <select name="pattern">
+              <option value="center-hero">中央商品 + 左特徴 + 右CTA</option>
+              <option value="two-panel-info">2面商品 + 1面情報</option>
+              <option value="wide-first">ワイド導入 + 3面詳細</option>
+            </select>
+          </label>
+          <label>
+            <span>商品名</span>
+            <input id="promo-product-name" name="product_name" type="text" maxlength="80" required>
+          </label>
+          <label>
+            <span>商品素材</span>
+            <select id="promo-product-asset" name="product_asset"></select>
+          </label>
+          <label>
+            <span>価格</span>
+            <input id="promo-price" name="price" type="text" maxlength="48">
+          </label>
+          <label>
+            <span>特典</span>
+            <input id="promo-offer" name="offer" type="text" maxlength="80">
+          </label>
+          <label>
+            <span>CTA</span>
+            <input id="promo-cta" name="cta" type="text" maxlength="80" value="店頭で今すぐチェック">
+          </label>
+          <label>
+            <span>特徴1</span>
+            <input id="promo-feature-1" name="feature_1" type="text" maxlength="48">
+          </label>
+          <label>
+            <span>特徴2</span>
+            <input id="promo-feature-2" name="feature_2" type="text" maxlength="48">
+          </label>
+          <label>
+            <span>特徴3</span>
+            <input id="promo-feature-3" name="feature_3" type="text" maxlength="48">
+          </label>
+          <label>
+            <span>1カット秒数</span>
+            <input name="duration_per_cut" type="number" min="2" max="20" value="5">
+          </label>
+          <label>
+            <span>キャンペーンID</span>
+            <input name="campaign_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
+          </label>
+          <button id="generate-promo" class="button primary" type="submit">カット生成</button>
+        </form>
+
+        <div id="promo-storyboard" class="promo-storyboard" hidden></div>
       </section>
 
       <section class="panel playlist-panel">
