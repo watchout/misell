@@ -21,6 +21,8 @@ const assetCountEl = document.getElementById("asset-count");
 const uploadForm = document.getElementById("upload-form");
 const assetInput = document.getElementById("asset-input");
 const promoForm = document.getElementById("promo-form");
+const promoDraftPrompt = document.getElementById("promo-draft-prompt");
+const promoDraftResult = document.getElementById("promo-draft-result");
 const promoProductAsset = document.getElementById("promo-product-asset");
 const promoStoryboard = document.getElementById("promo-storyboard");
 const replacePromoButton = document.getElementById("replace-promo");
@@ -36,6 +38,7 @@ document.getElementById("reload-player").addEventListener("click", reloadPlayer)
 document.getElementById("add-three-zone").addEventListener("click", () => addItem("three-zone"));
 document.getElementById("add-wide").addEventListener("click", () => addItem("wide"));
 document.getElementById("apply-json").addEventListener("click", applyJsonEditor);
+document.getElementById("apply-promo-draft").addEventListener("click", generatePromoDraft);
 
 uploadForm.addEventListener("submit", uploadAsset);
 promoForm.addEventListener("submit", generatePromoCuts);
@@ -190,6 +193,31 @@ function renderPromoStoryboard() {
       </a>
       ${promo.export ? `<span>${escapeHtml(promo.export.preset)} / ${escapeHtml(formatBytes(promo.export.size))}</span>` : ""}
     </div>
+  `;
+}
+
+function renderPromoDraftResult(result) {
+  if (!result) {
+    promoDraftResult.hidden = true;
+    promoDraftResult.replaceChildren();
+    return;
+  }
+
+  const draft = result.draft || {};
+  const fields = [
+    ["商品名", draft.product_name],
+    ["価格", draft.price],
+    ["特典", draft.offer],
+    ["CTA", draft.cta],
+    ["特徴", [draft.feature_1, draft.feature_2, draft.feature_3].filter(Boolean).join(" / ")]
+  ].filter(([, value]) => value);
+  const missing = result.missing_fields || [];
+
+  promoDraftResult.hidden = false;
+  promoDraftResult.innerHTML = `
+    <strong>反映済み</strong>
+    ${fields.length > 0 ? `<span>${fields.map(([label, value]) => `${escapeHtml(label)}: ${escapeHtml(value)}`).join(" / ")}</span>` : ""}
+    ${missing.length > 0 ? `<span>要確認: ${missing.map((field) => escapeHtml(field)).join(", ")}</span>` : ""}
   `;
 }
 
@@ -518,6 +546,58 @@ async function generatePromoCuts(event) {
     button.textContent = buttonLabel;
     renderPromoStoryboard();
   }
+}
+
+async function generatePromoDraft() {
+  const prompt = promoDraftPrompt.value.trim();
+  if (!prompt) {
+    showToast("下書きに使う自然文を入力してください", true);
+    return;
+  }
+
+  const button = document.getElementById("apply-promo-draft");
+  button.disabled = true;
+  const buttonLabel = button.textContent;
+  button.textContent = "解析中";
+  try {
+    const response = await fetch("/api/promo-drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt })
+    });
+    if (!response.ok) {
+      showToast(await errorMessage(response), true);
+      return;
+    }
+
+    const data = await response.json();
+    applyPromoDraft(data.draft || {});
+    renderPromoDraftResult(data);
+    showToast("下書きをフォームに反映しました。内容を確認してから生成してください。");
+  } catch (error) {
+    showToast(error.message || "PR下書きの生成に失敗しました", true);
+  } finally {
+    button.disabled = false;
+    button.textContent = buttonLabel;
+  }
+}
+
+function applyPromoDraft(draft) {
+  const assign = (name, value) => {
+    if (value === undefined || value === null || value === "") return;
+    if (!promoForm.elements[name]) return;
+    promoForm.elements[name].value = value;
+  };
+
+  assign("pattern", draft.pattern);
+  assign("product_name", draft.product_name);
+  assign("price", draft.price);
+  assign("offer", draft.offer);
+  assign("cta", draft.cta);
+  assign("feature_1", draft.feature_1);
+  assign("feature_2", draft.feature_2);
+  assign("feature_3", draft.feature_3);
+  assign("duration_per_cut", draft.duration_per_cut);
 }
 
 async function handlePromoStoryboardClick(event) {
