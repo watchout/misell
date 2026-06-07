@@ -3,7 +3,9 @@ const ADMIN = {
   assets: [],
   validationErrors: [],
   lastPromo: null,
-  exportingPromo: false
+  exportingPromo: false,
+  qrs: [],
+  lastQr: null
 };
 
 const DAY_OPTIONS = [
@@ -49,6 +51,10 @@ const promoDraftResult = document.getElementById("promo-draft-result");
 const promoProductAsset = document.getElementById("promo-product-asset");
 const promoStoryboard = document.getElementById("promo-storyboard");
 const replacePromoButton = document.getElementById("replace-promo");
+const qrForm = document.getElementById("qr-form");
+const qrCountEl = document.getElementById("qr-count");
+const qrResultEl = document.getElementById("qr-result");
+const qrListEl = document.getElementById("qr-list");
 const playlistEditor = document.getElementById("playlist-editor");
 const validationErrorsEl = document.getElementById("validation-errors");
 const jsonEditor = document.getElementById("json-editor");
@@ -65,7 +71,10 @@ document.getElementById("apply-promo-draft").addEventListener("click", generateP
 
 uploadForm.addEventListener("submit", uploadAsset);
 promoForm.addEventListener("submit", generatePromoCuts);
+qrForm.addEventListener("submit", generateQrCode);
 promoStoryboard.addEventListener("click", handlePromoStoryboardClick);
+qrResultEl.addEventListener("click", handleQrClick);
+qrListEl.addEventListener("click", handleQrClick);
 playlistEditor.addEventListener("input", handlePlaylistInput);
 playlistEditor.addEventListener("change", handlePlaylistChange);
 playlistEditor.addEventListener("click", handlePlaylistClick);
@@ -75,7 +84,7 @@ window.addEventListener("load", initAdmin);
 
 async function initAdmin() {
   try {
-    await Promise.all([loadAssets(), loadPlaylist()]);
+    await Promise.all([loadAssets(), loadPlaylist(), loadQrs()]);
     renderAll();
   } catch (error) {
     showToast(error.message, true);
@@ -102,10 +111,19 @@ async function loadAssets() {
   ADMIN.assets = data.assets || [];
 }
 
+async function loadQrs() {
+  const response = await fetch(`/api/qrs?ts=${Date.now()}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("QR一覧を読み込めません");
+  const data = await response.json();
+  ADMIN.qrs = data.qrs || [];
+}
+
 function renderAll() {
   renderAssets();
   renderPromoAssetOptions();
   renderPromoStoryboard();
+  renderQrResult();
+  renderQrList();
   renderValidationErrors();
   renderPlaylist();
   renderJson();
@@ -160,6 +178,79 @@ function renderAssetThumb(asset) {
     return `<img class="asset-thumb" src="${escapeAttr(asset.path)}" alt="">`;
   }
   return `<video class="asset-thumb" src="${escapeAttr(asset.path)}" muted playsinline preload="metadata"></video>`;
+}
+
+function renderQrResult() {
+  const qr = ADMIN.lastQr;
+  if (!qr) {
+    qrResultEl.hidden = true;
+    qrResultEl.replaceChildren();
+    return;
+  }
+
+  qrResultEl.hidden = false;
+  qrResultEl.innerHTML = `
+    <div class="qr-result-grid">
+      <img class="qr-preview" src="${escapeAttr(qr.image_path)}" alt="">
+      <div class="qr-meta">
+        <h3>${escapeHtml(qr.label || qr.qr_id)}</h3>
+        <dl>
+          <div>
+            <dt>Campaign</dt>
+            <dd><code>${escapeHtml(qr.campaign_id)}</code></dd>
+          </div>
+          <div>
+            <dt>QR ID</dt>
+            <dd><code>${escapeHtml(qr.qr_id)}</code></dd>
+          </div>
+          <div>
+            <dt>LP URL</dt>
+            <dd><code>${escapeHtml(qr.lp_url)}</code></dd>
+          </div>
+          <div>
+            <dt>Image</dt>
+            <dd><code>${escapeHtml(qr.image_path)}</code></dd>
+          </div>
+        </dl>
+        <div class="qr-actions">
+          <a class="button secondary" href="${escapeAttr(qr.image_path)}" download>PNG</a>
+          <button class="button secondary" type="button" data-copy-qr-path="${escapeAttr(qr.image_path)}">画像パスコピー</button>
+          <button class="button secondary" type="button" data-copy-qr-id="${escapeAttr(qr.qr_id)}">QR IDコピー</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderQrList() {
+  qrCountEl.textContent = String(ADMIN.qrs.length);
+
+  if (ADMIN.qrs.length === 0) {
+    qrListEl.innerHTML = `
+      <tr>
+        <td colspan="4" class="empty-cell">QRはまだありません</td>
+      </tr>
+    `;
+    return;
+  }
+
+  qrListEl.innerHTML = ADMIN.qrs.map((qr) => `
+    <tr>
+      <td>
+        <img class="qr-thumb" src="${escapeAttr(qr.image_path)}" alt="">
+        <code>${escapeHtml(qr.qr_id)}</code>
+      </td>
+      <td>
+        <strong>${escapeHtml(qr.label || qr.campaign_id)}</strong>
+        <div class="muted">${escapeHtml(qr.campaign_id)}</div>
+      </td>
+      <td><code>${escapeHtml(qr.lp_url)}</code></td>
+      <td class="table-actions">
+        <a class="button tiny secondary" href="${escapeAttr(qr.image_path)}" download>PNG</a>
+        <button class="button tiny secondary" type="button" data-copy-qr-path="${escapeAttr(qr.image_path)}">コピー</button>
+      </td>
+    </tr>
+  `).join("");
 }
 
 function renderPromoAssetOptions() {
@@ -510,6 +601,16 @@ async function handleAssetClick(event) {
   }
 }
 
+async function handleQrClick(event) {
+  const button = event.target.closest("[data-copy-qr-path], [data-copy-qr-id]");
+  if (!button) return;
+
+  const value = button.dataset.copyQrPath || button.dataset.copyQrId || "";
+  if (!value) return;
+  await navigator.clipboard?.writeText(value);
+  showToast(button.dataset.copyQrId ? "QR IDをコピーしました" : "QR画像パスをコピーしました");
+}
+
 async function uploadAsset(event) {
   event.preventDefault();
   const file = assetInput.files?.[0];
@@ -531,6 +632,45 @@ async function uploadAsset(event) {
   await loadAssets();
   renderAll();
   showToast("素材をアップロードしました。バックアップも作成済みです。");
+}
+
+async function generateQrCode(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type='submit']");
+  const payload = {
+    campaign_id: form.elements.campaign_id.value,
+    qr_id: form.elements.qr_id.value,
+    label: form.elements.label.value,
+    lp_url: form.elements.lp_url.value
+  };
+
+  button.disabled = true;
+  const buttonLabel = button.textContent;
+  button.textContent = "発行中";
+  try {
+    const response = await fetch("/api/qrs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      showToast(await errorMessage(response), true);
+      return;
+    }
+
+    const data = await response.json();
+    ADMIN.lastQr = data.qr;
+    await loadQrs();
+    renderQrResult();
+    renderQrList();
+    showToast("QRを発行しました。バックアップも作成済みです。");
+  } catch (error) {
+    showToast(error.message || "QRの発行に失敗しました", true);
+  } finally {
+    button.disabled = false;
+    button.textContent = buttonLabel;
+  }
 }
 
 async function generatePromoCuts(event) {

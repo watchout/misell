@@ -152,6 +152,7 @@ npm audit --audit-level=moderate
 - docs/62_MISELL_MEDIA_KIT.md
 - docs/63_TEST_INTRO_AGREEMENT_TEMPLATE.md
 - docs/64_INDUSTRY_DEMO_ASSET_PACK.md
+- docs/65_QR_GENERATION_GUIDE.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
