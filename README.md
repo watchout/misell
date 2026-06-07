@@ -146,6 +146,10 @@ npm audit --audit-level=moderate
 - docs/56_SELF_SERVE_LP_AND_ONBOARDING_PORTAL_SPEC.md
 - docs/57_FLEET_MONITORING_RELEASE_OPERATIONS.md
 - docs/58_CLOUD_MONITORING_MVP_SPEC.md
+- docs/59_DELIVERY_QA_GATE.md
+- docs/60_TEST_INTRO_PROPOSAL_DECK.md
+- docs/61_CUSTOMER_PRICING_TABLE.md
+- docs/62_MISELL_MEDIA_KIT.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
