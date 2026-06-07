@@ -2,7 +2,8 @@ const ADMIN = {
   playlist: { version: 1, items: [] },
   assets: [],
   validationErrors: [],
-  lastPromo: null
+  lastPromo: null,
+  exportingPromo: false
 };
 
 const DAY_OPTIONS = [
@@ -38,6 +39,7 @@ document.getElementById("apply-json").addEventListener("click", applyJsonEditor)
 
 uploadForm.addEventListener("submit", uploadAsset);
 promoForm.addEventListener("submit", generatePromoCuts);
+promoStoryboard.addEventListener("click", handlePromoStoryboardClick);
 playlistEditor.addEventListener("input", handlePlaylistInput);
 playlistEditor.addEventListener("change", handlePlaylistChange);
 playlistEditor.addEventListener("click", handlePlaylistClick);
@@ -172,6 +174,22 @@ function renderPromoStoryboard() {
         </li>
       `).join("")}
     </ul>
+    <div class="promo-export">
+      <label>
+        <span>動画出力</span>
+        <select data-promo-export-preset>
+          <option value="preview">確認用 WebM 1280x720</option>
+          <option value="full">3面 WebM 5760x1080</option>
+        </select>
+      </label>
+      <button class="button secondary" type="button" data-export-promo ${ADMIN.exportingPromo ? "disabled" : ""}>
+        ${ADMIN.exportingPromo ? "書き出し中" : "WebM書き出し"}
+      </button>
+      <a class="button secondary" data-promo-download href="${escapeAttr(promo.export?.output || "#")}" download ${promo.export?.output ? "" : "hidden"}>
+        ダウンロード
+      </a>
+      ${promo.export ? `<span>${escapeHtml(promo.export.preset)} / ${escapeHtml(formatBytes(promo.export.size))}</span>` : ""}
+    </div>
   `;
 }
 
@@ -500,6 +518,63 @@ async function generatePromoCuts(event) {
     button.textContent = buttonLabel;
     renderPromoStoryboard();
   }
+}
+
+async function handlePromoStoryboardClick(event) {
+  const button = event.target.closest("[data-export-promo]");
+  if (!button) return;
+  await exportPromoVideo(button);
+}
+
+async function exportPromoVideo(button) {
+  const promo = ADMIN.lastPromo;
+  if (!promo) {
+    showToast("先にPRカットを生成してください", true);
+    return;
+  }
+
+  const items = currentPromoItems(promo);
+  if (items.length === 0) {
+    showToast("書き出すPRカットがplaylistにありません", true);
+    return;
+  }
+
+  const preset = promoStoryboard.querySelector("[data-promo-export-preset]")?.value || "preview";
+  ADMIN.exportingPromo = true;
+  renderPromoStoryboard();
+  try {
+    const response = await fetch(`/api/promo-campaigns/${encodeURIComponent(promo.id)}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preset, items })
+    });
+    if (!response.ok) {
+      showToast(await errorMessage(response), true);
+      return;
+    }
+
+    const data = await response.json();
+    ADMIN.lastPromo = { ...promo, export: data.export };
+    renderPromoStoryboard();
+    showToast("WebM動画を書き出しました");
+  } catch (error) {
+    showToast(error.message || "WebM動画の書き出しに失敗しました", true);
+  } finally {
+    ADMIN.exportingPromo = false;
+    renderPromoStoryboard();
+  }
+}
+
+function currentPromoItems(promo) {
+  const itemIds = new Set((promo.playlist_items || []).map((item) => item.item_id || item.id).filter(Boolean));
+  const generatedPrefix = `/generated/promos/${promo.id}/`;
+  const items = (ADMIN.playlist.items || []).filter((item) => (
+    item.enabled !== false && (
+      itemIds.has(item.item_id || item.id) ||
+      ["left", "center", "right", "wide"].some((field) => String(item[field] || "").startsWith(generatedPrefix))
+    )
+  ));
+  return items.length > 0 ? items : (promo.playlist_items || []);
 }
 
 function removePromoItems(items, promo) {

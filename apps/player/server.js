@@ -6,6 +6,7 @@ const fsp = fs.promises;
 const os = require("os");
 const path = require("path");
 const util = require("util");
+const { pathToFileURL } = require("url");
 
 const Ajv = require("ajv/dist/2020");
 const express = require("express");
@@ -56,6 +57,12 @@ const CONFIG_VERSION = process.env.MISELL_CONFIG_VERSION || "";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm"]);
+const VIDEO_EXPORT_PRESETS = {
+  preview: { width: 1280, height: 720, stageWidth: 1280, stageHeight: 240 },
+  full: { width: 5760, height: 1080, stageWidth: 5760, stageHeight: 1080 }
+};
+const VIDEO_EXPORT_MAX_ITEMS = 12;
+const VIDEO_EXPORT_MAX_SECONDS = 120;
 const ALLOWED_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]);
 const ALLOWED_MIME_BY_EXTENSION = new Map([
   [".jpg", new Set(["image/jpeg"])],
@@ -807,6 +814,437 @@ async function createPromoCampaign(input) {
   };
 }
 
+function normalizePromoExportInput(promoId, body) {
+  if (!isSafePromoId(promoId)) {
+    throw new Error("promo_id is invalid");
+  }
+
+  const source = body || {};
+  const preset = Object.hasOwn(VIDEO_EXPORT_PRESETS, source.preset) ? source.preset : "preview";
+  const rawItems = Array.isArray(source.items) ? source.items : [];
+  if (rawItems.length === 0) {
+    throw new Error("items are required for promo video export");
+  }
+  if (rawItems.length > VIDEO_EXPORT_MAX_ITEMS) {
+    throw new Error(`promo video export supports up to ${VIDEO_EXPORT_MAX_ITEMS} cuts`);
+  }
+
+  const items = rawItems.map((item, index) => normalizePromoExportItem(promoId, item, index));
+  const durationSeconds = items.reduce((sum, item) => sum + item.duration, 0);
+  if (durationSeconds > VIDEO_EXPORT_MAX_SECONDS) {
+    throw new Error(`promo video export duration must be ${VIDEO_EXPORT_MAX_SECONDS} seconds or less`);
+  }
+
+  return {
+    promo_id: promoId,
+    preset,
+    format: "webm",
+    items,
+    duration_seconds: durationSeconds
+  };
+}
+
+function normalizePromoExportItem(promoId, item, index) {
+  const layout = item?.layout === "wide" ? "wide" : "three-zone";
+  const id = cleanId(item?.item_id || item?.id || `cut-${index + 1}`) || `cut-${index + 1}`;
+  const base = {
+    id,
+    item_id: id,
+    name: boundedString(item?.name, 100) || `PR cut ${index + 1}`,
+    layout,
+    duration: clampInt(item?.duration, 5, 1, 20)
+  };
+
+  if (layout === "wide") {
+    return {
+      ...base,
+      left: "",
+      center: "",
+      right: "",
+      wide: normalizePromoExportSource(`${base.item_id}.wide`, item?.wide, promoId)
+    };
+  }
+
+  return {
+    ...base,
+    left: normalizePromoExportSource(`${base.item_id}.left`, item?.left, promoId),
+    center: normalizePromoExportSource(`${base.item_id}.center`, item?.center, promoId),
+    right: normalizePromoExportSource(`${base.item_id}.right`, item?.right, promoId),
+    wide: ""
+  };
+}
+
+function normalizePromoExportSource(label, source, promoId) {
+  const value = cleanString(source);
+  validateSource(label, value, { required: true, validateExists: true });
+  const promoPrefix = `/generated/promos/${promoId}/`;
+  if (!value.startsWith(promoPrefix)) {
+    throw new Error(`${label} must be generated content for promo ${promoId}`);
+  }
+  return value;
+}
+
+async function createPromoVideoExport(input, options = {}) {
+  const preset = VIDEO_EXPORT_PRESETS[input.preset] || VIDEO_EXPORT_PRESETS.preview;
+  const exportId = `${input.promo_id}-${compactTimestamp().toLowerCase()}-${nanoid(6)}`;
+  const relativeDir = path.join("exports", exportId);
+  const exportDir = path.join(GENERATED_DIR, relativeDir);
+  const outputFilename = "promo.webm";
+  const outputPath = path.join(exportDir, outputFilename);
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "misell-promo-export-"));
+
+  try {
+    await fsp.mkdir(exportDir, { recursive: true });
+    const ffmpegBin = await findExecutable(process.env.MISELL_FFMPEG_BIN, ["ffmpeg"]);
+    if (ffmpegBin) {
+      const browserBin = await findExecutable(process.env.MISELL_CHROMIUM_BIN, [
+        "chromium-browser",
+        "chromium",
+        "google-chrome-stable",
+        "google-chrome"
+      ]);
+      await createPromoVideoWithFfmpeg(input, preset, tempDir, outputPath, options.baseUrl, ffmpegBin, browserBin);
+    } else {
+      await createPromoVideoWithPlaywright(input, preset, tempDir, outputPath, options.baseUrl);
+    }
+    await fsp.chmod(outputPath, 0o644);
+
+    const stat = await fsp.stat(outputPath);
+    if (stat.size < 1024) {
+      throw new Error("WebM export produced an unexpectedly small file");
+    }
+
+    const manifest = {
+      id: exportId,
+      promo_id: input.promo_id,
+      format: input.format,
+      preset: input.preset,
+      width: preset.width,
+      height: preset.height,
+      stage_width: preset.stageWidth,
+      stage_height: preset.stageHeight,
+      duration_seconds: input.duration_seconds,
+      output: `/${path.posix.join("generated", "exports", exportId, outputFilename)}`,
+      size: stat.size,
+      created_at: new Date().toISOString(),
+      items: input.items.map((item) => ({
+        item_id: item.item_id,
+        name: item.name,
+        layout: item.layout,
+        duration: item.duration
+      }))
+    };
+    await writeJsonAtomic(path.join(exportDir, "manifest.json"), manifest);
+    return manifest;
+  } catch (error) {
+    await fsp.rm(exportDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  } finally {
+    await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function createPromoVideoWithFfmpeg(input, preset, tempDir, outputPath, baseUrl, ffmpegBin, browserBin) {
+  const screenshots = [];
+  for (const [index, item] of input.items.entries()) {
+    const htmlPath = path.join(tempDir, `cut-${String(index + 1).padStart(2, "0")}.html`);
+    const screenshotPath = path.join(tempDir, `cut-${String(index + 1).padStart(2, "0")}.png`);
+    await fsp.writeFile(htmlPath, renderPromoExportComposite(item, preset, baseUrl), "utf8");
+    await captureExportScreenshot(htmlPath, screenshotPath, preset, browserBin);
+    screenshots.push({ path: screenshotPath, duration: item.duration });
+  }
+
+  const concatPath = path.join(tempDir, "frames.txt");
+  await fsp.writeFile(concatPath, renderFfmpegConcatFile(screenshots), "utf8");
+  await execFileAsync(ffmpegBin, [
+    "-y",
+    "-f", "concat",
+    "-safe", "0",
+    "-i", concatPath,
+    "-vf", "fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+    "-an",
+    "-c:v", "libvpx-vp9",
+    "-deadline", "good",
+    "-cpu-used", "4",
+    "-b:v", "0",
+    "-crf", "34",
+    "-pix_fmt", "yuv420p",
+    outputPath
+  ], { timeout: 120000, maxBuffer: 4 * 1024 * 1024 });
+}
+
+async function createPromoVideoWithPlaywright(input, preset, tempDir, outputPath, baseUrl) {
+  let chromium = null;
+  try {
+    chromium = require("playwright").chromium;
+  } catch {
+    throw new Error("WebM export requires ffmpeg or Playwright. Install ffmpeg or set MISELL_FFMPEG_BIN.");
+  }
+
+  const htmlPath = path.join(tempDir, "reel.html");
+  await fsp.writeFile(htmlPath, renderPromoExportReel(input, preset, baseUrl), "utf8");
+  const browser = await chromium.launch({ headless: true });
+  let context = null;
+  try {
+    context = await browser.newContext({
+      viewport: { width: preset.width, height: preset.height },
+      recordVideo: {
+        dir: tempDir,
+        size: { width: preset.width, height: preset.height }
+      }
+    });
+    const page = await context.newPage();
+    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "networkidle", timeout: 30000 });
+    await page.waitForTimeout((input.duration_seconds * 1000) + 1000);
+    const video = page.video();
+    await context.close();
+    context = null;
+    await fsp.copyFile(await video.path(), outputPath);
+  } finally {
+    if (context) await context.close().catch(() => {});
+    await browser.close();
+  }
+}
+
+function renderPromoExportComposite(item, preset, baseUrl = `http://127.0.0.1:${PORT}`) {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=${preset.width}, initial-scale=1">
+    <title>${escapeHtml(item.name)} export</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: ${preset.width}px;
+        height: ${preset.height}px;
+        overflow: hidden;
+        background: #05070a;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      .stage {
+        width: ${preset.stageWidth}px;
+        height: ${preset.stageHeight}px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: 100%;
+        overflow: hidden;
+        background: #080b10;
+      }
+      iframe {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 0;
+        background: #080b10;
+      }
+      iframe + iframe {
+        border-left: ${preset.stageWidth >= 3000 ? 6 : 2}px solid rgba(255, 255, 255, 0.16);
+      }
+      .wide-frame {
+        grid-column: 1 / 4;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      ${renderPromoExportFrames(item, baseUrl)}
+    </main>
+  </body>
+</html>
+`;
+}
+
+function renderPromoExportReel(input, preset, baseUrl = `http://127.0.0.1:${PORT}`) {
+  const cuts = input.items.map((item) => ({
+    duration_ms: item.duration * 1000,
+    frames: renderPromoExportFrames(item, baseUrl)
+  }));
+
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=${preset.width}, initial-scale=1">
+    <title>${escapeHtml(input.promo_id)} export reel</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: ${preset.width}px;
+        height: ${preset.height}px;
+        overflow: hidden;
+        background: #05070a;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      .stage {
+        width: ${preset.stageWidth}px;
+        height: ${preset.stageHeight}px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: 100%;
+        overflow: hidden;
+        background: #080b10;
+      }
+      iframe {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 0;
+        background: #080b10;
+      }
+      iframe + iframe {
+        border-left: ${preset.stageWidth >= 3000 ? 6 : 2}px solid rgba(255, 255, 255, 0.16);
+      }
+      .wide-frame {
+        grid-column: 1 / 4;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="stage" class="stage"></main>
+    <script id="cuts" type="application/json">${escapeScriptJson(cuts)}</script>
+    <script>
+      const cuts = JSON.parse(document.getElementById("cuts").textContent);
+      const stage = document.getElementById("stage");
+      let index = 0;
+      function showNext() {
+        const cut = cuts[index];
+        if (!cut) {
+          document.body.dataset.done = "1";
+          return;
+        }
+        stage.innerHTML = cut.frames;
+        index += 1;
+        window.setTimeout(showNext, cut.duration_ms);
+      }
+      showNext();
+    </script>
+  </body>
+</html>
+`;
+}
+
+function renderPromoExportFrames(item, baseUrl) {
+  if (item.layout === "wide") {
+    return `<iframe class="wide-frame" src="${escapeAttr(toAbsoluteLocalUrl(item.wide, baseUrl))}" title="${escapeAttr(item.name)} wide" allow="autoplay"></iframe>`;
+  }
+  return ["left", "center", "right"].map((zone) => (
+    `<iframe src="${escapeAttr(toAbsoluteLocalUrl(item[zone], baseUrl))}" title="${escapeAttr(item.name)} ${zone}" allow="autoplay"></iframe>`
+  )).join("");
+}
+
+function toAbsoluteLocalUrl(source, baseUrl) {
+  return new URL(source, baseUrl).href;
+}
+
+function escapeScriptJson(value) {
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+}
+
+async function captureExportScreenshot(htmlPath, screenshotPath, preset, browserBin) {
+  if (browserBin) {
+    try {
+      await execFileAsync(browserBin, [
+        "--headless",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-scrollbars",
+        "--mute-audio",
+        "--autoplay-policy=no-user-gesture-required",
+        "--virtual-time-budget=1500",
+        `--window-size=${preset.width},${preset.height}`,
+        `--screenshot=${screenshotPath}`,
+        pathToFileURL(htmlPath).href
+      ], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 });
+      return;
+    } catch (error) {
+      await captureExportScreenshotWithPlaywright(htmlPath, screenshotPath, preset, error);
+      return;
+    }
+  }
+
+  await captureExportScreenshotWithPlaywright(htmlPath, screenshotPath, preset);
+}
+
+async function captureExportScreenshotWithPlaywright(htmlPath, screenshotPath, preset, browserError) {
+  let chromium = null;
+  try {
+    chromium = require("playwright").chromium;
+  } catch {
+    const suffix = browserError ? ` Chromium failed first: ${browserError.message}` : "";
+    throw new Error(`Video export requires Chromium or Playwright.${suffix}`);
+  }
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({
+      viewport: { width: preset.width, height: preset.height },
+      deviceScaleFactor: 1
+    });
+    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "networkidle", timeout: 30000 });
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: screenshotPath, type: "png" });
+  } finally {
+    await browser.close();
+  }
+}
+
+async function findExecutable(envValue, candidates) {
+  const values = [envValue, ...candidates].filter(Boolean);
+  for (const value of values) {
+    const resolved = await resolveExecutable(value);
+    if (!resolved) continue;
+    try {
+      await execFileAsync(resolved, ["-version"], { timeout: 5000, maxBuffer: 512 * 1024 });
+      return resolved;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return "";
+}
+
+async function resolveExecutable(value) {
+  if (value.includes("/") || value.includes(path.sep)) return value;
+  try {
+    const { stdout } = await execFileAsync("which", [value], { timeout: 5000, maxBuffer: 64 * 1024 });
+    return stdout.trim().split(/\r?\n/)[0] || "";
+  } catch {
+    return "";
+  }
+}
+
+function renderFfmpegConcatFile(screenshots) {
+  const lines = [];
+  for (const frame of screenshots) {
+    lines.push(`file '${escapeFfmpegConcatPath(frame.path)}'`);
+    lines.push(`duration ${frame.duration}`);
+  }
+  if (screenshots.length > 0) {
+    lines.push(`file '${escapeFfmpegConcatPath(screenshots[screenshots.length - 1].path)}'`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function escapeFfmpegConcatPath(filePath) {
+  return String(filePath).replaceAll("'", "'\\''");
+}
+
 function buildPromoPages(promo) {
   return [
     {
@@ -1359,6 +1797,27 @@ app.post("/api/promo-campaigns", requireAdminAuth, async (req, res, next) => {
       backup: backup.name
     });
     res.status(201).json({ ok: true, promo, backup });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/promo-campaigns/:promoId/export", requireAdminAuth, async (req, res, next) => {
+  try {
+    const input = normalizePromoExportInput(cleanId(req.params.promoId), req.body || {});
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const videoExport = await createPromoVideoExport(input, { baseUrl });
+    await appendJsonl(ADMIN_LOG_KEY, {
+      action: "promo.export",
+      ip: req.ip,
+      promo_id: input.promo_id,
+      preset: videoExport.preset,
+      format: videoExport.format,
+      duration_seconds: videoExport.duration_seconds,
+      size: videoExport.size,
+      output: videoExport.output
+    });
+    res.status(201).json({ ok: true, export: videoExport });
   } catch (error) {
     next(error);
   }

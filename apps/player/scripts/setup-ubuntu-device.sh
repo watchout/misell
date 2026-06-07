@@ -5,6 +5,7 @@ APPLY=0
 APP_DIR="${MISELL_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 APT_PACKAGES=(
   curl
+  ffmpeg
   ufw
   x11-xserver-utils
   chromium-browser

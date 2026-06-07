@@ -446,6 +446,19 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   expect(generatedResponse.ok()).toBeTruthy();
   expect(await generatedResponse.text()).toContain("1,280円");
 
+  action("Export generated product PR as a WebM video");
+  await page.locator("[data-export-promo]").click();
+  await expect(page.locator("#toast")).toContainText("WebM動画を書き出しました", { timeout: 90000 });
+  const exportedVideoPath = await page.locator("[data-promo-download]").getAttribute("href");
+  expect(exportedVideoPath).toMatch(/^\/generated\/exports\/.+\/promo\.webm$/);
+  const exportedVideoResponse = await page.request.get(`${playerBase}${exportedVideoPath}`);
+  expect(exportedVideoResponse.ok()).toBeTruthy();
+  expect(exportedVideoResponse.headers()["content-type"]).toContain("video/webm");
+  const exportedVideo = await exportedVideoResponse.body();
+  expect(exportedVideo.length).toBeGreaterThan(1024);
+  expect(exportedVideo.subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  await fsp.writeFile(path.join(artifactsDir, "promo-export.webm"), exportedVideo);
+
   await page.locator("#save-playlist").click();
   await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
   await page.screenshot({ path: path.join(screenshotsDir, "player-admin-edited.png"), fullPage: true });

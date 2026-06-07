@@ -480,6 +480,23 @@ iframe.media-fill {
   font-size: 13px;
 }
 
+.promo-export {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.promo-export span {
+  color: var(--muted);
+  align-self: center;
+}
+
 input,
 select,
 textarea {
@@ -759,6 +776,7 @@ label span {
   .promo-form,
   .promo-workflow,
   .promo-workflow ol,
+  .promo-export,
   .promo-actions,
   .day-grid,
   .source-grid label:only-child {
