@@ -419,6 +419,8 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   if (validationVisible) recordFailure("Local admin showed validation errors after save attempt");
 
   action("Generate product PR cuts from local admin UI");
+  await expect(page.locator(".promo-workflow")).toContainText("動画作成手順");
+  await expect(page.locator(".promo-workflow")).toContainText("保存とバックアップ");
   await page.locator("#promo-product-name").fill("ブラウザPR商品");
   await page.locator("#promo-price").fill("980円");
   await page.locator("#promo-offer").fill("今だけ店頭限定");
