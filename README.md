@@ -150,6 +150,7 @@ npm audit --audit-level=moderate
 - docs/60_TEST_INTRO_PROPOSAL_DECK.md
 - docs/61_CUSTOMER_PRICING_TABLE.md
 - docs/62_MISELL_MEDIA_KIT.md
+- docs/63_TEST_INTRO_AGREEMENT_TEMPLATE.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
