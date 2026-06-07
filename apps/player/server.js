@@ -781,6 +781,139 @@ function boundedString(value, maxLength) {
   return cleanString(value).replace(/\s+/g, " ").slice(0, maxLength);
 }
 
+function createPromoDraftFromPrompt(body) {
+  const prompt = cleanDraftValue(body?.prompt, 1000);
+  if (prompt.length < 4) {
+    throw new Error("prompt is required");
+  }
+
+  const features = extractDraftFeatures(prompt);
+  const draft = {
+    pattern: inferDraftPattern(prompt),
+    product_name: extractDraftProductName(prompt),
+    price: extractDraftPrice(prompt),
+    offer: extractDraftOffer(prompt),
+    cta: extractDraftCta(prompt) || "店頭で今すぐチェック",
+    feature_1: features[0] || "",
+    feature_2: features[1] || "",
+    feature_3: features[2] || "",
+    duration_per_cut: extractDraftDuration(prompt) || 5
+  };
+
+  const missingFields = [];
+  if (!draft.product_name) missingFields.push("商品名");
+  if (!draft.price) missingFields.push("価格");
+  if (!draft.offer) missingFields.push("特典");
+  if (features.length < 3) missingFields.push("特徴");
+
+  return {
+    draft,
+    missing_fields: missingFields,
+    parser: "local-rule-v1"
+  };
+}
+
+function inferDraftPattern(prompt) {
+  if (/(ワイド|wide|横長|全画面|全面|3面全体|三面全体|空間ジャック)/i.test(prompt)) return "wide-first";
+  if (/(2面|二面|2画面|二画面|商品を?2面|商品二面|左右.*商品)/.test(prompt)) return "two-panel-info";
+  return "center-hero";
+}
+
+function extractDraftProductName(prompt) {
+  const labeled = extractLabeledValue(prompt, ["商品名", "商品", "サービス名", "商材", "PR商品"]);
+  if (labeled) return cleanDraftValue(stripDraftPrefix(labeled), 80);
+
+  const quoted = prompt.match(/[「『\"]([^」』\"]{2,80})[」』\"]/);
+  if (quoted) return cleanDraftValue(quoted[1], 80);
+
+  const objectMatch = prompt.match(/(?:新商品|商品|サービス)?\s*([^。、「」『』]{2,80}?)(?:を|は)(?:中央|メイン|大きく|紹介|PR|訴求)/);
+  if (objectMatch) return cleanDraftValue(stripDraftPrefix(objectMatch[1]), 80);
+
+  return "";
+}
+
+function extractDraftPrice(prompt) {
+  const labeled = extractLabeledValue(prompt, ["価格", "値段", "料金", "税込価格", "price"]);
+  if (labeled) return cleanDraftValue(extractPriceToken(labeled) || labeled, 48);
+  return cleanDraftValue(extractPriceToken(prompt), 48);
+}
+
+function extractDraftOffer(prompt) {
+  const labeled = extractLabeledValue(prompt, ["特典", "オファー", "キャンペーン", "訴求", "offer"]);
+  if (labeled) return cleanDraftValue(labeled, 80);
+
+  const offerMatch = prompt.match(/((?:今だけ|本日限定|店頭限定|期間限定|数量限定|限定)[^。.!?\n]{0,40})/);
+  return offerMatch ? cleanDraftValue(offerMatch[1], 80) : "";
+}
+
+function extractDraftCta(prompt) {
+  const labeled = extractLabeledValue(prompt, ["CTA", "行動導線", "誘導文", "呼びかけ"]);
+  if (labeled) return cleanDraftValue(labeled, 80);
+
+  const ctaMatch = prompt.match(/((?:店頭で|今すぐ|詳しく|クーポン|予約|購入|チェック)[^。.!?\n]{0,40})/);
+  return ctaMatch ? cleanDraftValue(ctaMatch[1], 80) : "";
+}
+
+function extractDraftFeatures(prompt) {
+  const labeled = extractLabeledValue(prompt, ["特徴", "ポイント", "推し", "訴求ポイント"]);
+  const featureSource = labeled || "";
+  const candidates = featureSource
+    ? splitDraftList(featureSource)
+    : [1, 2, 3].map((number) => extractLabeledValue(prompt, [`特徴${number}`, `特徴 ${number}`, `ポイント${number}`]));
+
+  return candidates
+    .map((feature) => cleanDraftValue(feature, 48))
+    .filter(Boolean)
+    .filter((feature, index, values) => values.indexOf(feature) === index)
+    .slice(0, 3);
+}
+
+function extractDraftDuration(prompt) {
+  const match = prompt.match(/(\d{1,2})\s*(?:秒|s|sec|seconds)/i);
+  if (!match) return null;
+  return clampInt(match[1], 5, 2, 20);
+}
+
+function extractLabeledValue(prompt, labels) {
+  const labelPattern = labels
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const match = prompt.match(new RegExp(`(?:${labelPattern})\\s*(?:[:：=は])\\s*([^\\n。.!?]+)`, "i"));
+  return match ? cleanDraftValue(match[1], 120) : "";
+}
+
+function splitDraftList(value) {
+  return String(value || "")
+    .split(/[、,，／/・;]/)
+    .map((item) => item.trim());
+}
+
+function extractPriceToken(value) {
+  const match = String(value || "").match(/(?:税込|税別)?\s*([0-9０-９][0-9０-９,，.．]*(?:円|yen|税込|税別)?)/i);
+  if (!match) return "";
+  return normalizeDraftNumbers(match[0]).replace(/\s+/g, "");
+}
+
+function stripDraftPrefix(value) {
+  return String(value || "")
+    .replace(/^(?:新商品|商品|サービス|商材|PR商品)\s*/, "")
+    .trim();
+}
+
+function cleanDraftValue(value, maxLength) {
+  return normalizeDraftNumbers(value)
+    .replace(/javascript:/gi, "")
+    .replace(/[<>`]/g, "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizeDraftNumbers(value) {
+  return String(value || "").replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
+}
+
 async function createPromoCampaign(input) {
   const promo = input && input.id && input.created_at ? input : normalizePromoInput(input);
   const relativeDir = path.join("promos", promo.id);
@@ -1797,6 +1930,21 @@ app.post("/api/promo-campaigns", requireAdminAuth, async (req, res, next) => {
       backup: backup.name
     });
     res.status(201).json({ ok: true, promo, backup });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/promo-drafts", requireAdminAuth, async (req, res, next) => {
+  try {
+    const result = createPromoDraftFromPrompt(req.body || {});
+    await appendJsonl(ADMIN_LOG_KEY, {
+      action: "promo.draft",
+      ip: req.ip,
+      parser: result.parser,
+      missing_fields: result.missing_fields
+    });
+    res.status(201).json({ ok: true, ...result });
   } catch (error) {
     next(error);
   }

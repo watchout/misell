@@ -111,6 +111,8 @@ Generated source paths use:
 
 Use the normal preview and save buttons to review and persist the generated cuts. Content backups include generated HTML cuts, playlist JSON, device config, and uploaded assets.
 
+Use `自然文から下書き` to turn short Japanese sales copy into a Product PR form draft. This local rule-based parser fills the existing form fields only; operators must still review the draft before generating playlist cuts.
+
 After generating a promo, use `WebM書き出し` in the storyboard panel to export the current promo cuts as a silent WebM video for demos or sales materials. The default `確認用 WebM 1280x720` export preserves the 3-screen 48:9 stage with letterboxing. `3面 WebM 5760x1080` exports the full 3-screen canvas.
 
 WebM export requires:
