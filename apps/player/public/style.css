@@ -309,6 +309,7 @@ iframe.media-fill {
 }
 
 .upload-panel,
+.promo-panel,
 .playlist-panel,
 .json-panel {
   padding: 18px;
@@ -380,6 +381,63 @@ iframe.media-fill {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   margin-top: 18px;
+}
+
+.promo-panel {
+  grid-column: 1 / 3;
+}
+
+.promo-form {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.promo-form label:nth-child(1),
+.promo-form label:nth-child(2),
+.promo-form label:nth-child(3) {
+  grid-column: span 2;
+}
+
+.promo-form label:nth-child(5),
+.promo-form label:nth-child(6),
+.promo-form label:nth-child(11) {
+  grid-column: span 2;
+}
+
+.promo-form button {
+  align-self: end;
+}
+
+.promo-storyboard {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.promo-storyboard h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.promo-cut-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.promo-cut-list li {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.5fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f9fafb;
+  font-size: 13px;
 }
 
 input,
@@ -650,6 +708,7 @@ label span {
   }
 
   .admin-shell,
+  .promo-panel,
   .json-panel {
     grid-template-columns: 1fr;
     grid-column: auto;
@@ -657,9 +716,19 @@ label span {
 
   .item-grid,
   .source-grid,
+  .promo-form,
   .day-grid,
   .source-grid label:only-child {
     grid-template-columns: 1fr;
+    grid-column: auto;
+  }
+
+  .promo-form label:nth-child(1),
+  .promo-form label:nth-child(2),
+  .promo-form label:nth-child(3),
+  .promo-form label:nth-child(5),
+  .promo-form label:nth-child(6),
+  .promo-form label:nth-child(11) {
     grid-column: auto;
   }
 

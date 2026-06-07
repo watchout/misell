@@ -1,7 +1,8 @@
 const ADMIN = {
   playlist: { version: 1, items: [] },
   assets: [],
-  validationErrors: []
+  validationErrors: [],
+  lastPromo: null
 };
 
 const DAY_OPTIONS = [
@@ -18,6 +19,9 @@ const assetListEl = document.getElementById("asset-list");
 const assetCountEl = document.getElementById("asset-count");
 const uploadForm = document.getElementById("upload-form");
 const assetInput = document.getElementById("asset-input");
+const promoForm = document.getElementById("promo-form");
+const promoProductAsset = document.getElementById("promo-product-asset");
+const promoStoryboard = document.getElementById("promo-storyboard");
 const playlistEditor = document.getElementById("playlist-editor");
 const validationErrorsEl = document.getElementById("validation-errors");
 const jsonEditor = document.getElementById("json-editor");
@@ -32,6 +36,7 @@ document.getElementById("add-wide").addEventListener("click", () => addItem("wid
 document.getElementById("apply-json").addEventListener("click", applyJsonEditor);
 
 uploadForm.addEventListener("submit", uploadAsset);
+promoForm.addEventListener("submit", generatePromoCuts);
 playlistEditor.addEventListener("input", handlePlaylistInput);
 playlistEditor.addEventListener("change", handlePlaylistChange);
 playlistEditor.addEventListener("click", handlePlaylistClick);
@@ -70,6 +75,8 @@ async function loadAssets() {
 
 function renderAll() {
   renderAssets();
+  renderPromoAssetOptions();
+  renderPromoStoryboard();
   renderValidationErrors();
   renderPlaylist();
   renderJson();
@@ -124,6 +131,45 @@ function renderAssetThumb(asset) {
     return `<img class="asset-thumb" src="${escapeAttr(asset.path)}" alt="">`;
   }
   return `<video class="asset-thumb" src="${escapeAttr(asset.path)}" muted playsinline preload="metadata"></video>`;
+}
+
+function renderPromoAssetOptions() {
+  const currentValue = promoProductAsset.value;
+  const options = [
+    ["/demo/wide.html", "Demo wide"],
+    ["/demo/left.html", "Demo left"],
+    ["/demo/center.html", "Demo center"],
+    ["/demo/right.html", "Demo right"],
+    ...ADMIN.assets.map((asset) => [asset.path, asset.path])
+  ];
+  promoProductAsset.innerHTML = options.map(([value, label]) => (
+    `<option value="${escapeAttr(value)}"${value === currentValue ? " selected" : ""}>${escapeHtml(label)}</option>`
+  )).join("");
+  if (currentValue && options.some(([value]) => value === currentValue)) {
+    promoProductAsset.value = currentValue;
+  }
+}
+
+function renderPromoStoryboard() {
+  const promo = ADMIN.lastPromo;
+  if (!promo) {
+    promoStoryboard.hidden = true;
+    promoStoryboard.replaceChildren();
+    return;
+  }
+
+  promoStoryboard.hidden = false;
+  promoStoryboard.innerHTML = `
+    <h3>${escapeHtml(promo.product_name)} / ${escapeHtml(promo.pattern)}</h3>
+    <ul class="promo-cut-list">
+      ${(promo.storyboard || []).map((cut) => `
+        <li>
+          <strong>${escapeHtml(cut.name || cut.item_id)}</strong>
+          <span>${escapeHtml(cut.layout)} / ${escapeHtml(cut.duration)}秒 / ${escapeHtml(screenSummary(cut.screens))}</span>
+        </li>
+      `).join("")}
+    </ul>
+  `;
 }
 
 function renderPlaylist() {
@@ -199,7 +245,7 @@ function renderSourceControls(item, index) {
       ${fields.map((field) => `
         <label>
           <span>${field}</span>
-          <input type="text" data-field="${field}" value="${escapeAttr(item[field] || "")}" placeholder="/assets/images/example.jpg or /demo/left.html">
+          <input type="text" data-field="${field}" value="${escapeAttr(item[field] || "")}" placeholder="/assets/images/example.jpg, /demo/left.html, or /generated/promos/...html">
           <select data-source-picker="${field}">
             <option value="">素材から選択</option>
             ${demoOptions(field)}
@@ -238,6 +284,17 @@ function sourceLabel(source, fallback) {
   const value = source || fallback;
   const file = value.split("/").filter(Boolean).pop() || value;
   return escapeHtml(file);
+}
+
+function screenSummary(screens) {
+  if (!screens || typeof screens !== "object") return "";
+  return Object.entries(screens)
+    .map(([screen, source]) => {
+      const value = String(source || screen);
+      const file = value.split("/").filter(Boolean).pop() || value;
+      return `${screen}: ${file}`;
+    })
+    .join(" / ");
 }
 
 function renderJson() {
@@ -382,6 +439,53 @@ async function uploadAsset(event) {
   await loadAssets();
   renderAll();
   showToast("素材をアップロードしました。バックアップも作成済みです。");
+}
+
+async function generatePromoCuts(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type='submit']");
+  const payload = {
+    pattern: form.elements.pattern.value,
+    product_name: form.elements.product_name.value,
+    product_asset: form.elements.product_asset.value,
+    price: form.elements.price.value,
+    offer: form.elements.offer.value,
+    cta: form.elements.cta.value,
+    feature_1: form.elements.feature_1.value,
+    feature_2: form.elements.feature_2.value,
+    feature_3: form.elements.feature_3.value,
+    duration_per_cut: Number.parseInt(form.elements.duration_per_cut.value, 10) || 5,
+    campaign_id: form.elements.campaign_id.value
+  };
+
+  button.disabled = true;
+  button.textContent = "生成中";
+  try {
+    const response = await fetch("/api/promo-campaigns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      showToast(await errorMessage(response), true);
+      return;
+    }
+
+    const data = await response.json();
+    const promo = data.promo;
+    const items = promo.playlist_items || [];
+    ADMIN.playlist.items = [...(ADMIN.playlist.items || []), ...items];
+    ADMIN.lastPromo = promo;
+    ADMIN.validationErrors = [];
+    renderAll();
+    showToast(`${items.length}件のPRカットをplaylistへ追加しました`);
+  } catch (error) {
+    showToast(error.message || "PRカットの生成に失敗しました", true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "カット生成";
+  }
 }
 
 async function savePlaylist() {

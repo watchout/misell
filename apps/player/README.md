@@ -59,11 +59,12 @@ Store terminals should keep runtime files outside the Git checkout:
 
 - `MISELL_DATA_DIR`: default `~/.local/share/misell-player/data`
 - `MISELL_ASSETS_DIR`: default `~/.local/share/misell-player/assets`
+- `MISELL_GENERATED_DIR`: default `$MISELL_DATA_DIR/generated`
 - `MISELL_LOG_DIR`: default `~/.local/share/misell-player/logs`
 - `MISELL_PLAYLIST_PATH`: default `$MISELL_DATA_DIR/playlist.json`
 - `MISELL_DEVICE_CONFIG_PATH`: default `$MISELL_DATA_DIR/config.json`
 
-`scripts/setup-autostart.sh` and `scripts/enroll-device.sh` write these paths to `~/.config/misell-player/env`. This keeps device identity, playlist, uploads, and logs out of the Git working tree.
+`scripts/setup-autostart.sh` and `scripts/enroll-device.sh` write these paths to `~/.config/misell-player/env`. This keeps device identity, playlist, generated cuts, uploads, and logs out of the Git working tree.
 
 ## API
 
@@ -76,6 +77,7 @@ Store terminals should keep runtime files outside the Git checkout:
 - `POST /api/playlist` with Basic auth
 - `GET /api/assets` with Basic auth
 - `POST /api/assets/upload` with Basic auth
+- `POST /api/promo-campaigns` with Basic auth
 - `POST /api/log/play`
 
 ## Upload Rules
@@ -96,6 +98,18 @@ Rejected:
 - executables
 - zip files
 - files with mismatched MIME type or file signature
+
+## Product PR Builder
+
+The LAN admin UI includes `PR作成` for store-front product promotion loops. It creates generated HTML cuts under `MISELL_GENERATED_DIR`, defaulting to `$MISELL_DATA_DIR/generated`, and appends returned playlist items to the unsaved playlist in the browser.
+
+Generated source paths use:
+
+```text
+/generated/promos/<promo-id>/<cut>.html
+```
+
+Use the normal preview and save buttons to review and persist the generated cuts. Content backups include generated HTML cuts, playlist JSON, device config, and uploaded assets.
 
 ## Ubuntu Device Setup
 
@@ -252,13 +266,13 @@ scripts/rotate-logs.sh --force
 
 ## Content Backups
 
-Create a versioned backup of `playlist.json`, `config.json`, and local assets:
+Create a versioned backup of `playlist.json`, `config.json`, generated PR cuts, and local assets:
 
 ```bash
 npm run backup:content
 ```
 
-The local admin API also creates content backups before playlist saves and before asset deletion. Backups are stored under `MISELL_CONTENT_BACKUP_DIR`, defaulting to `~/.local/share/misell-player/backups` on terminals.
+The local admin API also creates content backups before PR generation, playlist saves, and asset deletion. Backups are stored under `MISELL_CONTENT_BACKUP_DIR`, defaulting to `~/.local/share/misell-player/backups` on terminals.
 
 ## MVP Update Flow
 

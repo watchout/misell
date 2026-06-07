@@ -21,6 +21,7 @@ const ASSETS_DIR = runtimePath("MISELL_ASSETS_DIR", path.join(ROOT_DIR, "assets"
 const IMAGE_DIR = path.join(ASSETS_DIR, "images");
 const VIDEO_DIR = path.join(ASSETS_DIR, "videos");
 const LOG_DIR = runtimePath("MISELL_LOG_DIR", path.join(ROOT_DIR, "logs"));
+const GENERATED_DIR = runtimePath("MISELL_GENERATED_DIR", path.join(DATA_DIR, "generated"));
 const CONTENT_BACKUP_DIR = runtimePath("MISELL_CONTENT_BACKUP_DIR", path.join(DATA_DIR, "backups"));
 const PLAYLIST_PATH = runtimePath("MISELL_PLAYLIST_PATH", path.join(DATA_DIR, "playlist.json"));
 const PLAYLIST_SCHEMA_PATH = runtimePath("MISELL_PLAYLIST_SCHEMA_PATH", path.join(ROOT_DIR, "data", "playlist.schema.json"));
@@ -113,6 +114,7 @@ async function ensureRuntimeFiles() {
     fsp.mkdir(path.dirname(DEVICE_CONFIG_PATH), { recursive: true }),
     fsp.mkdir(IMAGE_DIR, { recursive: true }),
     fsp.mkdir(VIDEO_DIR, { recursive: true }),
+    fsp.mkdir(GENERATED_DIR, { recursive: true }),
     fsp.mkdir(CONTENT_BACKUP_DIR, { recursive: true }),
     fsp.mkdir(LOG_DIR, { recursive: true })
   ]);
@@ -177,6 +179,7 @@ async function createContentBackup(reason = "manual") {
     const stagingAssetsDir = path.join(tempDir, "assets");
     await Promise.all([
       fsp.mkdir(stagingDataDir, { recursive: true }),
+      fsp.mkdir(path.join(stagingDataDir, "generated"), { recursive: true }),
       fsp.mkdir(path.join(stagingAssetsDir, "images"), { recursive: true }),
       fsp.mkdir(path.join(stagingAssetsDir, "videos"), { recursive: true })
     ]);
@@ -184,6 +187,7 @@ async function createContentBackup(reason = "manual") {
     await Promise.all([
       copyFileIfExists(PLAYLIST_PATH, path.join(stagingDataDir, "playlist.json")),
       copyFileIfExists(DEVICE_CONFIG_PATH, path.join(stagingDataDir, "config.json")),
+      copyDirIfExists(GENERATED_DIR, path.join(stagingDataDir, "generated")),
       copyDirIfExists(IMAGE_DIR, path.join(stagingAssetsDir, "images")),
       copyDirIfExists(VIDEO_DIR, path.join(stagingAssetsDir, "videos"))
     ]);
@@ -195,6 +199,7 @@ async function createContentBackup(reason = "manual") {
       playlist_path: PLAYLIST_PATH,
       device_config_path: DEVICE_CONFIG_PATH,
       assets_dir: ASSETS_DIR,
+      generated_dir: GENERATED_DIR,
       device: deviceIdentity || {}
     });
 
@@ -582,7 +587,37 @@ function validateSource(label, source, options = {}) {
     return;
   }
 
-  throw new Error(`${label} must be an /assets path or /demo path`);
+  if (value.startsWith("/generated/")) {
+    const filePath = resolveGeneratedPath(value);
+    if (options.validateExists && !fs.existsSync(filePath)) {
+      throw new Error(`${label} does not exist: ${value}`);
+    }
+    return;
+  }
+
+  throw new Error(`${label} must be an /assets path, /demo path, or /generated path`);
+}
+
+function resolveGeneratedPath(sourceUrl) {
+  const value = String(sourceUrl || "");
+  const decodedValue = decodeURIComponent(value);
+  const decoded = decodedValue.startsWith("generated/") ? `/${decodedValue}` : decodedValue;
+
+  if (!decoded.startsWith("/generated/")) {
+    throw new Error("Only local /generated paths are allowed");
+  }
+
+  const relativePath = decoded.slice("/generated/".length);
+  if (!relativePath || relativePath.includes("\0") || path.extname(relativePath) !== ".html") {
+    throw new Error("Generated content must be an HTML file");
+  }
+
+  const resolved = path.resolve(GENERATED_DIR, relativePath);
+  const resolvedBase = path.resolve(GENERATED_DIR);
+  if (!resolved.startsWith(`${resolvedBase}${path.sep}`)) {
+    throw new Error("Invalid generated content path");
+  }
+  return resolved;
 }
 
 function clampInt(value, fallback, min, max) {
@@ -681,6 +716,395 @@ function resolveSafeAssetPath(baseDir, baseUrl, decodedUrl, filename) {
     throw new Error("Invalid asset path");
   }
   return resolved;
+}
+
+function normalizePromoInput(body) {
+  const source = body || {};
+  const productName = boundedString(source.product_name, 80);
+  if (!productName) {
+    throw new Error("product_name is required");
+  }
+
+  const pattern = ["center-hero", "two-panel-info", "wide-first"].includes(source.pattern)
+    ? source.pattern
+    : "center-hero";
+  const productAsset = cleanString(source.product_asset) || "/demo/wide.html";
+  validateSource("product_asset", productAsset, { required: true, validateExists: true });
+
+  const features = normalizePromoFeatures(source);
+  const now = new Date();
+  const campaignId = cleanId(source.campaign_id) || `promo-${compactTimestamp(now).toLowerCase()}`;
+  return {
+    id: `${campaignId}-${nanoid(6)}`,
+    campaign_id: campaignId,
+    pattern,
+    product_name: productName,
+    product_asset: productAsset,
+    price: boundedString(source.price, 48),
+    offer: boundedString(source.offer, 80),
+    cta: boundedString(source.cta, 80) || "店頭で今すぐチェック",
+    tone: boundedString(source.tone, 48) || "店頭PR",
+    features,
+    duration_per_cut: clampInt(source.duration_per_cut, 5, 2, 20),
+    created_at: now.toISOString()
+  };
+}
+
+function normalizePromoFeatures(source) {
+  const rawFeatures = Array.isArray(source.features)
+    ? source.features
+    : [source.feature_1, source.feature_2, source.feature_3];
+  const features = rawFeatures
+    .map((feature) => boundedString(feature, 48))
+    .filter(Boolean)
+    .slice(0, 3);
+  return features.length > 0 ? features : ["新商品", "店頭限定", "今だけ"];
+}
+
+function boundedString(value, maxLength) {
+  return cleanString(value).replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+async function createPromoCampaign(input) {
+  const promo = input && input.id && input.created_at ? input : normalizePromoInput(input);
+  const relativeDir = path.join("promos", promo.id);
+  const targetDir = path.join(GENERATED_DIR, relativeDir);
+  await fsp.mkdir(targetDir, { recursive: true });
+
+  const pageDefinitions = buildPromoPages(promo);
+  const pages = {};
+  for (const page of pageDefinitions) {
+    const relativePath = path.join(relativeDir, page.filename);
+    const filePath = path.join(GENERATED_DIR, relativePath);
+    await fsp.writeFile(filePath, page.html, "utf8");
+    await fsp.chmod(filePath, 0o644);
+    pages[page.key] = `/${path.posix.join("generated", "promos", promo.id, page.filename)}`;
+  }
+
+  const playlistItems = buildPromoPlaylistItems(promo, pages);
+  return {
+    ...promo,
+    generated_paths: Object.values(pages),
+    playlist_items: playlistItems,
+    storyboard: playlistItems.map((item) => ({
+      item_id: item.item_id,
+      name: item.name,
+      layout: item.layout,
+      duration: item.duration,
+      screens: item.layout === "wide"
+        ? { wide: item.wide }
+        : { left: item.left, center: item.center, right: item.right }
+    }))
+  };
+}
+
+function buildPromoPages(promo) {
+  return [
+    {
+      key: "leftFeature",
+      filename: "left-feature.html",
+      html: renderPromoPage({
+        role: "left",
+        label: "Feature",
+        title: promo.features[0],
+        subtitle: promo.tone,
+        body: promo.features.slice(1).join(" / ") || promo.offer,
+        accent: "teal"
+      })
+    },
+    {
+      key: "centerProduct",
+      filename: "center-product.html",
+      html: renderPromoPage({
+        role: "center",
+        label: "Product",
+        title: promo.product_name,
+        subtitle: promo.offer,
+        media: promo.product_asset,
+        accent: "berry"
+      })
+    },
+    {
+      key: "rightCta",
+      filename: "right-cta.html",
+      html: renderPromoPage({
+        role: "right",
+        label: "Action",
+        title: promo.price || promo.cta,
+        subtitle: promo.price ? promo.cta : promo.offer,
+        body: promo.offer,
+        accent: "olive"
+      })
+    },
+    {
+      key: "wideHero",
+      filename: "wide-hero.html",
+      html: renderPromoPage({
+        role: "wide",
+        label: "Hero",
+        title: promo.product_name,
+        subtitle: promo.offer || promo.cta,
+        body: promo.price,
+        media: promo.product_asset,
+        accent: "wide"
+      })
+    },
+    {
+      key: "leftDetail",
+      filename: "left-detail.html",
+      html: renderPromoPage({
+        role: "left",
+        label: "Point",
+        title: promo.features[1] || promo.features[0],
+        subtitle: promo.features[2] || promo.tone,
+        body: promo.offer,
+        accent: "navy"
+      })
+    },
+    {
+      key: "centerDetail",
+      filename: "center-detail.html",
+      html: renderPromoPage({
+        role: "center",
+        label: "Recommend",
+        title: promo.product_name,
+        subtitle: promo.price,
+        media: promo.product_asset,
+        accent: "slate"
+      })
+    },
+    {
+      key: "rightClose",
+      filename: "right-close.html",
+      html: renderPromoPage({
+        role: "right",
+        label: "CTA",
+        title: promo.cta,
+        subtitle: promo.price,
+        body: promo.offer,
+        accent: "gold"
+      })
+    },
+    {
+      key: "wideClose",
+      filename: "wide-close.html",
+      html: renderPromoPage({
+        role: "wide",
+        label: "CTA",
+        title: promo.cta,
+        subtitle: [promo.product_name, promo.price].filter(Boolean).join(" / "),
+        body: promo.offer,
+        accent: "dark"
+      })
+    }
+  ];
+}
+
+function buildPromoPlaylistItems(promo, pages) {
+  const base = {
+    enabled: true,
+    duration: promo.duration_per_cut,
+    start: "",
+    end: "",
+    days_of_week: [],
+    campaign_id: promo.campaign_id,
+    asset_id: cleanId(path.basename(promo.product_asset)) || promo.campaign_id,
+    priority: 0
+  };
+  const threeZoneIntro = {
+    ...base,
+    id: `${promo.id}-intro`,
+    item_id: `${promo.id}-intro`,
+    name: `${promo.product_name} / 3面PR`,
+    layout: "three-zone",
+    left: pages.leftFeature,
+    center: pages.centerProduct,
+    right: pages.rightCta,
+    wide: ""
+  };
+  const wideHero = {
+    ...base,
+    id: `${promo.id}-wide`,
+    item_id: `${promo.id}-wide`,
+    name: `${promo.product_name} / ワイド訴求`,
+    layout: "wide",
+    left: "",
+    center: "",
+    right: "",
+    wide: pages.wideHero
+  };
+  const detail = {
+    ...base,
+    id: `${promo.id}-detail`,
+    item_id: `${promo.id}-detail`,
+    name: `${promo.product_name} / 詳細CTA`,
+    layout: "three-zone",
+    left: pages.leftDetail,
+    center: pages.centerDetail,
+    right: pages.rightClose,
+    wide: ""
+  };
+  const wideClose = {
+    ...base,
+    id: `${promo.id}-close`,
+    item_id: `${promo.id}-close`,
+    name: `${promo.product_name} / 締め`,
+    layout: "wide",
+    left: "",
+    center: "",
+    right: "",
+    wide: pages.wideClose
+  };
+
+  if (promo.pattern === "wide-first") return [wideHero, threeZoneIntro, detail];
+  if (promo.pattern === "two-panel-info") {
+    return [
+      {
+        ...threeZoneIntro,
+        left: pages.centerProduct,
+        center: pages.centerDetail,
+        right: pages.rightCta,
+        name: `${promo.product_name} / 2面商品+情報`
+      },
+      wideHero,
+      detail
+    ];
+  }
+  return [threeZoneIntro, wideHero, detail, wideClose];
+}
+
+function renderPromoPage(page) {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(page.title || "Misell PR")}</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+      body {
+        display: grid;
+        min-height: 100vh;
+        color: #f8fafc;
+        background: ${promoBackground(page.accent)};
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        display: grid;
+        grid-template-columns: ${page.role === "wide" ? "1.2fr 0.8fr" : "1fr"};
+        gap: 56px;
+        align-items: center;
+        width: 100%;
+        height: 100%;
+        padding: ${page.role === "wide" ? "90px 130px" : "84px"};
+      }
+      .copy { min-width: 0; }
+      .label {
+        margin: 0 0 24px;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: ${page.role === "wide" ? "44px" : "48px"};
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+      h1 {
+        margin: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        font-size: ${page.role === "wide" ? "140px" : "122px"};
+        line-height: 0.98;
+        letter-spacing: 0;
+      }
+      h2 {
+        margin: 34px 0 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        color: rgba(255, 255, 255, 0.86);
+        font-size: ${page.role === "wide" ? "56px" : "54px"};
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+      .body {
+        margin: 30px 0 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        color: rgba(255, 255, 255, 0.76);
+        font-size: ${page.role === "wide" ? "44px" : "46px"};
+        font-weight: 700;
+        line-height: 1.18;
+        letter-spacing: 0;
+      }
+      .media {
+        min-width: 0;
+        height: ${page.role === "wide" ? "78vh" : "42vh"};
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.3);
+        background: rgba(5, 7, 10, 0.45);
+      }
+      .media img,
+      .media video,
+      .media iframe {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 0;
+        object-fit: cover;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="copy">
+        <p class="label">${escapeHtml(page.label || "Misell")}</p>
+        <h1>${escapeHtml(page.title || "")}</h1>
+        ${page.subtitle ? `<h2>${escapeHtml(page.subtitle)}</h2>` : ""}
+        ${page.body ? `<p class="body">${escapeHtml(page.body)}</p>` : ""}
+      </section>
+      ${page.media ? `<section class="media">${renderPromoMedia(page.media, page.title)}</section>` : ""}
+    </main>
+  </body>
+</html>
+`;
+}
+
+function promoBackground(accent) {
+  const backgrounds = {
+    teal: "linear-gradient(125deg, #0f8b8d, #19323c)",
+    berry: "linear-gradient(125deg, #10151d, #7a2538)",
+    olive: "linear-gradient(125deg, #2d3748, #5f6f3d)",
+    navy: "linear-gradient(125deg, #0f172a, #164e63)",
+    slate: "linear-gradient(125deg, #111827, #374151)",
+    gold: "linear-gradient(125deg, #7a2538, #d9a441)",
+    dark: "linear-gradient(125deg, #05070a, #111827)",
+    wide: "linear-gradient(100deg, rgba(15, 139, 141, 0.95), rgba(122, 37, 56, 0.93), rgba(217, 164, 65, 0.9)), #10151d"
+  };
+  return backgrounds[accent] || backgrounds.dark;
+}
+
+function renderPromoMedia(source, altText) {
+  const safeSource = escapeAttr(source);
+  const lower = String(source || "").toLowerCase();
+  if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.endsWith(".m4v")) {
+    return `<video src="${safeSource}" muted autoplay loop playsinline></video>`;
+  }
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")) {
+    return `<img src="${safeSource}" alt="${escapeAttr(altText || "")}">`;
+  }
+  return `<iframe src="${safeSource}" title="${escapeAttr(altText || "promo media")}"></iframe>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll("`", "&#096;");
 }
 
 async function validateUploadedFile(filePath, classified) {
@@ -822,6 +1246,7 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "5mb" }));
 app.use("/assets/images", express.static(IMAGE_DIR, { fallthrough: true }));
 app.use("/assets/videos", express.static(VIDEO_DIR, { fallthrough: true }));
+app.use("/generated", express.static(GENERATED_DIR, { fallthrough: true }));
 
 app.get("/", (req, res) => {
   res.redirect("/player");
@@ -909,6 +1334,26 @@ async function savePlaylistHandler(req, res, next) {
 
 app.put("/api/playlist", requireAdminAuth, savePlaylistHandler);
 app.post("/api/playlist", requireAdminAuth, savePlaylistHandler);
+
+app.post("/api/promo-campaigns", requireAdminAuth, async (req, res, next) => {
+  try {
+    const input = normalizePromoInput(req.body || {});
+    const backup = await createContentBackup("before-promo-generate");
+    const promo = await createPromoCampaign(input);
+    await appendJsonl(ADMIN_LOG_KEY, {
+      action: "promo.generate",
+      ip: req.ip,
+      promo_id: promo.id,
+      campaign_id: promo.campaign_id,
+      pattern: promo.pattern,
+      itemCount: promo.playlist_items.length,
+      backup: backup.name
+    });
+    res.status(201).json({ ok: true, promo, backup });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/assets", requireAdminAuth, async (req, res, next) => {
   try {
