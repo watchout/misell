@@ -59,6 +59,12 @@
 - 館内サービス利用増加
 - 近隣広告主候補数
 
+### 実装済みデモ素材
+
+`apps/player/data/playlist.json` の `anshin-wide`, `anshin-guide`, `anshin-sauna`, `anshin-localads`, `anshin-qr` を使う。
+
+詳細なURL一覧と撮影チェックは `docs/64_INDUSTRY_DEMO_ASSET_PACK.md` を参照する。
+
 ## バリアン向けデモ
 
 ### 訴求軸
@@ -93,6 +99,12 @@
 - オプション利用
 - 記念日プラン訴求反応
 - スタッフ説明工数削減
+
+### 実装済みデモ素材
+
+`apps/player/data/playlist.json` の `balian-wide`, `balian-roomservice`, `balian-anniversary`, `balian-amenity`, `balian-reservation` を使う。
+
+詳細なURL一覧と撮影チェックは `docs/64_INDUSTRY_DEMO_ASSET_PACK.md` を参照する。
 
 ## パセラ向けデモ
 
@@ -129,6 +141,12 @@
 - 系列施設送客
 - スポンサー広告候補数
 
+### 実装済みデモ素材
+
+`apps/player/data/playlist.json` の `pasela-wide`, `pasela-food`, `pasela-collab`, `pasela-event`, `pasela-tour` を使う。
+
+詳細なURL一覧と撮影チェックは `docs/64_INDUSTRY_DEMO_ASSET_PACK.md` を参照する。
+
 ## ビジョンセンター向けデモ
 
 ### 訴求軸
@@ -163,6 +181,12 @@
 - 配信パック問い合わせ
 - スポンサー枠販売
 - 会場利用者満足度
+
+### 実装済みデモ素材
+
+`apps/player/data/playlist.json` の `vision-wide`, `vision-guide`, `vision-streaming`, `vision-sponsor`, `vision-reception` を使う。
+
+詳細なURL一覧と撮影チェックは `docs/64_INDUSTRY_DEMO_ASSET_PACK.md` を参照する。
 
 ## 汎用施設向けデモ
 

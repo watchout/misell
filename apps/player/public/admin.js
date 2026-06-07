@@ -16,6 +16,29 @@ const DAY_OPTIONS = [
   ["sat", "土"]
 ];
 
+const INDUSTRY_DEMO_SCENES = [
+  ["anshin-oyado", "wide", "安心お宿 3面ワイド", ["wide"]],
+  ["anshin-oyado", "guide", "安心お宿 館内案内", ["left", "center", "right"]],
+  ["anshin-oyado", "sauna", "安心お宿 サウナ/休憩", ["left", "center", "right"]],
+  ["anshin-oyado", "localads", "安心お宿 近隣広告", ["left", "center", "right"]],
+  ["anshin-oyado", "qr", "安心お宿 QRサンプル", ["left", "center", "right"]],
+  ["balian", "wide", "バリアン 3面ワイド", ["wide"]],
+  ["balian", "roomservice", "バリアン ルームサービス", ["left", "center", "right"]],
+  ["balian", "anniversary", "バリアン 記念日プラン", ["left", "center", "right"]],
+  ["balian", "amenity", "バリアン アメニティ", ["left", "center", "right"]],
+  ["balian", "reservation", "バリアン 予約導線QR", ["left", "center", "right"]],
+  ["pasela", "wide", "パセラ 3面ワイド", ["wide"]],
+  ["pasela", "food", "パセラ フード/ドリンク", ["left", "center", "right"]],
+  ["pasela", "collab", "パセラ コラボ告知", ["left", "center", "right"]],
+  ["pasela", "event", "パセラ イベント案内", ["left", "center", "right"]],
+  ["pasela", "tour", "パセラ 回遊導線QR", ["left", "center", "right"]],
+  ["vision-center", "wide", "ビジョンセンター 3面ワイド", ["wide"]],
+  ["vision-center", "guide", "ビジョンセンター 会場案内", ["left", "center", "right"]],
+  ["vision-center", "streaming", "ビジョンセンター 配信パック", ["left", "center", "right"]],
+  ["vision-center", "sponsor", "ビジョンセンター スポンサー枠", ["left", "center", "right"]],
+  ["vision-center", "reception", "ビジョンセンター 受付案内", ["left", "center", "right"]]
+];
+
 const assetListEl = document.getElementById("asset-list");
 const assetCountEl = document.getElementById("asset-count");
 const uploadForm = document.getElementById("upload-form");
@@ -142,10 +165,7 @@ function renderAssetThumb(asset) {
 function renderPromoAssetOptions() {
   const currentValue = promoProductAsset.value;
   const options = [
-    ["/demo/wide.html", "Demo wide"],
-    ["/demo/left.html", "Demo left"],
-    ["/demo/center.html", "Demo center"],
-    ["/demo/right.html", "Demo right"],
+    ...allDemoSourceOptions(),
     ...ADMIN.assets.map((asset) => [asset.path, asset.path])
   ];
   promoProductAsset.innerHTML = options.map(([value, label]) => (
@@ -307,6 +327,22 @@ function renderSourceControls(item, index) {
 }
 
 function demoOptions(field) {
+  return demoSourceOptions(field)
+    .map(([value, label]) => `<option value="${escapeAttr(value)}">${escapeHtml(label)}</option>`)
+    .join("");
+}
+
+function allDemoSourceOptions() {
+  const seen = new Set();
+  const options = ["wide", "left", "center", "right"].flatMap(demoSourceOptions);
+  return options.filter(([value]) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function demoSourceOptions(field) {
   const options = [
     ["/demo/left.html", "Demo left"],
     ["/demo/center.html", "Demo center"],
@@ -314,10 +350,17 @@ function demoOptions(field) {
     ["/demo/wide.html", "Demo wide"]
   ];
 
-  return options
-    .filter(([value]) => field === "wide" ? value.includes("wide") : !value.includes("wide"))
-    .map(([value, label]) => `<option value="${value}">${label}</option>`)
-    .join("");
+  const industryOptions = INDUSTRY_DEMO_SCENES
+    .filter(([, , , zones]) => zones.includes(field))
+    .map(([industry, scene, label]) => [
+      `/demo/industry.html?industry=${industry}&scene=${scene}&zone=${field}`,
+      `${label} ${field}`
+    ]);
+
+  return [
+    ...options.filter(([value]) => field === "wide" ? value.includes("wide") : !value.includes("wide")),
+    ...industryOptions
+  ];
 }
 
 function renderMiniPreview(item) {

@@ -115,7 +115,7 @@ scripts/collect-device-evidence.sh /path/to/evidence/run-001
 
 証拠:
 
-- デモplaylist
+- デモplaylist（`docs/64_INDUSTRY_DEMO_ASSET_PACK.md`）
 - 表示写真
 - 60秒紹介動画
 - 管理画面スクリーンショット

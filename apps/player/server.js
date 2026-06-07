@@ -568,34 +568,35 @@ function isValidScheduleTime(value) {
 
 function validateSource(label, source, options = {}) {
   const value = cleanString(source);
+  const sourcePath = sourcePathname(value);
   if (!value) {
     if (options.required) throw new Error(`${label} is required for enabled playlist items`);
     return;
   }
 
   if (
-    value.startsWith("/assets/images/") ||
-    value.startsWith("/assets/videos/") ||
-    value.startsWith("assets/images/") ||
-    value.startsWith("assets/videos/")
+    sourcePath.startsWith("/assets/images/") ||
+    sourcePath.startsWith("/assets/videos/") ||
+    sourcePath.startsWith("assets/images/") ||
+    sourcePath.startsWith("assets/videos/")
   ) {
-    const filePath = resolveAssetPath(value);
+    const filePath = resolveAssetPath(sourcePath);
     if (options.validateExists && !fs.existsSync(filePath)) {
       throw new Error(`${label} does not exist: ${value}`);
     }
     return;
   }
 
-  if (value.startsWith("/demo/")) {
-    const filePath = path.join(PUBLIC_DIR, value);
+  if (sourcePath.startsWith("/demo/")) {
+    const filePath = path.join(PUBLIC_DIR, sourcePath);
     if (options.validateExists && !fs.existsSync(filePath)) {
       throw new Error(`${label} does not exist: ${value}`);
     }
     return;
   }
 
-  if (value.startsWith("/generated/")) {
-    const filePath = resolveGeneratedPath(value);
+  if (sourcePath.startsWith("/generated/")) {
+    const filePath = resolveGeneratedPath(sourcePath);
     if (options.validateExists && !fs.existsSync(filePath)) {
       throw new Error(`${label} does not exist: ${value}`);
     }
@@ -603,6 +604,10 @@ function validateSource(label, source, options = {}) {
   }
 
   throw new Error(`${label} must be an /assets path, /demo path, or /generated path`);
+}
+
+function sourcePathname(sourceUrl) {
+  return String(sourceUrl || "").split(/[?#]/, 1)[0];
 }
 
 function resolveGeneratedPath(sourceUrl) {
