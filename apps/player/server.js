@@ -734,8 +734,12 @@ function normalizePromoInput(body) {
   const features = normalizePromoFeatures(source);
   const now = new Date();
   const campaignId = cleanId(source.campaign_id) || `promo-${compactTimestamp(now).toLowerCase()}`;
+  const requestedPromoId = cleanId(source.promo_id);
+  if (source.promo_id && !isSafePromoId(requestedPromoId)) {
+    throw new Error("promo_id is invalid");
+  }
   return {
-    id: `${campaignId}-${nanoid(6)}`,
+    id: requestedPromoId || `${campaignId}-${nanoid(6)}`,
     campaign_id: campaignId,
     pattern,
     product_name: productName,
@@ -748,6 +752,11 @@ function normalizePromoInput(body) {
     duration_per_cut: clampInt(source.duration_per_cut, 5, 2, 20),
     created_at: now.toISOString()
   };
+}
+
+function isSafePromoId(value) {
+  const normalized = String(value || "");
+  return Boolean(normalized) && normalized !== "." && normalized !== "..";
 }
 
 function normalizePromoFeatures(source) {

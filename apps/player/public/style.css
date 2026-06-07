@@ -406,7 +406,15 @@ iframe.media-fill {
   grid-column: span 2;
 }
 
-.promo-form button {
+.promo-actions {
+  display: grid;
+  grid-column: span 2;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-self: end;
+}
+
+.promo-actions button {
   align-self: end;
 }
 
@@ -717,6 +725,7 @@ label span {
   .item-grid,
   .source-grid,
   .promo-form,
+  .promo-actions,
   .day-grid,
   .source-grid label:only-child {
     grid-template-columns: 1fr;
@@ -728,7 +737,8 @@ label span {
   .promo-form label:nth-child(3),
   .promo-form label:nth-child(5),
   .promo-form label:nth-child(6),
-  .promo-form label:nth-child(11) {
+  .promo-form label:nth-child(11),
+  .promo-actions {
     grid-column: auto;
   }
 

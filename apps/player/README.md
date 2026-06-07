@@ -101,7 +101,7 @@ Rejected:
 
 ## Product PR Builder
 
-The LAN admin UI includes `PR作成` for store-front product promotion loops. It creates generated HTML cuts under `MISELL_GENERATED_DIR`, defaulting to `$MISELL_DATA_DIR/generated`, and appends returned playlist items to the unsaved playlist in the browser.
+The LAN admin UI includes `PR作成` for store-front product promotion loops. It creates generated HTML cuts under `MISELL_GENERATED_DIR`, defaulting to `$MISELL_DATA_DIR/generated`, and appends returned playlist items to the unsaved playlist in the browser. After the first generation, the same promo can be regenerated with the current form values and replaced in the unsaved playlist without creating duplicate cuts.
 
 Generated source paths use:
 

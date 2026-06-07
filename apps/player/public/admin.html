@@ -110,7 +110,10 @@
             <span>キャンペーンID</span>
             <input name="campaign_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
           </label>
-          <button id="generate-promo" class="button primary" type="submit">カット生成</button>
+          <div class="promo-actions">
+            <button id="generate-promo" class="button primary" type="submit" name="action" value="append">カット追加</button>
+            <button id="replace-promo" class="button secondary" type="submit" name="action" value="replace" disabled>再生成して置換</button>
+          </div>
         </form>
 
         <div id="promo-storyboard" class="promo-storyboard" hidden></div>
