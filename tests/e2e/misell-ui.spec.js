@@ -833,6 +833,42 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   expect(syncedAsset.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   expect(syncedAsset.equals(deviceAssetBytes)).toBeTruthy();
 
+  const contentResult = await fetch(`${cloudBase}/api/device/content-result`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${assetDeviceToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      status: "success",
+      content_id: "browser-content-with-asset",
+      playlist_version: "browser-content-with-asset-001",
+      message: "browser asset content applied"
+    })
+  });
+  expect(contentResult.status, await contentResult.text()).toBe(201);
+
+  const rollout = await authedRequest(cloudBase, "/api/admin/content-rollouts/browser-content-with-asset");
+  expect(rollout.status, rollout.text).toBe(200);
+  const assetDeviceRollout = rollout.json.rollout.devices.find((device) => device.device_id === "DEV-BROWSER-ASSET-001");
+  expect(assetDeviceRollout).toBeTruthy();
+  expect(assetDeviceRollout.rollout_status).toBe("ready");
+  expect(assetDeviceRollout.assets_ready).toBe(true);
+  expect(assetDeviceRollout.playlist_ready).toBe(true);
+
+  action("Open content rollout visibility and request asset resync");
+  await page.locator("#refresh").click();
+  await expect(page.locator("#content-manifests")).toContainText("browser-content-with-asset", { timeout: 5000 });
+  await page.locator('form.content-manifest-action[data-content-id="browser-content-with-asset"] .content-rollout-open').click();
+  await expect(page.locator("#content-rollout")).toContainText("DEV-BROWSER-ASSET-001", { timeout: 5000 });
+  await expect(page.locator("#content-rollout")).toContainText("反映済み");
+  await page.locator('#content-rollout .content-rollout-retry[data-device-id="DEV-BROWSER-ASSET-001"]').click();
+  await expect(page.locator("#content-rollout")).toContainText("同期中", { timeout: 5000 });
+  const rolloutAfterRetry = await authedRequest(cloudBase, "/api/admin/content-rollouts/browser-content-with-asset");
+  const retriedDeviceRollout = rolloutAfterRetry.json.rollout.devices.find((device) => device.device_id === "DEV-BROWSER-ASSET-001");
+  expect(retriedDeviceRollout.rollout_status).toBe("updating");
+  expect(retriedDeviceRollout.asset_states[0].status).toBe("checking");
+
   action("Reject missing cloud asset file through cloud admin API");
   const invalidCloudAsset = await authedRequest(cloudBase, "/api/admin/assets", {
     method: "POST",

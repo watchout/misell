@@ -486,6 +486,30 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
   }
 });
 
+app.get("/api/admin/content-rollouts/:content_id", requireAdminAuth, (req, res) => {
+  const rollout = getContentRollout(cleanId(req.params.content_id));
+  if (!rollout) {
+    res.status(404).json({ error: "Content manifest not found" });
+    return;
+  }
+  res.json({ ok: true, rollout });
+});
+
+app.post("/api/admin/content-rollouts/:content_id/devices/:device_id/retry", requireAdminAuth, (req, res) => {
+  const contentId = cleanId(req.params.content_id);
+  const deviceId = cleanId(req.params.device_id);
+  const result = retryContentRolloutDevice(contentId, deviceId);
+  if (!result) {
+    res.status(404).json({ error: "Content manifest or device not found" });
+    return;
+  }
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.status(201).json({ ok: true, rollout: result.rollout });
+});
+
 app.patch("/api/admin/devices/:device_id", requireAdminAuth, (req, res, next) => {
   try {
     const deviceId = cleanId(req.params.device_id);
@@ -2090,19 +2114,7 @@ function listDeviceAssetStates(deviceId, limit = 50) {
     WHERE device_id = ?
     ORDER BY updated_at DESC, id DESC
     LIMIT ?
-  `).all(cleanId(deviceId), boundedLimit).map((row) => ({
-    id: row.id,
-    device_id: cleanString(row.device_id),
-    content_id: cleanString(row.content_id),
-    asset_id: cleanString(row.asset_id),
-    status: cleanString(row.status),
-    target_path: cleanString(row.target_path),
-    local_path: cleanString(row.local_path),
-    sha256: cleanString(row.sha256),
-    size: asInteger(row.size),
-    message: cleanString(row.message),
-    updated_at: cleanString(row.updated_at)
-  }));
+  `).all(cleanId(deviceId), boundedLimit).map(publicDeviceAssetState);
 }
 
 function listCloudAssets(limit = 100) {
@@ -2478,6 +2490,173 @@ function getDeviceContentManifestAsset(device, assetId) {
   const normalizedAssetId = cleanId(assetId);
   const asset = (manifest.assets || []).find((item) => item.asset_id === normalizedAssetId);
   return asset ? { ...asset, content_id: manifest.content_id } : null;
+}
+
+function getContentRollout(contentId) {
+  const manifest = getContentManifest(contentId, true);
+  if (!manifest) return null;
+
+  const targetDevices = listDevices().filter((device) => (
+    device.release_channel === manifest.release_channel &&
+    !TERMINAL_STATUS.has(device.status)
+  ));
+  const states = listContentRolloutAssetStates(manifest.content_id);
+  const stateByDeviceAsset = new Map(states.map((state) => [`${state.device_id}:${state.asset_id}`, state]));
+  const devices = targetDevices.map((device) => buildContentRolloutDevice(manifest, device, stateByDeviceAsset));
+  const summary = summarizeContentRollout(manifest, devices);
+
+  return {
+    content_manifest: {
+      content_id: manifest.content_id,
+      playlist_version: manifest.playlist_version,
+      release_channel: manifest.release_channel,
+      status: manifest.status,
+      title: manifest.title,
+      notes: manifest.notes,
+      published_at: manifest.published_at,
+      updated_at: manifest.updated_at,
+      asset_count: manifest.assets.length,
+      item_count: Array.isArray(manifest.playlist?.items) ? manifest.playlist.items.length : 0
+    },
+    summary,
+    assets: manifest.assets,
+    devices
+  };
+}
+
+function retryContentRolloutDevice(contentId, deviceId) {
+  const manifest = getContentManifest(contentId, true);
+  const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(cleanId(deviceId));
+  if (!manifest || !device) return null;
+  if (device.release_channel !== manifest.release_channel) {
+    return { error: "Device is not in this content manifest release channel" };
+  }
+
+  const now = nowIso();
+  const retryStates = db.transaction(() => {
+    for (const asset of manifest.assets) {
+      db.prepare(`
+        INSERT INTO device_asset_states (
+          device_id, content_id, asset_id, status, target_path, local_path,
+          sha256, size, message, updated_at
+        ) VALUES (?, ?, ?, 'checking', ?, '', ?, ?, 'retry requested by admin', ?)
+        ON CONFLICT(device_id, content_id, asset_id) DO UPDATE SET
+          status = 'checking',
+          target_path = excluded.target_path,
+          local_path = '',
+          sha256 = excluded.sha256,
+          size = excluded.size,
+          message = excluded.message,
+          updated_at = excluded.updated_at
+      `).run(
+        device.device_id,
+        manifest.content_id,
+        asset.asset_id,
+        asset.target_path,
+        asset.sha256,
+        asset.size,
+        now
+      );
+    }
+    db.prepare("UPDATE devices SET updated_at = ? WHERE device_id = ?")
+      .run(now, device.device_id);
+  });
+  retryStates();
+
+  return { rollout: getContentRollout(manifest.content_id) };
+}
+
+function listContentRolloutAssetStates(contentId) {
+  return db.prepare(`
+    SELECT * FROM device_asset_states
+    WHERE content_id = ?
+    ORDER BY updated_at DESC, id DESC
+  `).all(cleanId(contentId)).map(publicDeviceAssetState);
+}
+
+function publicDeviceAssetState(row) {
+  return {
+    id: row.id,
+    device_id: cleanString(row.device_id),
+    content_id: cleanString(row.content_id),
+    asset_id: cleanString(row.asset_id),
+    status: cleanString(row.status),
+    target_path: cleanString(row.target_path),
+    local_path: cleanString(row.local_path),
+    sha256: cleanString(row.sha256),
+    size: asInteger(row.size),
+    message: cleanString(row.message),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function buildContentRolloutDevice(manifest, device, stateByDeviceAsset) {
+  const playlistReady = cleanString(device.playlist_version) === manifest.playlist_version;
+  const assetStates = manifest.assets.map((asset) => {
+    const state = stateByDeviceAsset.get(`${device.device_id}:${asset.asset_id}`);
+    const status = cleanString(state?.status) || "missing";
+    const shaMatches = status === "ready" && cleanString(state?.sha256) === asset.sha256;
+    return {
+      asset_id: asset.asset_id,
+      target_path: asset.target_path,
+      expected_sha256: asset.sha256,
+      expected_size: asset.size,
+      required: asset.required,
+      status,
+      ready: shaMatches,
+      sha256: cleanString(state?.sha256),
+      size: asInteger(state?.size),
+      local_path: cleanString(state?.local_path),
+      message: cleanString(state?.message),
+      updated_at: cleanString(state?.updated_at)
+    };
+  });
+  const failed = assetStates.some((state) => state.status === "failed");
+  const updating = assetStates.some((state) => state.status === "checking" || state.status === "downloading");
+  const requiredAssets = assetStates.filter((state) => state.required !== false);
+  const assetsReady = requiredAssets.every((state) => state.ready);
+  const rolloutStatus = failed
+    ? "failed"
+    : (updating ? "updating" : (playlistReady && assetsReady ? "ready" : "pending"));
+
+  return {
+    device_id: device.device_id,
+    device_name: cleanString(device.device_name),
+    tenant_id: cleanString(device.tenant_id),
+    store_id: cleanString(device.store_id),
+    location_id: cleanString(device.location_id),
+    screen_group_id: cleanString(device.screen_group_id),
+    effective_status: cleanString(device.effective_status || device.status),
+    release_channel: cleanString(device.release_channel),
+    current_playlist_version: cleanString(device.playlist_version),
+    target_playlist_version: manifest.playlist_version,
+    playlist_ready: playlistReady,
+    assets_ready: assetsReady,
+    rollout_status: rolloutStatus,
+    last_seen: cleanString(device.last_seen),
+    last_error: cleanString(device.last_error),
+    asset_states: assetStates
+  };
+}
+
+function summarizeContentRollout(manifest, devices) {
+  const summary = {
+    target_devices: devices.length,
+    ready: 0,
+    pending: 0,
+    updating: 0,
+    failed: 0,
+    playlist_ready: 0,
+    assets_ready: 0,
+    asset_count: manifest.assets.length,
+    required_asset_count: manifest.assets.filter((asset) => asset.required !== false).length
+  };
+  for (const device of devices) {
+    summary[device.rollout_status] = (summary[device.rollout_status] || 0) + 1;
+    if (device.playlist_ready) summary.playlist_ready += 1;
+    if (device.assets_ready) summary.assets_ready += 1;
+  }
+  return summary;
 }
 
 function publicContentManifest(row, includePlaylist = false) {
