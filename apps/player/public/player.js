@@ -57,6 +57,8 @@ function updatePreviewScale() {
   const availableHeight = Math.max(1, window.innerHeight - PREVIEW_PADDING);
   const scale = Math.min(1, availableWidth / PREVIEW_STAGE_WIDTH, availableHeight / PREVIEW_STAGE_HEIGHT);
   document.documentElement.style.setProperty("--preview-scale", String(scale));
+  document.documentElement.style.setProperty("--preview-frame-width", `${PREVIEW_STAGE_WIDTH * scale}px`);
+  document.documentElement.style.setProperty("--preview-frame-height", `${PREVIEW_STAGE_HEIGHT * scale}px`);
 }
 
 async function loadPlaylist({ reset }) {
