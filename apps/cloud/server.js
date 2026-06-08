@@ -7,12 +7,15 @@ const path = require("path");
 const Database = require("better-sqlite3");
 const express = require("express");
 const basicAuth = require("express-basic-auth");
+const multer = require("multer");
 
 const app = express();
 const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const DATA_DIR = runtimePath("MISELL_CLOUD_DATA_DIR", path.join(ROOT_DIR, "data"));
 const DB_PATH = runtimePath("DB_PATH", path.join(DATA_DIR, "misell-cloud.sqlite"));
+const CLOUD_ASSETS_DIR = runtimePath("MISELL_CLOUD_ASSETS_DIR", path.join(DATA_DIR, "assets"));
+const CLOUD_ASSET_UPLOAD_TMP_DIR = path.join(DATA_DIR, "tmp", "asset-uploads");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3200);
@@ -42,12 +45,44 @@ const CRITICAL_AFTER_MS = 10 * 60 * 1000;
 const DEVICE_LOG_MAX_ENTRIES = normalizedLimit(process.env.DEVICE_LOG_MAX_ENTRIES || process.env.MISELL_DEVICE_LOG_MAX_ENTRIES, 60, 1, 200);
 const DEVICE_LOG_ENTRY_MAX_BYTES = normalizedLimit(process.env.DEVICE_LOG_ENTRY_MAX_BYTES || process.env.MISELL_DEVICE_LOG_ENTRY_MAX_BYTES, 40000, 4096, 100000);
 const DEVICE_LOG_TOTAL_MAX_BYTES = normalizedLimit(process.env.DEVICE_LOG_TOTAL_MAX_BYTES || process.env.MISELL_DEVICE_LOG_TOTAL_MAX_BYTES, 500000, 65536, 900000);
+const CLOUD_ASSET_MAX_MB = normalizedLimit(process.env.CLOUD_ASSET_MAX_MB || process.env.MISELL_CLOUD_ASSET_MAX_MB, 500, 1, 2048);
+const CLOUD_ASSET_MAX_BYTES = CLOUD_ASSET_MAX_MB * 1024 * 1024;
+const CLOUD_ASSET_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".mp4", ".webm"]);
+const CLOUD_ASSET_TYPE_BY_EXTENSION = new Map([
+  [".jpg", "image"],
+  [".jpeg", "image"],
+  [".png", "image"],
+  [".mp4", "video"],
+  [".webm", "video"]
+]);
+const CLOUD_ASSET_MIME_BY_EXTENSION = new Map([
+  [".jpg", new Set(["image/jpeg"])],
+  [".jpeg", new Set(["image/jpeg"])],
+  [".png", new Set(["image/png"])],
+  [".mp4", new Set(["video/mp4"])],
+  [".webm", new Set(["video/webm", "video/x-matroska"])]
+]);
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(CLOUD_ASSETS_DIR, { recursive: true });
+fs.mkdirSync(CLOUD_ASSET_UPLOAD_TMP_DIR, { recursive: true });
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 initDb();
+
+const cloudAssetUpload = multer({
+  storage: multer.diskStorage({
+    destination: CLOUD_ASSET_UPLOAD_TMP_DIR,
+    filename(req, file, cb) {
+      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${path.extname(file.originalname || "").toLowerCase()}`);
+    }
+  }),
+  limits: {
+    fileSize: CLOUD_ASSET_MAX_BYTES,
+    files: 1
+  }
+});
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
@@ -183,6 +218,61 @@ app.get("/api/admin/device-log-bundles/:id", requireAdminAuth, (req, res) => {
     return;
   }
   res.json({ ok: true, log_bundle: bundle });
+});
+
+app.get("/api/admin/assets", requireAdminAuth, (req, res) => {
+  res.json({
+    ok: true,
+    max_upload_mb: CLOUD_ASSET_MAX_MB,
+    assets: listCloudAssets()
+  });
+});
+
+app.post("/api/admin/assets", requireAdminAuth, (req, res, next) => {
+  cloudAssetUpload.single("asset")(req, res, (error) => {
+    if (error) {
+      next(normalizeCloudAssetUploadError(error));
+      return;
+    }
+    try {
+      const asset = createCloudAsset(req.file, req.body || {});
+      res.status(201).json({ ok: true, asset });
+    } catch (createError) {
+      cleanupUploadedFile(req.file);
+      next(createError);
+    }
+  });
+});
+
+app.get("/api/admin/assets/:asset_id/download", requireAdminAuth, (req, res, next) => {
+  try {
+    const asset = getCloudAsset(cleanId(req.params.asset_id), { includeStoragePath: true });
+    if (!asset) {
+      res.status(404).json({ error: "Asset not found" });
+      return;
+    }
+    res.setHeader("Content-Type", asset.mime_type);
+    res.setHeader("Content-Length", String(asset.size));
+    res.setHeader("Content-Disposition", `attachment; filename="${asset.filename.replace(/"/g, "")}"`);
+    res.sendFile(asset.storage_path);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/assets/:asset_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const asset = getCloudAsset(cleanId(req.params.asset_id), { includeStoragePath: true });
+    if (!asset) {
+      res.status(404).json({ error: "Asset not found" });
+      return;
+    }
+    db.prepare("DELETE FROM cloud_assets WHERE asset_id = ?").run(asset.asset_id);
+    fs.rmSync(asset.storage_path, { force: true });
+    res.json({ ok: true, asset_id: asset.asset_id });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/admin/release-manifests", requireAdminAuth, (req, res) => {
@@ -1251,6 +1341,23 @@ function initDb() {
       published_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS cloud_assets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      label TEXT,
+      notes TEXT,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      storage_path TEXT NOT NULL,
+      download_path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -1265,6 +1372,8 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_release_manifests_status ON release_manifests(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_content_manifests_channel ON content_manifests(release_channel, status, published_at DESC);
     CREATE INDEX IF NOT EXISTS idx_content_manifests_status ON content_manifests(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cloud_assets_type ON cloud_assets(type, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cloud_assets_sha256 ON cloud_assets(sha256);
   `);
   migrateDevicesTable();
   db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
@@ -1758,6 +1867,174 @@ function getDeviceLogBundle(id) {
 function publicDeviceLogBundle(row) {
   const { raw_json, ...publicFields } = row;
   return publicFields;
+}
+
+function listCloudAssets(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM cloud_assets
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicCloudAsset);
+}
+
+function getCloudAsset(assetId, options = {}) {
+  const row = db.prepare("SELECT * FROM cloud_assets WHERE asset_id = ?").get(cleanId(assetId));
+  return row ? publicCloudAsset(row, options) : null;
+}
+
+function publicCloudAsset(row, options = {}) {
+  const asset = {
+    id: row.id,
+    asset_id: cleanString(row.asset_id),
+    type: cleanString(row.type),
+    filename: cleanString(row.filename),
+    original_name: cleanString(row.original_name),
+    label: cleanString(row.label),
+    notes: cleanString(row.notes),
+    mime_type: cleanString(row.mime_type),
+    size: asInteger(row.size) || 0,
+    sha256: cleanString(row.sha256),
+    download_path: cleanString(row.download_path),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+  if (options.includeStoragePath) {
+    asset.storage_path = normalizedCloudAssetPath(row.storage_path);
+  }
+  return asset;
+}
+
+function createCloudAsset(file, body) {
+  if (!file) {
+    throw requestError("asset file is required", 400);
+  }
+
+  const info = normalizeCloudAssetFile(file);
+  const bytes = fs.readFileSync(file.path);
+  validateCloudAssetHeader(info.extension, bytes);
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  const requestedAssetId = cleanId(body.asset_id || body.assetId);
+  const assetId = requestedAssetId || nextCloudAssetId(body.label || file.originalname);
+  if (!assetId) {
+    throw requestError("asset_id is required", 400);
+  }
+  const existing = db.prepare("SELECT asset_id FROM cloud_assets WHERE asset_id = ?").get(assetId);
+  if (existing) {
+    throw requestError("Asset already exists", 409);
+  }
+
+  const filename = `${assetId}${info.extension}`;
+  const storagePath = normalizedCloudAssetPath(path.join(CLOUD_ASSETS_DIR, filename));
+  if (fs.existsSync(storagePath)) {
+    throw requestError("Asset storage file already exists", 409);
+  }
+
+  fs.renameSync(file.path, storagePath);
+
+  const now = nowIso();
+  try {
+    fs.chmodSync(storagePath, 0o644);
+    db.prepare(`
+      INSERT INTO cloud_assets (
+        asset_id, type, filename, original_name, label, notes, mime_type,
+        size, sha256, storage_path, download_path, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      assetId,
+      info.type,
+      filename,
+      cleanString(file.originalname).slice(0, 240) || filename,
+      cleanString(body.label || body.name).slice(0, 160),
+      cleanString(body.notes).slice(0, 1000),
+      info.mimeType,
+      file.size,
+      sha256,
+      storagePath,
+      `/api/admin/assets/${encodeURIComponent(assetId)}/download`,
+      now,
+      now
+    );
+  } catch (error) {
+    fs.rmSync(storagePath, { force: true });
+    throw error;
+  }
+
+  return getCloudAsset(assetId);
+}
+
+function normalizeCloudAssetFile(file) {
+  const extension = path.extname(file.originalname || file.filename || "").toLowerCase();
+  if (!CLOUD_ASSET_EXTENSIONS.has(extension)) {
+    throw requestError("asset must be a jpg, png, mp4, or webm file", 400);
+  }
+  const allowedMimes = CLOUD_ASSET_MIME_BY_EXTENSION.get(extension);
+  const mimeType = cleanString(file.mimetype).toLowerCase();
+  if (!allowedMimes?.has(mimeType)) {
+    throw requestError(`asset MIME type must match ${extension}`, 400);
+  }
+  return {
+    extension,
+    mimeType,
+    type: CLOUD_ASSET_TYPE_BY_EXTENSION.get(extension) || "file"
+  };
+}
+
+function validateCloudAssetHeader(extension, bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 4) {
+    throw requestError("asset file is empty or invalid", 400);
+  }
+  if (extension === ".png") {
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (bytes.length < pngSignature.length || !bytes.subarray(0, pngSignature.length).equals(pngSignature)) {
+      throw requestError("png asset has an invalid file signature", 400);
+    }
+    return;
+  }
+  if (extension === ".jpg" || extension === ".jpeg") {
+    if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) {
+      throw requestError("jpeg asset has an invalid file signature", 400);
+    }
+    return;
+  }
+  if (extension === ".mp4") {
+    if (bytes.length < 12 || bytes.toString("ascii", 4, 8) !== "ftyp") {
+      throw requestError("mp4 asset has an invalid file signature", 400);
+    }
+    return;
+  }
+  if (extension === ".webm") {
+    if (bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) {
+      throw requestError("webm asset has an invalid file signature", 400);
+    }
+  }
+}
+
+function nextCloudAssetId(seed = "") {
+  const base = cleanId(seed || "asset").slice(0, 48) || "asset";
+  return cleanId(`${base}-${compactTimestamp()}-${crypto.randomBytes(4).toString("hex")}`);
+}
+
+function normalizedCloudAssetPath(value) {
+  const resolved = path.resolve(value);
+  const root = path.resolve(CLOUD_ASSETS_DIR);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw requestError("asset storage path is invalid", 400);
+  }
+  return resolved;
+}
+
+function cleanupUploadedFile(file) {
+  if (file?.path) {
+    fs.rmSync(file.path, { force: true });
+  }
+}
+
+function normalizeCloudAssetUploadError(error) {
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    return requestError(`asset must be ${CLOUD_ASSET_MAX_MB} MB or less`, 413);
+  }
+  return requestError(error.message || "asset upload failed", error.status || 400);
 }
 
 function listReleaseManifests(limit = 100) {
@@ -2287,6 +2564,12 @@ function hashDeviceToken(token) {
     .createHash("sha256")
     .update(`${DEVICE_TOKEN_PEPPER}:${token}`)
     .digest("hex");
+}
+
+function requestError(message, status = 400) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 function runtimePath(envName, fallbackPath) {

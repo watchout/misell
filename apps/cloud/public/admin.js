@@ -2,6 +2,7 @@
   const state = {
     devices: [],
     summary: null,
+    assets: [],
     releaseManifests: [],
     contentManifests: [],
     issuedToken: null
@@ -67,6 +68,7 @@
     notifications: document.getElementById("notifications"),
     releaseManifests: document.getElementById("release-manifests"),
     contentManifests: document.getElementById("content-manifests"),
+    assets: document.getElementById("assets"),
     logBundles: document.getElementById("log-bundles"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
@@ -87,17 +89,19 @@
   }
 
   async function loadDashboard() {
-    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, logBundles] = await Promise.all([
+    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, assets, logBundles] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/alerts"),
       fetchJson("/api/admin/alert-notifications"),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
+      fetchJson("/api/admin/assets"),
       fetchJson("/api/admin/device-log-bundles")
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
+    state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
     renderSummary(summary);
@@ -106,6 +110,7 @@
     renderNotifications(notifications);
     renderReleaseManifests(state.releaseManifests);
     renderContentManifests(state.contentManifests);
+    renderAssets(state.assets, assets.max_upload_mb);
     renderLogBundles(logBundles.log_bundles || []);
     renderTokenResult();
   }
@@ -655,6 +660,97 @@
       window.alert(error.message || "content manifestの保存に失敗しました。");
       button.disabled = false;
       button.textContent = "保存";
+    }
+  }
+
+  function renderAssets(assets, maxUploadMb) {
+    if (!els.assets) return;
+    els.assets.innerHTML = `
+      <form class="asset-upload">
+        <input name="asset_id" type="text" placeholder="Asset ID" aria-label="Asset ID">
+        <input name="label" type="text" placeholder="Label" aria-label="Label">
+        <input name="notes" type="text" placeholder="Notes" aria-label="Notes">
+        <input name="asset" type="file" accept="image/png,image/jpeg,video/mp4,video/webm" aria-label="Cloud asset" required>
+        <button type="submit">アップロード</button>
+        <small>上限 ${formatNumber(maxUploadMb)} MB / jpg, png, mp4, webm</small>
+      </form>
+      ${assets.length === 0 ? `<p class="empty">Cloud素材はまだありません。</p>` : `
+        <table class="assets-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Asset</th>
+              <th>Size</th>
+              <th>SHA-256</th>
+              <th>Updated</th>
+              <th>運用</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${assets.slice(0, 50).map(renderAssetRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+    els.assets.querySelector(".asset-upload")?.addEventListener("submit", handleAssetUpload);
+    els.assets.querySelectorAll(".asset-delete").forEach((button) => {
+      button.addEventListener("click", handleAssetDelete);
+    });
+  }
+
+  function renderAssetRow(asset) {
+    return `
+      <tr>
+        <td><span class="update-status update-status-${asset.type === "video" ? "pending" : "success"}">${escapeHtml(asset.type || "")}</span></td>
+        <td>
+          ${escapeHtml(asset.asset_id || "")}
+          <small>${escapeHtml(asset.label || asset.original_name || "")}</small>
+          <small>${escapeHtml(asset.mime_type || "")}</small>
+        </td>
+        <td>${formatBytes(asset.size)}</td>
+        <td><code>${escapeHtml((asset.sha256 || "").slice(0, 16))}</code><small>${escapeHtml(asset.filename || "")}</small></td>
+        <td>${formatTime(asset.updated_at || asset.created_at)}</td>
+        <td>
+          <a href="${escapeHtml(asset.download_path || "#")}">Download</a>
+          <button class="danger asset-delete" type="button" data-asset-id="${escapeHtml(asset.asset_id || "")}">削除</button>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function handleAssetUpload(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const formData = new FormData(form);
+    button.disabled = true;
+    button.textContent = "アップロード中";
+    try {
+      await fetchJson("/api/admin/assets", {
+        method: "POST",
+        body: formData
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "素材アップロードに失敗しました。");
+      button.disabled = false;
+      button.textContent = "アップロード";
+    }
+  }
+
+  async function handleAssetDelete(event) {
+    const button = event.currentTarget;
+    const assetId = button.dataset.assetId;
+    if (!window.confirm(`${assetId} を削除します。`)) return;
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/admin/assets/${encodeURIComponent(assetId)}`, {
+        method: "DELETE"
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "素材削除に失敗しました。");
+      button.disabled = false;
     }
   }
 
