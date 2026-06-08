@@ -133,6 +133,22 @@ post_result() {
     }
 }
 
+sync_assets_from_policy() {
+  if [[ "${MISELL_SKIP_ASSET_SYNC:-0}" == "1" ]]; then
+    echo "Asset sync skipped by MISELL_SKIP_ASSET_SYNC=1."
+    return 0
+  fi
+  if [[ ! -x "${APP_DIR}/scripts/sync-assets.sh" ]]; then
+    echo "sync-assets.sh is not installed; skipping asset sync."
+    return 0
+  fi
+  local args=()
+  if [[ "${APPLY}" != "1" ]]; then
+    args+=(--dry-run)
+  fi
+  "${APP_DIR}/scripts/sync-assets.sh" "${args[@]}"
+}
+
 derive_content_urls
 
 if [[ -z "${CONTENT_URL}" ]]; then
@@ -181,6 +197,13 @@ echo "required=${REQUIRED}"
 echo "source=${SOURCE:-<none>}"
 echo "content_id=${CONTENT_ID:-<none>}"
 echo "playlist_version=${PLAYLIST_VERSION:-<none>}"
+
+if [[ "${SOURCE}" == "content_manifest" ]]; then
+  if ! sync_assets_from_policy; then
+    post_result "failed" "asset sync failed before content apply"
+    exit 1
+  fi
+fi
 
 if [[ "${REQUIRED}" != "1" ]]; then
   echo "No content sync required."

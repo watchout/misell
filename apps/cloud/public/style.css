@@ -311,6 +311,46 @@ td small {
   width: 100%;
 }
 
+.asset-picker {
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px 10px;
+}
+
+.asset-picker legend {
+  color: #52616f;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 4px;
+}
+
+.asset-picker label {
+  align-items: center;
+  background: #f8fafb;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  display: grid;
+  gap: 2px 6px;
+  grid-template-columns: auto auto;
+  min-height: 42px;
+  padding: 6px 8px;
+}
+
+.asset-picker input {
+  margin: 0;
+  min-height: auto;
+  padding: 0;
+}
+
+.asset-picker small {
+  color: #697986;
+  grid-column: 2;
+}
+
 .content-manifests-table {
   table-layout: fixed;
 }

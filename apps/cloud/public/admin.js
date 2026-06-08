@@ -557,6 +557,7 @@
           <button type="submit">作成</button>
         </div>
         <textarea name="playlist_json" spellcheck="false" aria-label="Playlist JSON">${escapeHtml(JSON.stringify(defaultPlaylistTemplate(), null, 2))}</textarea>
+        ${renderContentManifestAssetPicker()}
       </form>
       ${contentManifests.length === 0 ? `<p class="empty">content manifestはまだありません。</p>` : `
         <table class="content-manifests-table">
@@ -567,6 +568,7 @@
               <th>Content</th>
               <th>Playlist</th>
               <th>Items</th>
+              <th>Assets</th>
               <th>Published</th>
               <th>運用</th>
             </tr>
@@ -586,6 +588,7 @@
 
   function renderContentManifestRow(manifest) {
     const itemCount = Array.isArray(manifest.playlist?.items) ? manifest.playlist.items.length : "";
+    const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
     return `
       <tr>
         <td>
@@ -597,6 +600,7 @@
         <td>${escapeHtml(manifest.content_id || "")}<small>${escapeHtml(manifest.title || manifest.notes || "")}</small></td>
         <td>${escapeHtml(manifest.playlist_version || "")}</td>
         <td>${formatNumber(itemCount)}</td>
+        <td>${formatNumber(assets.length)}<small>${escapeHtml(assets.map((asset) => asset.asset_id).join(", "))}</small></td>
         <td>${formatTime(manifest.published_at || manifest.updated_at)}</td>
         <td>
           <form class="content-manifest-action" data-content-id="${escapeHtml(manifest.content_id || "")}">
@@ -609,6 +613,24 @@
           </form>
         </td>
       </tr>
+    `;
+  }
+
+  function renderContentManifestAssetPicker() {
+    if (!state.assets.length) {
+      return `<p class="empty">紐づけ可能なCloud素材はまだありません。</p>`;
+    }
+    return `
+      <fieldset class="asset-picker">
+        <legend>必要素材</legend>
+        ${state.assets.slice(0, 20).map((asset) => `
+          <label>
+            <input type="checkbox" name="asset_ids" value="${escapeHtml(asset.asset_id || "")}">
+            <span>${escapeHtml(asset.asset_id || "")}</span>
+            <small>${escapeHtml(asset.type || "")} / ${formatBytes(asset.size)}</small>
+          </label>
+        `).join("")}
+      </fieldset>
     `;
   }
 
@@ -627,7 +649,8 @@
         release_channel: form.elements.release_channel.value,
         status: form.elements.status.value,
         notes: form.elements.notes.value,
-        playlist: JSON.parse(form.elements.playlist_json.value)
+        playlist: JSON.parse(form.elements.playlist_json.value),
+        assets: selectedContentManifestAssets(form)
       };
       await fetchJson("/api/admin/content-manifests", {
         method: "POST",
@@ -640,6 +663,12 @@
       button.disabled = false;
       button.textContent = "作成";
     }
+  }
+
+  function selectedContentManifestAssets(form) {
+    return Array.from(form.querySelectorAll("input[name='asset_ids']:checked")).map((input) => ({
+      asset_id: input.value
+    }));
   }
 
   async function handleContentManifestUpdate(event) {
