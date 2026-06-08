@@ -358,8 +358,60 @@ td small {
 .content-manifest-action {
   display: grid;
   gap: 6px;
-  grid-template-columns: minmax(92px, 1fr) auto;
-  min-width: 170px;
+  grid-template-columns: minmax(92px, 1fr) auto auto;
+  min-width: 250px;
+}
+
+.content-rollout-panel {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  margin-top: 10px;
+  min-width: 1040px;
+  padding: 10px;
+}
+
+.content-rollout-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.content-rollout-header strong,
+.content-rollout-header small {
+  display: block;
+}
+
+.content-rollout-header small {
+  color: #697986;
+  margin-top: 3px;
+}
+
+.rollout-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.rollout-summary span {
+  background: #eef2f5;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  color: #52616f;
+  font-size: 12px;
+  min-height: 28px;
+  padding: 6px 8px;
+}
+
+.content-rollout-table {
+  table-layout: fixed;
+}
+
+.content-rollout-table button {
+  min-height: 32px;
 }
 
 .asset-upload {

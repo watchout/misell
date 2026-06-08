@@ -5,6 +5,7 @@
     assets: [],
     releaseManifests: [],
     contentManifests: [],
+    contentRollout: null,
     issuedToken: null
   };
 
@@ -61,6 +62,13 @@
     failed: "失敗"
   };
 
+  const ROLLOUT_STATUS_LABELS = {
+    ready: "反映済み",
+    pending: "未反映",
+    updating: "同期中",
+    failed: "失敗"
+  };
+
   const els = {
     summary: document.getElementById("summary"),
     devices: document.getElementById("devices"),
@@ -89,7 +97,8 @@
   }
 
   async function loadDashboard() {
-    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, assets, logBundles] = await Promise.all([
+    const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
+    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/alerts"),
@@ -97,13 +106,17 @@
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/assets"),
-      fetchJson("/api/admin/device-log-bundles")
+      fetchJson("/api/admin/device-log-bundles"),
+      activeRolloutContentId
+        ? fetchJson(`/api/admin/content-rollouts/${encodeURIComponent(activeRolloutContentId)}`).catch(() => null)
+        : Promise.resolve(null)
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
+    state.contentRollout = contentRollout?.rollout || null;
     renderSummary(summary);
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
@@ -578,11 +591,18 @@
           </tbody>
         </table>
       `}
+      ${state.contentRollout ? renderContentRollout(state.contentRollout) : ""}
     `;
 
     els.contentManifests.querySelector(".content-manifest-create")?.addEventListener("submit", handleContentManifestCreate);
     els.contentManifests.querySelectorAll(".content-manifest-action").forEach((form) => {
       form.addEventListener("submit", handleContentManifestUpdate);
+    });
+    els.contentManifests.querySelectorAll(".content-rollout-open").forEach((button) => {
+      button.addEventListener("click", handleContentRolloutOpen);
+    });
+    els.contentManifests.querySelectorAll(".content-rollout-retry").forEach((button) => {
+      button.addEventListener("click", handleContentRolloutRetry);
     });
   }
 
@@ -610,7 +630,83 @@
               )).join("")}
             </select>
             <button type="submit">保存</button>
+            <button class="secondary content-rollout-open" type="button" data-content-id="${escapeHtml(manifest.content_id || "")}">状況</button>
           </form>
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderContentRollout(rollout) {
+    const manifest = rollout.content_manifest || {};
+    const summary = rollout.summary || {};
+    const devices = Array.isArray(rollout.devices) ? rollout.devices : [];
+    return `
+      <section id="content-rollout" class="content-rollout-panel">
+        <div class="content-rollout-header">
+          <div>
+            <strong>${escapeHtml(manifest.content_id || "")}</strong>
+            <small>${escapeHtml(manifest.release_channel || "")} / ${escapeHtml(manifest.playlist_version || "")}</small>
+          </div>
+          <div class="rollout-summary">
+            <span>対象 ${formatNumber(summary.target_devices || 0)}</span>
+            <span>反映済み ${formatNumber(summary.ready || 0)}</span>
+            <span>同期中 ${formatNumber(summary.updating || 0)}</span>
+            <span>未反映 ${formatNumber(summary.pending || 0)}</span>
+            <span>失敗 ${formatNumber(summary.failed || 0)}</span>
+            <span>素材ready ${formatNumber(summary.assets_ready || 0)}</span>
+          </div>
+        </div>
+        ${devices.length === 0 ? `<p class="empty">対象端末はありません。</p>` : `
+          <table class="content-rollout-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>端末</th>
+                <th>Playlist</th>
+                <th>Assets</th>
+                <th>最終状態</th>
+                <th>運用</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${devices.map((device) => renderContentRolloutDeviceRow(manifest, device)).join("")}
+            </tbody>
+          </table>
+        `}
+      </section>
+    `;
+  }
+
+  function renderContentRolloutDeviceRow(manifest, device) {
+    const assetStates = Array.isArray(device.asset_states) ? device.asset_states : [];
+    return `
+      <tr>
+        <td>
+          <span class="update-status update-status-${escapeAttr(rolloutStatusClass(device.rollout_status))}">
+            ${escapeHtml(ROLLOUT_STATUS_LABELS[device.rollout_status] || device.rollout_status || "")}
+          </span>
+        </td>
+        <td>
+          ${escapeHtml(device.device_id || "")}
+          <small>${escapeHtml(device.store_id || "")} / ${escapeHtml(device.effective_status || "")}</small>
+        </td>
+        <td>
+          ${device.playlist_ready ? "OK" : "待機"}
+          <small>${escapeHtml(device.current_playlist_version || "")} -> ${escapeHtml(device.target_playlist_version || "")}</small>
+        </td>
+        <td>
+          ${device.assets_ready ? "OK" : "待機"}
+          ${assetStates.length === 0 ? `<small>必要素材なし</small>` : assetStates.map((asset) => `
+            <small>${escapeHtml(asset.asset_id || "")}: ${escapeHtml(asset.status || "")}${asset.ready ? " / ready" : ""}</small>
+          `).join("")}
+        </td>
+        <td>
+          ${formatTime(device.last_seen)}
+          <small>${escapeHtml(device.last_error || assetStates.find((asset) => asset.message)?.message || "")}</small>
+        </td>
+        <td>
+          <button class="secondary content-rollout-retry" type="button" data-content-id="${escapeHtml(manifest.content_id || "")}" data-device-id="${escapeHtml(device.device_id || "")}">再同期</button>
         </td>
       </tr>
     `;
@@ -689,6 +785,44 @@
       window.alert(error.message || "content manifestの保存に失敗しました。");
       button.disabled = false;
       button.textContent = "保存";
+    }
+  }
+
+  async function handleContentRolloutOpen(event) {
+    const button = event.currentTarget;
+    const contentId = button.dataset.contentId;
+    button.disabled = true;
+    button.textContent = "読込中";
+    try {
+      const result = await fetchJson(`/api/admin/content-rollouts/${encodeURIComponent(contentId)}`);
+      state.contentRollout = result.rollout;
+      renderContentManifests(state.contentManifests);
+    } catch (error) {
+      window.alert(error.message || "反映状況の取得に失敗しました。");
+      button.disabled = false;
+      button.textContent = "状況";
+    }
+  }
+
+  async function handleContentRolloutRetry(event) {
+    const button = event.currentTarget;
+    const contentId = button.dataset.contentId;
+    const deviceId = button.dataset.deviceId;
+    if (!window.confirm(`${deviceId} の素材同期状態を再同期待ちへ戻します。`)) return;
+    button.disabled = true;
+    button.textContent = "処理中";
+    try {
+      const result = await fetchJson(`/api/admin/content-rollouts/${encodeURIComponent(contentId)}/devices/${encodeURIComponent(deviceId)}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      state.contentRollout = result.rollout;
+      renderContentManifests(state.contentManifests);
+    } catch (error) {
+      window.alert(error.message || "再同期の設定に失敗しました。");
+      button.disabled = false;
+      button.textContent = "再同期";
     }
   }
 
@@ -925,6 +1059,13 @@
     if (status === "active") return "success";
     if (status === "retired") return "idle";
     return "pending";
+  }
+
+  function rolloutStatusClass(status) {
+    if (status === "ready") return "success";
+    if (status === "failed") return "failed";
+    if (status === "updating") return "pending";
+    return "idle";
   }
 
   function escapeHtml(value) {
