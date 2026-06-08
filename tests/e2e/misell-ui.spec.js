@@ -242,6 +242,31 @@ async function authedRequest(baseUrl, endpoint, options = {}) {
   return { ok: res.ok, status: res.status, text, json };
 }
 
+async function runCommand(command, args = [], options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || repoRoot,
+      env: { ...process.env, ...(options.env || {}) },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, options.timeoutMs || 30000);
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+}
+
 async function expectPreviewStageFitsViewport(page) {
   await page.waitForFunction(() => {
     const stage = document.getElementById("stage");
@@ -319,6 +344,54 @@ async function seedCloudDevice() {
     })
   });
   expect(heartbeat.status, await heartbeat.text()).toBe(200);
+}
+
+async function createCloudDeviceWithHeartbeat(deviceId, playlistVersion) {
+  const create = await authedRequest(cloudBase, "/api/admin/devices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      tenant_name: "Browser Tenant",
+      store_id: "STO-BROWSER",
+      store_name: "Browser Store",
+      location_id: "LOC-BROWSER",
+      location_name: "Browser Location",
+      screen_group_id: "SG-BROWSER",
+      screen_group_name: "Browser Screen Group",
+      device_id: deviceId,
+      device_name: deviceId.toLowerCase(),
+      release_channel: "stable",
+      notes: "seeded for asset sync evidence"
+    })
+  });
+  expect(create.status, create.text).toBe(201);
+  const token = create.json.device_token;
+  const heartbeat = await fetch(`${cloudBase}/api/device/heartbeat`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      location_id: "LOC-BROWSER",
+      screen_group_id: "SG-BROWSER",
+      device_id: deviceId,
+      device_name: deviceId.toLowerCase(),
+      status: "online",
+      app_version: "0.1.0",
+      release_id: "browser-ui",
+      release_channel: "stable",
+      playlist_version: playlistVersion,
+      disk_free_mb: 64000,
+      memory_used_percent: 12,
+      current_item_id: "asset-sync-seed"
+    })
+  });
+  expect(heartbeat.status, await heartbeat.text()).toBe(200);
+  return token;
 }
 
 test.beforeAll(async () => {
@@ -672,6 +745,93 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   const cloudAssetImage = await cloudAssetImageResponse.body();
   expect(cloudAssetImage.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-assets.png"), fullPage: true });
+
+  action("Create active content manifest with required cloud asset");
+  const cloudAssetTargetPath = "/assets/images/browser-cloud-asset.png";
+  const assetContent = await authedRequest(cloudBase, "/api/admin/content-manifests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content_id: "browser-content-with-asset",
+      playlist_version: "browser-content-with-asset-001",
+      release_channel: "stable",
+      status: "active",
+      title: "Browser asset content",
+      notes: "browser asset sync evidence",
+      playlist: {
+        version: 1,
+        playlist_version: "browser-content-with-asset-001",
+        updatedAt: new Date().toISOString(),
+        items: [
+          {
+            id: "browser-cloud-asset-wide",
+            item_id: "browser-cloud-asset-wide",
+            name: "Browser cloud asset wide",
+            enabled: true,
+            layout: "wide",
+            duration: 2,
+            start: "",
+            end: "",
+            days_of_week: [],
+            campaign_id: "cmp-browser-cloud-asset",
+            asset_id: "browser-cloud-asset",
+            priority: 0,
+            left: "",
+            center: "",
+            right: "",
+            wide: cloudAssetTargetPath
+          }
+        ]
+      },
+      assets: [
+        {
+          asset_id: "browser-cloud-asset",
+          target_path: cloudAssetTargetPath
+        }
+      ]
+    })
+  });
+  expect(assetContent.status, assetContent.text).toBe(201);
+  expect(assetContent.json.content_manifest.assets).toHaveLength(1);
+  expect(assetContent.json.content_manifest.assets[0].target_path).toBe(cloudAssetTargetPath);
+
+  action("Fetch content policy, device asset download, and run sync-assets.sh");
+  const assetDeviceToken = await createCloudDeviceWithHeartbeat("DEV-BROWSER-ASSET-001", "browser-ui-old");
+  const contentPolicy = await fetch(`${cloudBase}/api/device/content-policy`, {
+    headers: { Authorization: `Bearer ${assetDeviceToken}` }
+  });
+  expect(contentPolicy.status, await contentPolicy.clone().text()).toBe(200);
+  const contentPolicyJson = await contentPolicy.json();
+  expect(contentPolicyJson.content.required).toBe(true);
+  expect(contentPolicyJson.content.assets).toHaveLength(1);
+  const policyAsset = contentPolicyJson.content.assets[0];
+  expect(policyAsset.asset_id).toBe("browser-cloud-asset");
+  expect(policyAsset.download_url).toBe("/api/device/assets/browser-cloud-asset/download");
+  expect(policyAsset.sha256).toBe(uploadedAsset.sha256);
+  const deviceAssetDownload = await fetch(`${cloudBase}${policyAsset.download_url}`, {
+    headers: { Authorization: `Bearer ${assetDeviceToken}` }
+  });
+  expect(deviceAssetDownload.status, await deviceAssetDownload.clone().text()).toBe(200);
+  expect(deviceAssetDownload.headers.get("content-type")).toContain("image/png");
+  const deviceAssetBytes = Buffer.from(await deviceAssetDownload.arrayBuffer());
+  expect(deviceAssetBytes.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+  const syncedAssetsDir = path.join(tmpDir, "synced-cloud-assets");
+  const assetSync = await runCommand(path.join(repoRoot, "apps/player/scripts/sync-assets.sh"), [], {
+    env: {
+      MISELL_HOME: path.join(repoRoot, "apps/player"),
+      MISELL_ENV_FILE: path.join(tmpDir, "missing-asset-sync-env"),
+      MISELL_HEARTBEAT_URL: `${cloudBase}/api/device/heartbeat`,
+      MISELL_DEVICE_TOKEN: assetDeviceToken,
+      MISELL_ASSETS_DIR: syncedAssetsDir,
+      MISELL_ASSET_SYNC_LOCK_FILE: path.join(tmpDir, "asset-sync.lock")
+    },
+    timeoutMs: 45000
+  });
+  expect(assetSync.code, `${assetSync.stdout}\n${assetSync.stderr}`).toBe(0);
+  const syncedAsset = await fsp.readFile(path.join(syncedAssetsDir, "images", "browser-cloud-asset.png"));
+  expect(syncedAsset.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  expect(syncedAsset.equals(deviceAssetBytes)).toBeTruthy();
 
   action("Reject missing cloud asset file through cloud admin API");
   const invalidCloudAsset = await authedRequest(cloudBase, "/api/admin/assets", {

@@ -36,6 +36,7 @@ const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"])
 const RELEASE_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const CONTENT_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
+const ASSET_SYNC_RESULT_STATUS = new Set(["checking", "downloading", "ready", "failed"]);
 const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
 const WARNING_DISK_MB = 10240;
 const CRITICAL_DISK_MB = 2048;
@@ -267,6 +268,14 @@ app.delete("/api/admin/assets/:asset_id", requireAdminAuth, (req, res, next) => 
       res.status(404).json({ error: "Asset not found" });
       return;
     }
+    const usage = listCloudAssetManifestUsage(asset.asset_id);
+    if (usage.length > 0) {
+      res.status(409).json({
+        error: "Asset is used by content manifests",
+        content_manifests: usage
+      });
+      return;
+    }
     db.prepare("DELETE FROM cloud_assets WHERE asset_id = ?").run(asset.asset_id);
     fs.rmSync(asset.storage_path, { force: true });
     res.json({ ok: true, asset_id: asset.asset_id });
@@ -409,6 +418,7 @@ app.post("/api/admin/content-manifests", requireAdminAuth, (req, res, next) => {
         now,
         input.status === "active" ? now : null
       );
+      replaceContentManifestAssets(input.content_id, input.assets, now);
     });
     createManifest();
 
@@ -461,6 +471,9 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
         publishedAt,
         contentId
       );
+      if (input.assets_supplied) {
+        replaceContentManifestAssets(contentId, input.assets, now);
+      }
     });
     updateManifest();
 
@@ -939,6 +952,28 @@ app.get("/api/device/content-policy", requireDeviceAuth, (req, res) => {
   });
 });
 
+app.get("/api/device/assets/:asset_id/download", requireDeviceAuth, (req, res, next) => {
+  try {
+    const assetId = cleanId(req.params.asset_id);
+    const manifestAsset = getDeviceContentManifestAsset(req.device, assetId);
+    if (!manifestAsset) {
+      res.status(404).json({ error: "Asset is not available for this device" });
+      return;
+    }
+    const asset = getCloudAsset(assetId, { includeStoragePath: true });
+    if (!asset) {
+      res.status(404).json({ error: "Asset not found" });
+      return;
+    }
+    res.setHeader("Content-Type", asset.mime_type);
+    res.setHeader("Content-Length", String(asset.size));
+    res.setHeader("Content-Disposition", `attachment; filename="${asset.filename.replace(/"/g, "")}"`);
+    res.sendFile(asset.storage_path);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/device/content-result", requireDeviceAuth, (req, res, next) => {
   try {
     const payload = req.body || {};
@@ -965,6 +1000,68 @@ app.post("/api/device/content-result", requireDeviceAuth, (req, res, next) => {
       ok: true,
       received_at: now,
       content: buildDeviceContentPolicy(db.prepare("SELECT * FROM devices WHERE device_id = ?").get(req.device.device_id))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/device/asset-result", requireDeviceAuth, (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    assertPayloadDeviceMatches(req.device, payload);
+    const input = normalizeDeviceAssetResult(payload);
+    const manifestAsset = getDeviceContentManifestAsset(req.device, input.asset_id);
+    if (!manifestAsset) {
+      res.status(404).json({ error: "Asset is not available for this device" });
+      return;
+    }
+
+    const now = nowIso();
+    const contentId = input.content_id || manifestAsset.content_id;
+    db.prepare(`
+      INSERT INTO device_asset_states (
+        device_id, content_id, asset_id, status, target_path, local_path,
+        sha256, size, message, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(device_id, content_id, asset_id) DO UPDATE SET
+        status = excluded.status,
+        target_path = excluded.target_path,
+        local_path = excluded.local_path,
+        sha256 = excluded.sha256,
+        size = excluded.size,
+        message = excluded.message,
+        updated_at = excluded.updated_at
+    `).run(
+      req.device.device_id,
+      contentId,
+      input.asset_id,
+      input.status,
+      input.target_path || manifestAsset.target_path,
+      input.local_path,
+      input.sha256,
+      input.size,
+      input.message,
+      now
+    );
+
+    db.prepare("UPDATE devices SET updated_at = ? WHERE device_id = ?")
+      .run(now, req.device.device_id);
+
+    if (input.status === "failed") {
+      const message = input.message || `Asset sync failed: ${input.asset_id}`;
+      db.prepare("UPDATE devices SET last_error = ?, updated_at = ? WHERE device_id = ?")
+        .run(message, now, req.device.device_id);
+      openAlert(req.device.device_id, req.device.tenant_id, req.device.store_id, "warning", "asset_sync_failed", message, now, payload);
+    } else if (input.status === "ready") {
+      resolveAlert(req.device.device_id, "asset_sync_failed", now);
+    }
+
+    const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(req.device.device_id);
+    res.status(201).json({
+      ok: true,
+      received_at: now,
+      content: buildDeviceContentPolicy(device)
     });
   } catch (error) {
     next(error);
@@ -1358,6 +1455,34 @@ function initDb() {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS content_manifest_assets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      target_path TEXT NOT NULL,
+      required INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(content_id, asset_id),
+      FOREIGN KEY(content_id) REFERENCES content_manifests(content_id) ON DELETE CASCADE,
+      FOREIGN KEY(asset_id) REFERENCES cloud_assets(asset_id) ON DELETE RESTRICT
+    );
+
+    CREATE TABLE IF NOT EXISTS device_asset_states (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id TEXT NOT NULL,
+      content_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      target_path TEXT,
+      local_path TEXT,
+      sha256 TEXT,
+      size INTEGER,
+      message TEXT,
+      updated_at TEXT NOT NULL,
+      UNIQUE(device_id, content_id, asset_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -1374,6 +1499,10 @@ function initDb() {
     CREATE INDEX IF NOT EXISTS idx_content_manifests_status ON content_manifests(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cloud_assets_type ON cloud_assets(type, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cloud_assets_sha256 ON cloud_assets(sha256);
+    CREATE INDEX IF NOT EXISTS idx_content_manifest_assets_content ON content_manifest_assets(content_id);
+    CREATE INDEX IF NOT EXISTS idx_content_manifest_assets_asset ON content_manifest_assets(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_device_asset_states_device ON device_asset_states(device_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_device_asset_states_asset ON device_asset_states(asset_id, updated_at DESC);
   `);
   migrateDevicesTable();
   db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
@@ -1559,6 +1688,10 @@ function normalizeContentManifestInput(input, existing = {}) {
     throw new Error("content_id is required");
   }
 
+  const assetsSupplied = Object.prototype.hasOwnProperty.call(input, "assets") ||
+    Object.prototype.hasOwnProperty.call(input, "asset_ids") ||
+    Object.prototype.hasOwnProperty.call(input, "assetIds");
+
   return {
     content_id: contentId,
     playlist_version: playlistVersion,
@@ -1566,8 +1699,67 @@ function normalizeContentManifestInput(input, existing = {}) {
     status,
     title: cleanString(input.title ?? existing.title).slice(0, 160),
     notes: cleanString(input.notes ?? existing.notes).slice(0, 1000),
-    playlist
+    playlist,
+    assets: assetsSupplied ? normalizeContentManifestAssets(input.assets ?? input.asset_ids ?? input.assetIds) : [],
+    assets_supplied: assetsSupplied
   };
+}
+
+function normalizeContentManifestAssets(value) {
+  if (value === undefined || value === null || value === "") return [];
+  let source = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    source = trimmed.startsWith("[") ? parseJson(trimmed, null) : trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(source)) {
+    throw new Error("assets must be an array");
+  }
+
+  const seen = new Set();
+  return source.map((item, index) => {
+    const raw = typeof item === "string" ? { asset_id: item } : (item || {});
+    const assetId = cleanId(raw.asset_id || raw.assetId);
+    if (!assetId) {
+      throw new Error(`assets[${index}].asset_id is required`);
+    }
+    if (seen.has(assetId)) {
+      throw new Error(`assets[${index}].asset_id is duplicated`);
+    }
+    seen.add(assetId);
+
+    const asset = getCloudAsset(assetId);
+    if (!asset) {
+      throw new Error(`assets[${index}].asset_id was not found`);
+    }
+
+    return {
+      asset_id: assetId,
+      target_path: normalizeContentAssetTargetPath(raw.target_path || raw.targetPath, asset, index),
+      required: raw.required !== false
+    };
+  });
+}
+
+function normalizeContentAssetTargetPath(value, asset, index) {
+  const targetPath = cleanString(value) || defaultContentAssetTargetPath(asset);
+  const prefix = asset.type === "video" ? "/assets/videos/" : "/assets/images/";
+  if (!targetPath.startsWith(prefix)) {
+    throw new Error(`assets[${index}].target_path must start with ${prefix}`);
+  }
+  if (targetPath.includes("..") || targetPath.includes("\\") || targetPath.includes("?") || targetPath.includes("#")) {
+    throw new Error(`assets[${index}].target_path is invalid`);
+  }
+  const filename = targetPath.slice(prefix.length);
+  if (!filename || filename.includes("/") || !/^[a-zA-Z0-9_.:-]+$/.test(filename)) {
+    throw new Error(`assets[${index}].target_path must end with a safe filename`);
+  }
+  return targetPath;
+}
+
+function defaultContentAssetTargetPath(asset) {
+  const prefix = asset.type === "video" ? "/assets/videos" : "/assets/images";
+  return `${prefix}/${asset.filename}`;
 }
 
 function normalizeCloudPlaylist(value) {
@@ -1688,6 +1880,27 @@ function normalizeDeviceContentResult(input) {
     status,
     content_id: cleanId(input.content_id || input.manifest_id),
     playlist_version: cleanString(input.playlist_version).slice(0, 120),
+    message: cleanString(input.message || input.error).slice(0, 1000)
+  };
+}
+
+function normalizeDeviceAssetResult(input) {
+  const status = cleanString(input.status);
+  if (!ASSET_SYNC_RESULT_STATUS.has(status)) {
+    throw new Error(`status must be one of: ${Array.from(ASSET_SYNC_RESULT_STATUS).join(", ")}`);
+  }
+  const assetId = cleanId(input.asset_id || input.assetId);
+  if (!assetId) {
+    throw new Error("asset_id is required");
+  }
+  return {
+    status,
+    content_id: cleanId(input.content_id || input.manifest_id),
+    asset_id: assetId,
+    target_path: cleanString(input.target_path || input.targetPath).slice(0, 240),
+    local_path: cleanString(input.local_path || input.localPath).slice(0, 500),
+    sha256: cleanString(input.sha256).slice(0, 80),
+    size: asInteger(input.size),
     message: cleanString(input.message || input.error).slice(0, 1000)
   };
 }
@@ -1830,6 +2043,7 @@ function getDeviceDetail(deviceId) {
     ...device,
     token_events: db.prepare("SELECT * FROM device_token_events WHERE device_id = ? ORDER BY created_at DESC LIMIT 50").all(deviceId),
     log_bundles: listDeviceLogBundles(deviceId, 20),
+    asset_states: listDeviceAssetStates(deviceId, 50),
     heartbeats: db.prepare("SELECT * FROM heartbeats WHERE device_id = ? ORDER BY received_at DESC LIMIT 100").all(deviceId),
     playlogs: db.prepare("SELECT * FROM playlogs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
     error_logs: db.prepare("SELECT * FROM error_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
@@ -1867,6 +2081,28 @@ function getDeviceLogBundle(id) {
 function publicDeviceLogBundle(row) {
   const { raw_json, ...publicFields } = row;
   return publicFields;
+}
+
+function listDeviceAssetStates(deviceId, limit = 50) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 50, 100));
+  return db.prepare(`
+    SELECT * FROM device_asset_states
+    WHERE device_id = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(cleanId(deviceId), boundedLimit).map((row) => ({
+    id: row.id,
+    device_id: cleanString(row.device_id),
+    content_id: cleanString(row.content_id),
+    asset_id: cleanString(row.asset_id),
+    status: cleanString(row.status),
+    target_path: cleanString(row.target_path),
+    local_path: cleanString(row.local_path),
+    sha256: cleanString(row.sha256),
+    size: asInteger(row.size),
+    message: cleanString(row.message),
+    updated_at: cleanString(row.updated_at)
+  }));
 }
 
 function listCloudAssets(limit = 100) {
@@ -2037,6 +2273,33 @@ function normalizeCloudAssetUploadError(error) {
   return requestError(error.message || "asset upload failed", error.status || 400);
 }
 
+function listCloudAssetManifestUsage(assetId) {
+  return db.prepare(`
+    SELECT
+      cma.asset_id,
+      cma.target_path,
+      cm.content_id,
+      cm.playlist_version,
+      cm.release_channel,
+      cm.status,
+      cm.updated_at
+    FROM content_manifest_assets cma
+    JOIN content_manifests cm ON cm.content_id = cma.content_id
+    WHERE cma.asset_id = ?
+    ORDER BY
+      CASE cm.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      cm.updated_at DESC
+  `).all(cleanId(assetId)).map((row) => ({
+    asset_id: cleanString(row.asset_id),
+    target_path: cleanString(row.target_path),
+    content_id: cleanString(row.content_id),
+    playlist_version: cleanString(row.playlist_version),
+    release_channel: cleanString(row.release_channel),
+    status: cleanString(row.status),
+    updated_at: cleanString(row.updated_at)
+  }));
+}
+
 function listReleaseManifests(limit = 100) {
   const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
   return db.prepare(`
@@ -2137,6 +2400,86 @@ function retireActiveContentManifests(releaseChannel, now, exceptContentId = "")
   `).run(now, channel, cleanId(exceptContentId));
 }
 
+function replaceContentManifestAssets(contentId, assets, now) {
+  const normalizedContentId = cleanId(contentId);
+  db.prepare("DELETE FROM content_manifest_assets WHERE content_id = ?").run(normalizedContentId);
+  for (const asset of assets || []) {
+    db.prepare(`
+      INSERT INTO content_manifest_assets (
+        content_id, asset_id, target_path, required, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      normalizedContentId,
+      asset.asset_id,
+      asset.target_path,
+      asset.required ? 1 : 0,
+      now,
+      now
+    );
+  }
+}
+
+function listContentManifestAssets(contentId) {
+  return db.prepare(`
+    SELECT
+      cma.id AS manifest_asset_id,
+      cma.content_id,
+      cma.asset_id,
+      cma.target_path,
+      cma.required,
+      cma.created_at AS linked_at,
+      cma.updated_at AS link_updated_at,
+      ca.id AS cloud_asset_row_id,
+      ca.type,
+      ca.filename,
+      ca.original_name,
+      ca.label,
+      ca.notes,
+      ca.mime_type,
+      ca.size,
+      ca.sha256,
+      ca.download_path,
+      ca.created_at AS asset_created_at,
+      ca.updated_at AS asset_updated_at
+    FROM content_manifest_assets cma
+    JOIN cloud_assets ca ON ca.asset_id = cma.asset_id
+    WHERE cma.content_id = ?
+    ORDER BY cma.id ASC
+  `).all(cleanId(contentId)).map(publicContentManifestAsset);
+}
+
+function publicContentManifestAsset(row) {
+  return {
+    id: row.manifest_asset_id,
+    content_id: cleanString(row.content_id),
+    asset_id: cleanString(row.asset_id),
+    type: cleanString(row.type),
+    filename: cleanString(row.filename),
+    original_name: cleanString(row.original_name),
+    label: cleanString(row.label),
+    notes: cleanString(row.notes),
+    mime_type: cleanString(row.mime_type),
+    size: asInteger(row.size) || 0,
+    sha256: cleanString(row.sha256),
+    target_path: cleanString(row.target_path),
+    required: row.required !== 0,
+    download_url: `/api/device/assets/${encodeURIComponent(cleanString(row.asset_id))}/download`,
+    admin_download_path: cleanString(row.download_path),
+    linked_at: cleanString(row.linked_at),
+    updated_at: cleanString(row.link_updated_at || row.asset_updated_at),
+    asset_updated_at: cleanString(row.asset_updated_at),
+    asset_created_at: cleanString(row.asset_created_at)
+  };
+}
+
+function getDeviceContentManifestAsset(device, assetId) {
+  const manifest = getActiveContentManifest(device.release_channel);
+  if (!manifest) return null;
+  const normalizedAssetId = cleanId(assetId);
+  const asset = (manifest.assets || []).find((item) => item.asset_id === normalizedAssetId);
+  return asset ? { ...asset, content_id: manifest.content_id } : null;
+}
+
 function publicContentManifest(row, includePlaylist = false) {
   const publicFields = {
     id: row.id,
@@ -2150,6 +2493,7 @@ function publicContentManifest(row, includePlaylist = false) {
     updated_at: cleanString(row.updated_at),
     published_at: cleanString(row.published_at)
   };
+  publicFields.assets = listContentManifestAssets(row.content_id);
   if (includePlaylist) {
     publicFields.playlist = parseJson(row.playlist_json, null);
   }
@@ -2228,6 +2572,7 @@ function buildDeviceContentPolicy(device) {
     playlist_version: targetPlaylistVersion,
     release_channel: cleanString(manifest?.release_channel),
     published_at: cleanString(manifest?.published_at),
+    assets: manifest ? manifest.assets || [] : [],
     playlist: required ? manifest.playlist : null
   };
 }

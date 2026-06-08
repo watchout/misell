@@ -14,6 +14,7 @@
     "evidence:upload": "scripts/collect-device-evidence.sh --upload",
     "backup:content": "scripts/backup-content.sh",
     "content:sync": "scripts/sync-content.sh",
+    "assets:sync": "scripts/sync-assets.sh",
     "rotate:logs": "scripts/rotate-logs.sh"
   },
   "dependencies": {
