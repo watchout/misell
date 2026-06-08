@@ -41,6 +41,7 @@ function expectedHttpResponse(response) {
     (status === 401 && method === "GET" && url === `${cloudBase}/admin`) ||
     (status === 400 && method === "POST" && url === `${playerBase}/api/assets/upload`) ||
     (status === 413 && method === "POST" && url === `${playerBase}/api/assets/upload`) ||
+    (status === 400 && method === "POST" && url === `${cloudBase}/api/admin/assets`) ||
     (status === 400 && method === "PATCH" && url === `${cloudBase}/api/admin/devices/DEV-BROWSER-001/update`)
   );
 }
@@ -641,8 +642,45 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   action("Update content manifest status through cloud admin UI");
   const contentAction = page.locator("form.content-manifest-action").first();
   await contentAction.locator("select[name='status']").selectOption("active");
+  const contentRefreshPromise = page.waitForResponse((response) => (
+    response.request().method() === "GET" &&
+    response.url() === `${cloudBase}/api/admin/assets` &&
+    response.status() === 200
+  ));
   await contentAction.locator("button[type='submit']").click();
+  await contentRefreshPromise;
   await expect(page.locator("#content-manifests")).toContainText("active", { timeout: 5000 });
+
+  action("Upload cloud asset through cloud admin UI");
+  const cloudAssetForm = page.locator("#assets form.asset-upload");
+  await cloudAssetForm.locator("input[name='asset_id']").fill("browser-cloud-asset");
+  await cloudAssetForm.locator("input[name='label']").fill("Browser cloud asset");
+  await cloudAssetForm.locator("input[name='notes']").fill("browser cloud asset evidence");
+  await cloudAssetForm.locator("input[name='asset']").setInputFiles(path.join(artifactsDir, "valid-1x1.png"));
+  await cloudAssetForm.locator("button[type='submit']").click();
+  await expect(page.locator("#assets")).toContainText("browser-cloud-asset", { timeout: 5000 });
+  await expect(page.locator("#assets")).toContainText("Browser cloud asset");
+  const cloudAssets = await authedRequest(cloudBase, "/api/admin/assets");
+  const uploadedAsset = cloudAssets.json.assets.find((asset) => asset.asset_id === "browser-cloud-asset");
+  expect(uploadedAsset).toBeTruthy();
+  expect(uploadedAsset.type).toBe("image");
+  expect(uploadedAsset.mime_type).toBe("image/png");
+  expect(uploadedAsset.download_path).toBe("/api/admin/assets/browser-cloud-asset/download");
+  const cloudAssetImageResponse = await page.request.get(`${cloudBase}${uploadedAsset.download_path}`);
+  expect(cloudAssetImageResponse.ok()).toBeTruthy();
+  expect(cloudAssetImageResponse.headers()["content-type"]).toContain("image/png");
+  const cloudAssetImage = await cloudAssetImageResponse.body();
+  expect(cloudAssetImage.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-assets.png"), fullPage: true });
+
+  action("Reject missing cloud asset file through cloud admin API");
+  const invalidCloudAsset = await authedRequest(cloudBase, "/api/admin/assets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ asset_id: "browser-invalid-cloud-asset" })
+  });
+  expect(invalidCloudAsset.status, invalidCloudAsset.text).toBe(400);
+  expect(invalidCloudAsset.text).toContain("asset file is required");
 
   action("Revoke token through cloud admin UI");
   const revokeForm = page.locator('form.token-action[data-device-id="DEV-BROWSER-001"]');

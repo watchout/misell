@@ -133,7 +133,8 @@ table {
 
 #devices,
 #release-manifests,
-#content-manifests {
+#content-manifests,
+#assets {
   overflow-x: auto;
 }
 
@@ -319,6 +320,39 @@ td small {
   gap: 6px;
   grid-template-columns: minmax(92px, 1fr) auto;
   min-width: 170px;
+}
+
+.asset-upload {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(140px, 1fr) minmax(150px, 1fr) minmax(180px, 1fr) minmax(220px, 1.2fr) auto;
+  margin-bottom: 8px;
+  min-width: 980px;
+  padding: 10px;
+}
+
+.asset-upload small {
+  color: #697986;
+  grid-column: 1 / -1;
+}
+
+.assets-table {
+  table-layout: fixed;
+}
+
+.assets-table code {
+  color: #1f2933;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.asset-delete {
+  margin-left: 8px;
+  min-height: 30px;
 }
 
 .log-bundles-table {
