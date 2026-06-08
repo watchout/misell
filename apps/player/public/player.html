@@ -7,12 +7,14 @@
     <link rel="stylesheet" href="/style.css">
   </head>
   <body class="player-body">
-    <main id="stage" class="player-stage" aria-live="polite">
-      <section id="left-zone" class="player-zone zone-left" data-zone="left"></section>
-      <section id="center-zone" class="player-zone zone-center" data-zone="center"></section>
-      <section id="right-zone" class="player-zone zone-right" data-zone="right"></section>
-      <section id="wide-zone" class="player-wide" data-zone="wide" hidden></section>
-    </main>
+    <div id="preview-frame" class="preview-frame">
+      <main id="stage" class="player-stage" aria-live="polite">
+        <section id="left-zone" class="player-zone zone-left" data-zone="left"></section>
+        <section id="center-zone" class="player-zone zone-center" data-zone="center"></section>
+        <section id="right-zone" class="player-zone zone-right" data-zone="right"></section>
+        <section id="wide-zone" class="player-wide" data-zone="wide" hidden></section>
+      </main>
+    </div>
     <aside id="player-status" class="player-status"></aside>
     <div id="preload-bin" class="preload-bin" aria-hidden="true"></div>
     <script src="/player.js"></script>

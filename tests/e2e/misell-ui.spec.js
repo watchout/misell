@@ -241,6 +241,37 @@ async function authedRequest(baseUrl, endpoint, options = {}) {
   return { ok: res.ok, status: res.status, text, json };
 }
 
+async function expectPreviewStageFitsViewport(page) {
+  await page.waitForFunction(() => {
+    const stage = document.getElementById("stage");
+    if (!stage) return false;
+    const rect = stage.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }, null, { timeout: 5000 });
+
+  const geometry = await page.locator("#stage").evaluate((stage) => {
+    const rect = stage.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    };
+  });
+  const tolerance = 1;
+  const expectedPreviewWidth = Math.max(1, geometry.viewportWidth - 48);
+  expect(geometry.left).toBeGreaterThanOrEqual(-tolerance);
+  expect(geometry.top).toBeGreaterThanOrEqual(-tolerance);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + tolerance);
+  expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight + tolerance);
+  expect(geometry.width).toBeGreaterThanOrEqual(expectedPreviewWidth * 0.94);
+  expect(geometry.height).toBeGreaterThan(40);
+}
+
 async function seedCloudDevice() {
   action("Seed cloud device through admin API");
   const create = await authedRequest(cloudBase, "/api/admin/devices", {
@@ -347,11 +378,13 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   await expect(page.locator("#center-zone")).toBeVisible();
   await expect(page.locator("#right-zone")).toBeVisible();
   await expect(page.locator("#player-status")).toContainText("Browser three-zone");
+  await expectPreviewStageFitsViewport(page);
   await page.screenshot({ path: path.join(screenshotsDir, "player-three-zone-preview.png"), fullPage: true });
 
   action("Wait for playlist rotation to wide layout");
   await expect(page.locator("#wide-zone")).toBeVisible({ timeout: 4000 });
   await expect(page.locator("#player-status")).toContainText("Browser wide", { timeout: 4000 });
+  await expectPreviewStageFitsViewport(page);
   await page.screenshot({ path: path.join(screenshotsDir, "player-wide-preview.png"), fullPage: true });
 
   action("Open local admin and verify loaded controls");
@@ -650,6 +683,7 @@ test("critical UIs render on mobile viewport", async ({ browser }) => {
   action("Open mobile player preview");
   await page.goto(`${playerBase}/player?preview=1`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#player-status")).toContainText(/Browser/);
+  await expectPreviewStageFitsViewport(page);
   await page.screenshot({ path: path.join(screenshotsDir, "mobile-player-preview.png"), fullPage: true });
 
   action("Open mobile local admin");
