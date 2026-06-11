@@ -1507,6 +1507,13 @@ function initDb() {
       UNIQUE(device_id, content_id, asset_id)
     );
 
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      version INTEGER NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
     CREATE INDEX IF NOT EXISTS idx_heartbeats_device_received ON heartbeats(device_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_playlogs_device_received ON playlogs(device_id, received_at DESC);
@@ -1530,6 +1537,226 @@ function initDb() {
   `);
   migrateDevicesTable();
   db.exec("CREATE INDEX IF NOT EXISTS idx_devices_token_status ON devices(token_status)");
+  applySchemaMigrations();
+}
+
+function schemaMigrations() {
+  return [
+    {
+      version: 1,
+      name: "existing_cloud_schema_baseline",
+      up() {
+        // Existing installs were initialized by the legacy CREATE IF NOT EXISTS block above.
+      }
+    },
+    {
+      version: 2,
+      name: "advertising_foundation_tables",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS advertisers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            advertiser_id TEXT NOT NULL UNIQUE,
+            advertiser_name TEXT NOT NULL,
+            agency_name TEXT,
+            contact_name TEXT,
+            contact_email TEXT,
+            contact_phone TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS campaigns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL UNIQUE,
+            advertiser_id TEXT,
+            campaign_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            start_date TEXT,
+            end_date TEXT,
+            target_store_ids_json TEXT,
+            target_time_slots_json TEXT,
+            priority INTEGER NOT NULL DEFAULT 0,
+            qr_url TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(advertiser_id) REFERENCES advertisers(advertiser_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id TEXT NOT NULL UNIQUE,
+            advertiser_id TEXT,
+            campaign_id TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            applicant_name TEXT,
+            applicant_email TEXT,
+            applicant_phone TEXT,
+            company_name TEXT,
+            campaign_name TEXT,
+            desired_start_date TEXT,
+            desired_end_date TEXT,
+            target_store_ids_json TEXT,
+            target_time_slots_json TEXT,
+            budget_amount INTEGER,
+            qr_url TEXT,
+            notes TEXT,
+            submitted_at TEXT,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(advertiser_id) REFERENCES advertisers(advertiser_id) ON DELETE SET NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS application_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id TEXT NOT NULL UNIQUE,
+            application_id TEXT NOT NULL,
+            cloud_asset_id TEXT,
+            asset_id TEXT,
+            original_name TEXT,
+            mime_type TEXT,
+            size INTEGER,
+            sha256 TEXT,
+            status TEXT NOT NULL DEFAULT 'submitted',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(application_id) REFERENCES applications(application_id) ON DELETE CASCADE,
+            FOREIGN KEY(cloud_asset_id) REFERENCES cloud_assets(asset_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS application_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id TEXT NOT NULL UNIQUE,
+            application_id TEXT NOT NULL,
+            author_type TEXT NOT NULL DEFAULT 'admin',
+            author_id TEXT,
+            author_name TEXT,
+            visibility TEXT NOT NULL DEFAULT 'internal',
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(application_id) REFERENCES applications(application_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS application_status_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            application_id TEXT NOT NULL,
+            from_status TEXT,
+            to_status TEXT NOT NULL,
+            actor_type TEXT NOT NULL DEFAULT 'admin',
+            actor_id TEXT,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(application_id) REFERENCES applications(application_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS qr_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            qr_link_id TEXT NOT NULL UNIQUE,
+            campaign_id TEXT,
+            advertiser_id TEXT,
+            qr_id TEXT,
+            label TEXT,
+            destination_url TEXT NOT NULL,
+            short_path TEXT UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL,
+            FOREIGN KEY(advertiser_id) REFERENCES advertisers(advertiser_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS qr_scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            qr_link_id TEXT,
+            campaign_id TEXT,
+            advertiser_id TEXT,
+            store_id TEXT,
+            device_id TEXT,
+            scanned_at TEXT NOT NULL,
+            user_agent TEXT,
+            ip_hash TEXT,
+            referrer TEXT,
+            raw_json TEXT,
+            FOREIGN KEY(qr_link_id) REFERENCES qr_links(qr_link_id) ON DELETE SET NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL,
+            FOREIGN KEY(advertiser_id) REFERENCES advertisers(advertiser_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS report_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id TEXT NOT NULL UNIQUE,
+            campaign_id TEXT,
+            advertiser_id TEXT,
+            period_start TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            snapshot_type TEXT NOT NULL DEFAULT 'monthly',
+            metrics_json TEXT NOT NULL,
+            notes TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL,
+            FOREIGN KEY(advertiser_id) REFERENCES advertisers(advertiser_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_type TEXT NOT NULL DEFAULT 'admin',
+            actor_id TEXT,
+            action TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT,
+            before_json TEXT,
+            after_json TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_advertisers_status ON advertisers(status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaigns_advertiser ON campaigns(advertiser_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaigns_status_dates ON campaigns(status, start_date, end_date);
+          CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_applications_advertiser ON applications(advertiser_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_applications_campaign ON applications(campaign_id);
+          CREATE INDEX IF NOT EXISTS idx_application_materials_application ON application_materials(application_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_application_comments_application ON application_comments(application_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_application_status_events_application ON application_status_events(application_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_qr_links_campaign ON qr_links(campaign_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_qr_links_short_path ON qr_links(short_path);
+          CREATE INDEX IF NOT EXISTS idx_qr_scans_link_time ON qr_scans(qr_link_id, scanned_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_qr_scans_campaign_time ON qr_scans(campaign_id, scanned_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_report_snapshots_campaign_period ON report_snapshots(campaign_id, period_start, period_end);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, created_at DESC);
+        `);
+      }
+    }
+  ];
+}
+
+function applySchemaMigrations() {
+  const appliedVersions = new Set(
+    db.prepare("SELECT version FROM schema_migrations").all().map((row) => row.version)
+  );
+
+  for (const migration of schemaMigrations()) {
+    if (appliedVersions.has(migration.version)) continue;
+    const runMigration = db.transaction(() => {
+      migration.up();
+      db.prepare(`
+        INSERT INTO schema_migrations (version, name, applied_at)
+        VALUES (?, ?, ?)
+      `).run(migration.version, migration.name, nowIso());
+    });
+    runMigration();
+    appliedVersions.add(migration.version);
+  }
 }
 
 function migrateDevicesTable() {
