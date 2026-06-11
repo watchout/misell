@@ -35,6 +35,27 @@ const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "l
 const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"]);
 const RELEASE_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const CONTENT_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
+const ADVERTISER_STATUS = new Set(["active", "paused", "archived"]);
+const CAMPAIGN_STATUS = new Set(["draft", "active", "paused", "completed", "archived"]);
+const SPONSORSHIP_PRODUCT_STATUS = new Set(["draft", "active", "retired"]);
+const CAMPAIGN_PLACEMENT_STATUS = new Set(["draft", "active", "paused", "retired"]);
+const SPONSORSHIP_PRICE_MODELS = new Set(["monthly_fixed", "period_fixed", "manual_quote", "impression_reference", "free"]);
+const CAMPAIGN_ASSET_STATUS = new Set(["draft", "active", "retired"]);
+const CAMPAIGN_ASSET_ROLES = new Set(["main_video", "wide_background", "qr_panel", "logo", "still", "thumbnail", "other"]);
+const PLAYLIST_RULE_STATUS = new Set(["draft", "active", "paused", "retired"]);
+const PLAYLIST_RULE_TYPES = new Set(["manual", "weighted", "time_slot", "exclusive"]);
+const CAMPAIGN_PLACEMENT_LAYOUTS = new Set([
+  "wide",
+  "two-plus-one",
+  "left-center",
+  "center-right",
+  "three-zone",
+  "single-left",
+  "single-center",
+  "single-right",
+  "qr-panel",
+  "ticker"
+]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
 const ASSET_SYNC_RESULT_STATUS = new Set(["checking", "downloading", "ready", "failed"]);
 const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
@@ -761,6 +782,557 @@ app.post("/api/admin/alert-notifications/test", requireAdminAuth, async (req, re
       ok: notification.status === "delivered",
       notification
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/advertisers", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, advertisers: listAdvertisers() });
+});
+
+app.post("/api/admin/advertisers", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeAdvertiserInput(req.body || {});
+    const existing = db.prepare("SELECT advertiser_id FROM advertisers WHERE advertiser_id = ?").get(input.advertiser_id);
+    if (existing) {
+      res.status(409).json({ error: "Advertiser already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO advertisers (
+        advertiser_id, advertiser_name, agency_name, contact_name, contact_email,
+        contact_phone, status, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.advertiser_id,
+      input.advertiser_name,
+      input.agency_name,
+      input.contact_name,
+      input.contact_email,
+      input.contact_phone,
+      input.status,
+      input.notes,
+      now,
+      now
+    );
+    const advertiser = getAdvertiser(input.advertiser_id);
+    recordAuditLog("advertiser.created", "advertiser", input.advertiser_id, null, advertiser, { source: "admin_api" });
+    res.status(201).json({ ok: true, advertiser });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/advertisers/:advertiser_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const advertiserId = cleanId(req.params.advertiser_id);
+    const existing = db.prepare("SELECT * FROM advertisers WHERE advertiser_id = ?").get(advertiserId);
+    if (!existing) {
+      res.status(404).json({ error: "Advertiser not found" });
+      return;
+    }
+
+    const before = publicAdvertiser(existing);
+    const input = normalizeAdvertiserInput(req.body || {}, existing);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE advertisers SET
+        advertiser_name = ?,
+        agency_name = ?,
+        contact_name = ?,
+        contact_email = ?,
+        contact_phone = ?,
+        status = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE advertiser_id = ?
+    `).run(
+      input.advertiser_name,
+      input.agency_name,
+      input.contact_name,
+      input.contact_email,
+      input.contact_phone,
+      input.status,
+      input.notes,
+      now,
+      advertiserId
+    );
+    const advertiser = getAdvertiser(advertiserId);
+    recordAuditLog("advertiser.updated", "advertiser", advertiserId, before, advertiser, { source: "admin_api" });
+    res.json({ ok: true, advertiser });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaigns", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, campaigns: listCampaigns() });
+});
+
+app.post("/api/admin/campaigns", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeCampaignInput(req.body || {});
+    const existing = db.prepare("SELECT campaign_id FROM campaigns WHERE campaign_id = ?").get(input.campaign_id);
+    if (existing) {
+      res.status(409).json({ error: "Campaign already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO campaigns (
+        campaign_id, advertiser_id, campaign_name, status, start_date, end_date,
+        target_store_ids_json, target_time_slots_json, priority, qr_url, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.campaign_id,
+      input.advertiser_id,
+      input.campaign_name,
+      input.status,
+      input.start_date,
+      input.end_date,
+      JSON.stringify(input.target_store_ids),
+      JSON.stringify(input.target_time_slots),
+      input.priority,
+      input.qr_url,
+      input.notes,
+      now,
+      now
+    );
+    const campaign = getCampaign(input.campaign_id);
+    recordAuditLog("campaign.created", "campaign", input.campaign_id, null, campaign, { source: "admin_api" });
+    res.status(201).json({ ok: true, campaign });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/campaigns/:campaign_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const campaignId = cleanId(req.params.campaign_id);
+    const existing = db.prepare("SELECT * FROM campaigns WHERE campaign_id = ?").get(campaignId);
+    if (!existing) {
+      res.status(404).json({ error: "Campaign not found" });
+      return;
+    }
+
+    const before = publicCampaign(existing);
+    const input = normalizeCampaignInput(req.body || {}, existing);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE campaigns SET
+        advertiser_id = ?,
+        campaign_name = ?,
+        status = ?,
+        start_date = ?,
+        end_date = ?,
+        target_store_ids_json = ?,
+        target_time_slots_json = ?,
+        priority = ?,
+        qr_url = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE campaign_id = ?
+    `).run(
+      input.advertiser_id,
+      input.campaign_name,
+      input.status,
+      input.start_date,
+      input.end_date,
+      JSON.stringify(input.target_store_ids),
+      JSON.stringify(input.target_time_slots),
+      input.priority,
+      input.qr_url,
+      input.notes,
+      now,
+      campaignId
+    );
+    const campaign = getCampaign(campaignId);
+    recordAuditLog("campaign.updated", "campaign", campaignId, before, campaign, { source: "admin_api" });
+    res.json({ ok: true, campaign });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/sponsorship-products", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, sponsorship_products: listSponsorshipProducts() });
+});
+
+app.post("/api/admin/sponsorship-products", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeSponsorshipProductInput(req.body || {});
+    const existing = db.prepare("SELECT sponsorship_product_id FROM sponsorship_products WHERE sponsorship_product_id = ?").get(input.sponsorship_product_id);
+    if (existing) {
+      res.status(409).json({ error: "Sponsorship product already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    ensureTenantStoreRefs(input.tenant_id, input.store_id, now);
+    db.prepare(`
+      INSERT INTO sponsorship_products (
+        sponsorship_product_id, tenant_id, store_id, product_name, description, status,
+        allowed_layouts_json, default_duration, max_share_percent, available_time_slots_json,
+        target_screen_groups_json, price_model, price_note, approval_required,
+        report_metrics_json, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.sponsorship_product_id,
+      input.tenant_id,
+      input.store_id,
+      input.product_name,
+      input.description,
+      input.status,
+      JSON.stringify(input.allowed_layouts),
+      input.default_duration,
+      input.max_share_percent,
+      JSON.stringify(input.available_time_slots),
+      JSON.stringify(input.target_screen_groups),
+      input.price_model,
+      input.price_note,
+      input.approval_required ? 1 : 0,
+      JSON.stringify(input.report_metrics),
+      input.notes,
+      now,
+      now
+    );
+    const sponsorshipProduct = getSponsorshipProduct(input.sponsorship_product_id);
+    recordAuditLog("sponsorship_product.created", "sponsorship_product", input.sponsorship_product_id, null, sponsorshipProduct, { source: "admin_api" });
+    res.status(201).json({ ok: true, sponsorship_product: sponsorshipProduct });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/sponsorship-products/:sponsorship_product_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const sponsorshipProductId = cleanId(req.params.sponsorship_product_id);
+    const existing = db.prepare("SELECT * FROM sponsorship_products WHERE sponsorship_product_id = ?").get(sponsorshipProductId);
+    if (!existing) {
+      res.status(404).json({ error: "Sponsorship product not found" });
+      return;
+    }
+
+    const before = publicSponsorshipProduct(existing);
+    const input = normalizeSponsorshipProductInput(req.body || {}, existing);
+    const now = nowIso();
+    ensureTenantStoreRefs(input.tenant_id, input.store_id, now);
+    db.prepare(`
+      UPDATE sponsorship_products SET
+        tenant_id = ?,
+        store_id = ?,
+        product_name = ?,
+        description = ?,
+        status = ?,
+        allowed_layouts_json = ?,
+        default_duration = ?,
+        max_share_percent = ?,
+        available_time_slots_json = ?,
+        target_screen_groups_json = ?,
+        price_model = ?,
+        price_note = ?,
+        approval_required = ?,
+        report_metrics_json = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE sponsorship_product_id = ?
+    `).run(
+      input.tenant_id,
+      input.store_id,
+      input.product_name,
+      input.description,
+      input.status,
+      JSON.stringify(input.allowed_layouts),
+      input.default_duration,
+      input.max_share_percent,
+      JSON.stringify(input.available_time_slots),
+      JSON.stringify(input.target_screen_groups),
+      input.price_model,
+      input.price_note,
+      input.approval_required ? 1 : 0,
+      JSON.stringify(input.report_metrics),
+      input.notes,
+      now,
+      sponsorshipProductId
+    );
+    const sponsorshipProduct = getSponsorshipProduct(sponsorshipProductId);
+    recordAuditLog("sponsorship_product.updated", "sponsorship_product", sponsorshipProductId, before, sponsorshipProduct, { source: "admin_api" });
+    res.json({ ok: true, sponsorship_product: sponsorshipProduct });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-placements", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, campaign_placements: listCampaignPlacements() });
+});
+
+app.post("/api/admin/campaign-placements", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeCampaignPlacementInput(req.body || {});
+    const existing = db.prepare("SELECT campaign_placement_id FROM campaign_placements WHERE campaign_placement_id = ?").get(input.campaign_placement_id);
+    if (existing) {
+      res.status(409).json({ error: "Campaign placement already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    ensureTenantStoreRefs(input.tenant_id, input.store_id, now);
+    db.prepare(`
+      INSERT INTO campaign_placements (
+        campaign_placement_id, campaign_id, sponsorship_product_id, tenant_id, store_id,
+        screen_group_id, layout, share_percent, start_date, end_date, time_slots_json,
+        priority, status, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.campaign_placement_id,
+      input.campaign_id,
+      input.sponsorship_product_id,
+      input.tenant_id,
+      input.store_id,
+      input.screen_group_id,
+      input.layout,
+      input.share_percent,
+      input.start_date,
+      input.end_date,
+      JSON.stringify(input.time_slots),
+      input.priority,
+      input.status,
+      input.notes,
+      now,
+      now
+    );
+    const placement = getCampaignPlacement(input.campaign_placement_id);
+    recordAuditLog("campaign_placement.created", "campaign_placement", input.campaign_placement_id, null, placement, { source: "admin_api" });
+    res.status(201).json({ ok: true, campaign_placement: placement });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/campaign-placements/:campaign_placement_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const campaignPlacementId = cleanId(req.params.campaign_placement_id);
+    const existing = db.prepare("SELECT * FROM campaign_placements WHERE campaign_placement_id = ?").get(campaignPlacementId);
+    if (!existing) {
+      res.status(404).json({ error: "Campaign placement not found" });
+      return;
+    }
+
+    const before = publicCampaignPlacement(existing);
+    const input = normalizeCampaignPlacementInput(req.body || {}, existing);
+    const now = nowIso();
+    ensureTenantStoreRefs(input.tenant_id, input.store_id, now);
+    db.prepare(`
+      UPDATE campaign_placements SET
+        campaign_id = ?,
+        sponsorship_product_id = ?,
+        tenant_id = ?,
+        store_id = ?,
+        screen_group_id = ?,
+        layout = ?,
+        share_percent = ?,
+        start_date = ?,
+        end_date = ?,
+        time_slots_json = ?,
+        priority = ?,
+        status = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE campaign_placement_id = ?
+    `).run(
+      input.campaign_id,
+      input.sponsorship_product_id,
+      input.tenant_id,
+      input.store_id,
+      input.screen_group_id,
+      input.layout,
+      input.share_percent,
+      input.start_date,
+      input.end_date,
+      JSON.stringify(input.time_slots),
+      input.priority,
+      input.status,
+      input.notes,
+      now,
+      campaignPlacementId
+    );
+    const placement = getCampaignPlacement(campaignPlacementId);
+    recordAuditLog("campaign_placement.updated", "campaign_placement", campaignPlacementId, before, placement, { source: "admin_api" });
+    res.json({ ok: true, campaign_placement: placement });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-assets", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, campaign_assets: listCampaignAssets() });
+});
+
+app.post("/api/admin/campaign-assets", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizeCampaignAssetInput(req.body || {});
+    const existing = db.prepare("SELECT campaign_asset_id FROM campaign_assets WHERE campaign_asset_id = ?").get(input.campaign_asset_id);
+    if (existing) {
+      res.status(409).json({ error: "Campaign asset already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO campaign_assets (
+        campaign_asset_id, campaign_id, asset_id, role, label, display_order,
+        status, metadata_json, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.campaign_asset_id,
+      input.campaign_id,
+      input.asset_id,
+      input.role,
+      input.label,
+      input.display_order,
+      input.status,
+      JSON.stringify(input.metadata),
+      input.notes,
+      now,
+      now
+    );
+    const campaignAsset = getCampaignAsset(input.campaign_asset_id);
+    recordAuditLog("campaign_asset.created", "campaign_asset", input.campaign_asset_id, null, campaignAsset, { source: "admin_api" });
+    res.status(201).json({ ok: true, campaign_asset: campaignAsset });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/campaign-assets/:campaign_asset_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const campaignAssetId = cleanId(req.params.campaign_asset_id);
+    const existing = db.prepare("SELECT * FROM campaign_assets WHERE campaign_asset_id = ?").get(campaignAssetId);
+    if (!existing) {
+      res.status(404).json({ error: "Campaign asset not found" });
+      return;
+    }
+
+    const before = publicCampaignAsset(existing);
+    const input = normalizeCampaignAssetInput(req.body || {}, existing);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE campaign_assets SET
+        campaign_id = ?,
+        asset_id = ?,
+        role = ?,
+        label = ?,
+        display_order = ?,
+        status = ?,
+        metadata_json = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE campaign_asset_id = ?
+    `).run(
+      input.campaign_id,
+      input.asset_id,
+      input.role,
+      input.label,
+      input.display_order,
+      input.status,
+      JSON.stringify(input.metadata),
+      input.notes,
+      now,
+      campaignAssetId
+    );
+    const campaignAsset = getCampaignAsset(campaignAssetId);
+    recordAuditLog("campaign_asset.updated", "campaign_asset", campaignAssetId, before, campaignAsset, { source: "admin_api" });
+    res.json({ ok: true, campaign_asset: campaignAsset });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/playlist-rules", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, playlist_rules: listPlaylistRules() });
+});
+
+app.post("/api/admin/playlist-rules", requireAdminAuth, (req, res, next) => {
+  try {
+    const input = normalizePlaylistRuleInput(req.body || {});
+    const existing = db.prepare("SELECT playlist_rule_id FROM playlist_rules WHERE playlist_rule_id = ?").get(input.playlist_rule_id);
+    if (existing) {
+      res.status(409).json({ error: "Playlist rule already exists" });
+      return;
+    }
+
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO playlist_rules (
+        playlist_rule_id, campaign_placement_id, rule_name, rule_type,
+        weight_percent, priority, status, playlist_item_template_json,
+        notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.playlist_rule_id,
+      input.campaign_placement_id,
+      input.rule_name,
+      input.rule_type,
+      input.weight_percent,
+      input.priority,
+      input.status,
+      JSON.stringify(input.playlist_item_template),
+      input.notes,
+      now,
+      now
+    );
+    const playlistRule = getPlaylistRule(input.playlist_rule_id);
+    recordAuditLog("playlist_rule.created", "playlist_rule", input.playlist_rule_id, null, playlistRule, { source: "admin_api" });
+    res.status(201).json({ ok: true, playlist_rule: playlistRule });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/playlist-rules/:playlist_rule_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const playlistRuleId = cleanId(req.params.playlist_rule_id);
+    const existing = db.prepare("SELECT * FROM playlist_rules WHERE playlist_rule_id = ?").get(playlistRuleId);
+    if (!existing) {
+      res.status(404).json({ error: "Playlist rule not found" });
+      return;
+    }
+
+    const before = publicPlaylistRule(existing);
+    const input = normalizePlaylistRuleInput(req.body || {}, existing);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE playlist_rules SET
+        campaign_placement_id = ?,
+        rule_name = ?,
+        rule_type = ?,
+        weight_percent = ?,
+        priority = ?,
+        status = ?,
+        playlist_item_template_json = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE playlist_rule_id = ?
+    `).run(
+      input.campaign_placement_id,
+      input.rule_name,
+      input.rule_type,
+      input.weight_percent,
+      input.priority,
+      input.status,
+      JSON.stringify(input.playlist_item_template),
+      input.notes,
+      now,
+      playlistRuleId
+    );
+    const playlistRule = getPlaylistRule(playlistRuleId);
+    recordAuditLog("playlist_rule.updated", "playlist_rule", playlistRuleId, before, playlistRule, { source: "admin_api" });
+    res.json({ ok: true, playlist_rule: playlistRule });
   } catch (error) {
     next(error);
   }
@@ -1736,6 +2308,115 @@ function schemaMigrations() {
           CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, created_at DESC);
         `);
       }
+    },
+    {
+      version: 3,
+      name: "sponsorship_products_and_campaign_placements",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS sponsorship_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sponsorship_product_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT,
+            product_name TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            allowed_layouts_json TEXT NOT NULL DEFAULT '[]',
+            default_duration INTEGER NOT NULL DEFAULT 15,
+            max_share_percent INTEGER NOT NULL DEFAULT 20,
+            available_time_slots_json TEXT NOT NULL DEFAULT '[]',
+            target_screen_groups_json TEXT NOT NULL DEFAULT '[]',
+            price_model TEXT NOT NULL DEFAULT 'manual_quote',
+            price_note TEXT,
+            approval_required INTEGER NOT NULL DEFAULT 1,
+            report_metrics_json TEXT NOT NULL DEFAULT '[]',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS campaign_placements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_placement_id TEXT NOT NULL UNIQUE,
+            campaign_id TEXT NOT NULL,
+            sponsorship_product_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT,
+            screen_group_id TEXT,
+            layout TEXT NOT NULL,
+            share_percent INTEGER NOT NULL DEFAULT 10,
+            start_date TEXT,
+            end_date TEXT,
+            time_slots_json TEXT NOT NULL DEFAULT '[]',
+            priority INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'draft',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+            FOREIGN KEY(sponsorship_product_id) REFERENCES sponsorship_products(sponsorship_product_id) ON DELETE CASCADE,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE SET NULL,
+            FOREIGN KEY(screen_group_id) REFERENCES screen_groups(screen_group_id) ON DELETE SET NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_sponsorship_products_tenant_status ON sponsorship_products(tenant_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_sponsorship_products_store_status ON sponsorship_products(store_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaign_placements_campaign ON campaign_placements(campaign_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaign_placements_product ON campaign_placements(sponsorship_product_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaign_placements_tenant_dates ON campaign_placements(tenant_id, start_date, end_date, status);
+          CREATE INDEX IF NOT EXISTS idx_campaign_placements_store_screen ON campaign_placements(store_id, screen_group_id, status);
+        `);
+      }
+    },
+    {
+      version: 4,
+      name: "campaign_assets_and_playlist_rules",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS campaign_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_asset_id TEXT NOT NULL UNIQUE,
+            campaign_id TEXT NOT NULL,
+            asset_id TEXT,
+            role TEXT NOT NULL DEFAULT 'main_video',
+            label TEXT,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+            FOREIGN KEY(asset_id) REFERENCES cloud_assets(asset_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS playlist_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_rule_id TEXT NOT NULL UNIQUE,
+            campaign_placement_id TEXT NOT NULL,
+            rule_name TEXT NOT NULL,
+            rule_type TEXT NOT NULL DEFAULT 'weighted',
+            weight_percent INTEGER NOT NULL DEFAULT 10,
+            priority INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'draft',
+            playlist_item_template_json TEXT NOT NULL DEFAULT '{}',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_placement_id) REFERENCES campaign_placements(campaign_placement_id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_campaign_assets_campaign ON campaign_assets(campaign_id, status, display_order);
+          CREATE INDEX IF NOT EXISTS idx_campaign_assets_asset ON campaign_assets(asset_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaign_assets_role ON campaign_assets(role, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_playlist_rules_placement ON playlist_rules(campaign_placement_id, status, priority);
+          CREATE INDEX IF NOT EXISTS idx_playlist_rules_status ON playlist_rules(status, updated_at DESC);
+        `);
+      }
     }
   ];
 }
@@ -1810,6 +2491,606 @@ function migrateDevicesTable() {
     });
     migrateTerminalTokens(terminalDevices);
   }
+}
+
+function normalizeAdvertiserInput(input, existing = {}) {
+  const advertiserName = cleanString(input.advertiser_name ?? input.advertiserName ?? input.name ?? existing.advertiser_name).slice(0, 160);
+  if (!advertiserName) {
+    throw requestError("advertiser_name is required", 400);
+  }
+  const status = cleanString(input.status ?? existing.status ?? "active");
+  if (!ADVERTISER_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(ADVERTISER_STATUS).join(", ")}`, 400);
+  }
+  const advertiserId = existing.advertiser_id
+    ? cleanId(existing.advertiser_id)
+    : cleanId(input.advertiser_id || input.advertiserId || advertiserName);
+  if (!advertiserId) {
+    throw requestError("advertiser_id is required", 400);
+  }
+  return {
+    advertiser_id: advertiserId,
+    advertiser_name: advertiserName,
+    agency_name: cleanString(input.agency_name ?? input.agencyName ?? existing.agency_name).slice(0, 160),
+    contact_name: cleanString(input.contact_name ?? input.contactName ?? existing.contact_name).slice(0, 160),
+    contact_email: cleanString(input.contact_email ?? input.contactEmail ?? existing.contact_email).slice(0, 240),
+    contact_phone: cleanString(input.contact_phone ?? input.contactPhone ?? existing.contact_phone).slice(0, 80),
+    status,
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function normalizeCampaignInput(input, existing = {}) {
+  const campaignName = cleanString(input.campaign_name ?? input.campaignName ?? input.name ?? existing.campaign_name).slice(0, 180);
+  if (!campaignName) {
+    throw requestError("campaign_name is required", 400);
+  }
+  const status = cleanString(input.status ?? existing.status ?? "draft");
+  if (!CAMPAIGN_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(CAMPAIGN_STATUS).join(", ")}`, 400);
+  }
+  const campaignId = existing.campaign_id
+    ? cleanId(existing.campaign_id)
+    : cleanId(input.campaign_id || input.campaignId || campaignName);
+  if (!campaignId) {
+    throw requestError("campaign_id is required", 400);
+  }
+  const advertiserId = cleanId(input.advertiser_id ?? input.advertiserId ?? existing.advertiser_id);
+  if (advertiserId && !getAdvertiser(advertiserId)) {
+    throw requestError("advertiser_id was not found", 400);
+  }
+  return {
+    campaign_id: campaignId,
+    advertiser_id: advertiserId || null,
+    campaign_name: campaignName,
+    status,
+    start_date: normalizeDate(input.start_date ?? input.startDate ?? existing.start_date, "start_date"),
+    end_date: normalizeDate(input.end_date ?? input.endDate ?? existing.end_date, "end_date"),
+    target_store_ids: normalizeIdList(input.target_store_ids ?? input.targetStoreIds ?? existing.target_store_ids_json),
+    target_time_slots: normalizeTimeSlotList(input.target_time_slots ?? input.targetTimeSlots ?? existing.target_time_slots_json),
+    priority: normalizedLimit(input.priority ?? existing.priority, 0, 0, 100),
+    qr_url: normalizeUrl(input.qr_url ?? input.qrUrl ?? existing.qr_url, "qr_url"),
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function normalizeSponsorshipProductInput(input, existing = {}) {
+  const productName = cleanString(input.product_name ?? input.productName ?? input.name ?? existing.product_name).slice(0, 180);
+  if (!productName) {
+    throw requestError("product_name is required", 400);
+  }
+  const status = cleanString(input.status ?? existing.status ?? "active");
+  if (!SPONSORSHIP_PRODUCT_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(SPONSORSHIP_PRODUCT_STATUS).join(", ")}`, 400);
+  }
+  const priceModel = cleanString(input.price_model ?? input.priceModel ?? existing.price_model ?? "manual_quote");
+  if (!SPONSORSHIP_PRICE_MODELS.has(priceModel)) {
+    throw requestError(`price_model must be one of: ${Array.from(SPONSORSHIP_PRICE_MODELS).join(", ")}`, 400);
+  }
+  const sponsorshipProductId = existing.sponsorship_product_id
+    ? cleanId(existing.sponsorship_product_id)
+    : cleanId(input.sponsorship_product_id || input.sponsorshipProductId || productName);
+  if (!sponsorshipProductId) {
+    throw requestError("sponsorship_product_id is required", 400);
+  }
+
+  const allowedLayouts = normalizeLayoutList(
+    input.allowed_layouts ?? input.allowedLayouts ?? existing.allowed_layouts_json,
+    ["wide", "two-plus-one", "three-zone", "qr-panel"]
+  );
+  return {
+    sponsorship_product_id: sponsorshipProductId,
+    tenant_id: cleanId(input.tenant_id ?? input.tenantId ?? existing.tenant_id ?? "TEN-LOCAL") || "TEN-LOCAL",
+    store_id: cleanId(input.store_id ?? input.storeId ?? existing.store_id) || null,
+    product_name: productName,
+    description: cleanString(input.description ?? existing.description).slice(0, 1000),
+    status,
+    allowed_layouts: allowedLayouts,
+    default_duration: normalizedLimit(input.default_duration ?? input.defaultDuration ?? existing.default_duration, 15, 1, 300),
+    max_share_percent: normalizedLimit(input.max_share_percent ?? input.maxSharePercent ?? existing.max_share_percent, 20, 1, 100),
+    available_time_slots: normalizeTimeSlotList(input.available_time_slots ?? input.availableTimeSlots ?? existing.available_time_slots_json),
+    target_screen_groups: normalizeIdList(input.target_screen_groups ?? input.targetScreenGroups ?? existing.target_screen_groups_json),
+    price_model: priceModel,
+    price_note: cleanString(input.price_note ?? input.priceNote ?? existing.price_note).slice(0, 500),
+    approval_required: normalizeBoolean(input.approval_required ?? input.approvalRequired ?? existing.approval_required, true),
+    report_metrics: normalizeStringList(input.report_metrics ?? input.reportMetrics ?? existing.report_metrics_json, ["plays", "duration", "qr_scans"]),
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function normalizeCampaignPlacementInput(input, existing = {}) {
+  const campaignId = cleanId(input.campaign_id ?? input.campaignId ?? existing.campaign_id);
+  if (!campaignId) {
+    throw requestError("campaign_id is required", 400);
+  }
+  const campaign = getCampaign(campaignId);
+  if (!campaign) {
+    throw requestError("campaign_id was not found", 400);
+  }
+
+  const sponsorshipProductId = cleanId(input.sponsorship_product_id ?? input.sponsorshipProductId ?? existing.sponsorship_product_id);
+  if (!sponsorshipProductId) {
+    throw requestError("sponsorship_product_id is required", 400);
+  }
+  const product = getSponsorshipProduct(sponsorshipProductId);
+  if (!product) {
+    throw requestError("sponsorship_product_id was not found", 400);
+  }
+
+  const layout = cleanString(input.layout ?? existing.layout);
+  if (!CAMPAIGN_PLACEMENT_LAYOUTS.has(layout)) {
+    throw requestError(`layout must be one of: ${Array.from(CAMPAIGN_PLACEMENT_LAYOUTS).join(", ")}`, 400);
+  }
+  if (product.allowed_layouts.length > 0 && !product.allowed_layouts.includes(layout)) {
+    throw requestError("layout is not allowed for this sponsorship product", 400);
+  }
+
+  const sharePercent = normalizedLimit(input.share_percent ?? input.sharePercent ?? existing.share_percent, 10, 1, 100);
+  if (sharePercent > product.max_share_percent) {
+    throw requestError("share_percent exceeds sponsorship product max_share_percent", 400);
+  }
+
+  const status = cleanString(input.status ?? existing.status ?? "draft");
+  if (!CAMPAIGN_PLACEMENT_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(CAMPAIGN_PLACEMENT_STATUS).join(", ")}`, 400);
+  }
+
+  const placementId = existing.campaign_placement_id
+    ? cleanId(existing.campaign_placement_id)
+    : cleanId(input.campaign_placement_id || input.campaignPlacementId || `${campaignId}-${sponsorshipProductId}-${layout}`);
+  if (!placementId) {
+    throw requestError("campaign_placement_id is required", 400);
+  }
+
+  return {
+    campaign_placement_id: placementId,
+    campaign_id: campaignId,
+    sponsorship_product_id: sponsorshipProductId,
+    tenant_id: cleanId(input.tenant_id ?? input.tenantId ?? existing.tenant_id ?? product.tenant_id) || product.tenant_id,
+    store_id: cleanId(input.store_id ?? input.storeId ?? existing.store_id ?? product.store_id) || null,
+    screen_group_id: cleanId(input.screen_group_id ?? input.screenGroupId ?? existing.screen_group_id) || null,
+    layout,
+    share_percent: sharePercent,
+    start_date: normalizeDate(input.start_date ?? input.startDate ?? existing.start_date ?? campaign.start_date, "start_date"),
+    end_date: normalizeDate(input.end_date ?? input.endDate ?? existing.end_date ?? campaign.end_date, "end_date"),
+    time_slots: normalizeTimeSlotList(input.time_slots ?? input.timeSlots ?? existing.time_slots_json),
+    priority: normalizedLimit(input.priority ?? existing.priority, campaign.priority || 0, 0, 100),
+    status,
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function normalizeCampaignAssetInput(input, existing = {}) {
+  const campaignId = cleanId(input.campaign_id ?? input.campaignId ?? existing.campaign_id);
+  if (!campaignId) {
+    throw requestError("campaign_id is required", 400);
+  }
+  if (!getCampaign(campaignId)) {
+    throw requestError("campaign_id was not found", 400);
+  }
+
+  const assetId = cleanId(input.asset_id ?? input.assetId ?? existing.asset_id);
+  if (!assetId) {
+    throw requestError("asset_id is required", 400);
+  }
+  if (!getCloudAsset(assetId)) {
+    throw requestError("asset_id was not found", 400);
+  }
+
+  const role = cleanString(input.role ?? existing.role ?? "main_video");
+  if (!CAMPAIGN_ASSET_ROLES.has(role)) {
+    throw requestError(`role must be one of: ${Array.from(CAMPAIGN_ASSET_ROLES).join(", ")}`, 400);
+  }
+
+  const status = cleanString(input.status ?? existing.status ?? "active");
+  if (!CAMPAIGN_ASSET_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(CAMPAIGN_ASSET_STATUS).join(", ")}`, 400);
+  }
+
+  const campaignAssetId = existing.campaign_asset_id
+    ? cleanId(existing.campaign_asset_id)
+    : cleanId(input.campaign_asset_id || input.campaignAssetId || `${campaignId}-${assetId}-${role}`);
+  if (!campaignAssetId) {
+    throw requestError("campaign_asset_id is required", 400);
+  }
+
+  return {
+    campaign_asset_id: campaignAssetId,
+    campaign_id: campaignId,
+    asset_id: assetId,
+    role,
+    label: cleanString(input.label ?? existing.label).slice(0, 180),
+    display_order: normalizedLimit(input.display_order ?? input.displayOrder ?? existing.display_order, 0, 0, 1000),
+    status,
+    metadata: normalizeJsonObject(input.metadata ?? input.metadata_json ?? input.metadataJson ?? existing.metadata_json, {}),
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function normalizePlaylistRuleInput(input, existing = {}) {
+  const campaignPlacementId = cleanId(input.campaign_placement_id ?? input.campaignPlacementId ?? existing.campaign_placement_id);
+  if (!campaignPlacementId) {
+    throw requestError("campaign_placement_id is required", 400);
+  }
+  if (!getCampaignPlacement(campaignPlacementId)) {
+    throw requestError("campaign_placement_id was not found", 400);
+  }
+
+  const ruleName = cleanString(input.rule_name ?? input.ruleName ?? input.name ?? existing.rule_name).slice(0, 180);
+  if (!ruleName) {
+    throw requestError("rule_name is required", 400);
+  }
+
+  const ruleType = cleanString(input.rule_type ?? input.ruleType ?? existing.rule_type ?? "weighted");
+  if (!PLAYLIST_RULE_TYPES.has(ruleType)) {
+    throw requestError(`rule_type must be one of: ${Array.from(PLAYLIST_RULE_TYPES).join(", ")}`, 400);
+  }
+
+  const status = cleanString(input.status ?? existing.status ?? "draft");
+  if (!PLAYLIST_RULE_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(PLAYLIST_RULE_STATUS).join(", ")}`, 400);
+  }
+
+  const playlistRuleId = existing.playlist_rule_id
+    ? cleanId(existing.playlist_rule_id)
+    : cleanId(input.playlist_rule_id || input.playlistRuleId || `${campaignPlacementId}-${ruleType}`);
+  if (!playlistRuleId) {
+    throw requestError("playlist_rule_id is required", 400);
+  }
+
+  return {
+    playlist_rule_id: playlistRuleId,
+    campaign_placement_id: campaignPlacementId,
+    rule_name: ruleName,
+    rule_type: ruleType,
+    weight_percent: normalizedLimit(input.weight_percent ?? input.weightPercent ?? existing.weight_percent, 10, 0, 100),
+    priority: normalizedLimit(input.priority ?? existing.priority, 0, 0, 100),
+    status,
+    playlist_item_template: normalizeJsonObject(
+      input.playlist_item_template ?? input.playlistItemTemplate ?? input.playlist_item_template_json ?? input.playlistItemTemplateJson ?? existing.playlist_item_template_json,
+      {}
+    ),
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function listAdvertisers(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM advertisers
+    ORDER BY
+      CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicAdvertiser);
+}
+
+function getAdvertiser(advertiserId) {
+  const row = db.prepare("SELECT * FROM advertisers WHERE advertiser_id = ?").get(cleanId(advertiserId));
+  return row ? publicAdvertiser(row) : null;
+}
+
+function publicAdvertiser(row) {
+  return {
+    id: row.id,
+    advertiser_id: cleanString(row.advertiser_id),
+    advertiser_name: cleanString(row.advertiser_name),
+    agency_name: cleanString(row.agency_name),
+    contact_name: cleanString(row.contact_name),
+    contact_email: cleanString(row.contact_email),
+    contact_phone: cleanString(row.contact_phone),
+    status: cleanString(row.status),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listCampaigns(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT
+      c.*,
+      a.advertiser_name
+    FROM campaigns c
+    LEFT JOIN advertisers a ON a.advertiser_id = c.advertiser_id
+    ORDER BY
+      CASE c.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END,
+      c.updated_at DESC,
+      c.id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicCampaign);
+}
+
+function getCampaign(campaignId) {
+  const row = db.prepare(`
+    SELECT
+      c.*,
+      a.advertiser_name
+    FROM campaigns c
+    LEFT JOIN advertisers a ON a.advertiser_id = c.advertiser_id
+    WHERE c.campaign_id = ?
+  `).get(cleanId(campaignId));
+  return row ? publicCampaign(row) : null;
+}
+
+function publicCampaign(row) {
+  return {
+    id: row.id,
+    campaign_id: cleanString(row.campaign_id),
+    advertiser_id: cleanString(row.advertiser_id),
+    advertiser_name: cleanString(row.advertiser_name),
+    campaign_name: cleanString(row.campaign_name),
+    status: cleanString(row.status),
+    start_date: cleanString(row.start_date),
+    end_date: cleanString(row.end_date),
+    target_store_ids: parseJsonArray(row.target_store_ids_json),
+    target_time_slots: parseJsonArray(row.target_time_slots_json),
+    priority: asInteger(row.priority) || 0,
+    qr_url: cleanString(row.qr_url),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listSponsorshipProducts(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM sponsorship_products
+    ORDER BY
+      CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicSponsorshipProduct);
+}
+
+function getSponsorshipProduct(sponsorshipProductId) {
+  const row = db.prepare("SELECT * FROM sponsorship_products WHERE sponsorship_product_id = ?").get(cleanId(sponsorshipProductId));
+  return row ? publicSponsorshipProduct(row) : null;
+}
+
+function publicSponsorshipProduct(row) {
+  return {
+    id: row.id,
+    sponsorship_product_id: cleanString(row.sponsorship_product_id),
+    tenant_id: cleanString(row.tenant_id),
+    store_id: cleanString(row.store_id),
+    product_name: cleanString(row.product_name),
+    description: cleanString(row.description),
+    status: cleanString(row.status),
+    allowed_layouts: parseJsonArray(row.allowed_layouts_json),
+    default_duration: asInteger(row.default_duration) || 15,
+    max_share_percent: asInteger(row.max_share_percent) || 20,
+    available_time_slots: parseJsonArray(row.available_time_slots_json),
+    target_screen_groups: parseJsonArray(row.target_screen_groups_json),
+    price_model: cleanString(row.price_model),
+    price_note: cleanString(row.price_note),
+    approval_required: row.approval_required !== 0,
+    report_metrics: parseJsonArray(row.report_metrics_json),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listCampaignPlacements(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT
+      cp.*,
+      c.campaign_name,
+      sp.product_name,
+      sp.max_share_percent
+    FROM campaign_placements cp
+    LEFT JOIN campaigns c ON c.campaign_id = cp.campaign_id
+    LEFT JOIN sponsorship_products sp ON sp.sponsorship_product_id = cp.sponsorship_product_id
+    ORDER BY
+      CASE cp.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END,
+      cp.updated_at DESC,
+      cp.id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicCampaignPlacement);
+}
+
+function getCampaignPlacement(campaignPlacementId) {
+  const row = db.prepare(`
+    SELECT
+      cp.*,
+      c.campaign_name,
+      sp.product_name,
+      sp.max_share_percent
+    FROM campaign_placements cp
+    LEFT JOIN campaigns c ON c.campaign_id = cp.campaign_id
+    LEFT JOIN sponsorship_products sp ON sp.sponsorship_product_id = cp.sponsorship_product_id
+    WHERE cp.campaign_placement_id = ?
+  `).get(cleanId(campaignPlacementId));
+  return row ? publicCampaignPlacement(row) : null;
+}
+
+function publicCampaignPlacement(row) {
+  return {
+    id: row.id,
+    campaign_placement_id: cleanString(row.campaign_placement_id),
+    campaign_id: cleanString(row.campaign_id),
+    campaign_name: cleanString(row.campaign_name),
+    sponsorship_product_id: cleanString(row.sponsorship_product_id),
+    product_name: cleanString(row.product_name),
+    tenant_id: cleanString(row.tenant_id),
+    store_id: cleanString(row.store_id),
+    screen_group_id: cleanString(row.screen_group_id),
+    layout: cleanString(row.layout),
+    share_percent: asInteger(row.share_percent) || 0,
+    max_share_percent: asInteger(row.max_share_percent) || 0,
+    start_date: cleanString(row.start_date),
+    end_date: cleanString(row.end_date),
+    time_slots: parseJsonArray(row.time_slots_json),
+    priority: asInteger(row.priority) || 0,
+    status: cleanString(row.status),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listCampaignAssets(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT
+      ca.*,
+      c.campaign_name,
+      a.advertiser_name,
+      cloud.type AS asset_type,
+      cloud.label AS asset_label,
+      cloud.original_name AS asset_original_name,
+      cloud.download_path AS asset_download_path
+    FROM campaign_assets ca
+    LEFT JOIN campaigns c ON c.campaign_id = ca.campaign_id
+    LEFT JOIN advertisers a ON a.advertiser_id = c.advertiser_id
+    LEFT JOIN cloud_assets cloud ON cloud.asset_id = ca.asset_id
+    ORDER BY
+      CASE ca.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      ca.display_order ASC,
+      ca.updated_at DESC,
+      ca.id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicCampaignAsset);
+}
+
+function getCampaignAsset(campaignAssetId) {
+  const row = db.prepare(`
+    SELECT
+      ca.*,
+      c.campaign_name,
+      a.advertiser_name,
+      cloud.type AS asset_type,
+      cloud.label AS asset_label,
+      cloud.original_name AS asset_original_name,
+      cloud.download_path AS asset_download_path
+    FROM campaign_assets ca
+    LEFT JOIN campaigns c ON c.campaign_id = ca.campaign_id
+    LEFT JOIN advertisers a ON a.advertiser_id = c.advertiser_id
+    LEFT JOIN cloud_assets cloud ON cloud.asset_id = ca.asset_id
+    WHERE ca.campaign_asset_id = ?
+  `).get(cleanId(campaignAssetId));
+  return row ? publicCampaignAsset(row) : null;
+}
+
+function publicCampaignAsset(row) {
+  return {
+    id: row.id,
+    campaign_asset_id: cleanString(row.campaign_asset_id),
+    campaign_id: cleanString(row.campaign_id),
+    campaign_name: cleanString(row.campaign_name),
+    advertiser_name: cleanString(row.advertiser_name),
+    asset_id: cleanString(row.asset_id),
+    asset_type: cleanString(row.asset_type),
+    asset_label: cleanString(row.asset_label || row.asset_original_name),
+    asset_download_path: cleanString(row.asset_download_path),
+    role: cleanString(row.role),
+    label: cleanString(row.label),
+    display_order: asInteger(row.display_order) || 0,
+    status: cleanString(row.status),
+    metadata: normalizeJsonObject(row.metadata_json, {}),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listPlaylistRules(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT
+      pr.*,
+      cp.campaign_id,
+      cp.sponsorship_product_id,
+      cp.layout,
+      cp.share_percent,
+      c.campaign_name,
+      sp.product_name
+    FROM playlist_rules pr
+    LEFT JOIN campaign_placements cp ON cp.campaign_placement_id = pr.campaign_placement_id
+    LEFT JOIN campaigns c ON c.campaign_id = cp.campaign_id
+    LEFT JOIN sponsorship_products sp ON sp.sponsorship_product_id = cp.sponsorship_product_id
+    ORDER BY
+      CASE pr.status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END,
+      pr.priority DESC,
+      pr.updated_at DESC,
+      pr.id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicPlaylistRule);
+}
+
+function getPlaylistRule(playlistRuleId) {
+  const row = db.prepare(`
+    SELECT
+      pr.*,
+      cp.campaign_id,
+      cp.sponsorship_product_id,
+      cp.layout,
+      cp.share_percent,
+      c.campaign_name,
+      sp.product_name
+    FROM playlist_rules pr
+    LEFT JOIN campaign_placements cp ON cp.campaign_placement_id = pr.campaign_placement_id
+    LEFT JOIN campaigns c ON c.campaign_id = cp.campaign_id
+    LEFT JOIN sponsorship_products sp ON sp.sponsorship_product_id = cp.sponsorship_product_id
+    WHERE pr.playlist_rule_id = ?
+  `).get(cleanId(playlistRuleId));
+  return row ? publicPlaylistRule(row) : null;
+}
+
+function publicPlaylistRule(row) {
+  return {
+    id: row.id,
+    playlist_rule_id: cleanString(row.playlist_rule_id),
+    campaign_placement_id: cleanString(row.campaign_placement_id),
+    campaign_id: cleanString(row.campaign_id),
+    campaign_name: cleanString(row.campaign_name),
+    sponsorship_product_id: cleanString(row.sponsorship_product_id),
+    product_name: cleanString(row.product_name),
+    placement_layout: cleanString(row.layout),
+    placement_share_percent: asInteger(row.share_percent) || 0,
+    rule_name: cleanString(row.rule_name),
+    rule_type: cleanString(row.rule_type),
+    weight_percent: asInteger(row.weight_percent) || 0,
+    priority: asInteger(row.priority) || 0,
+    status: cleanString(row.status),
+    playlist_item_template: normalizeJsonObject(row.playlist_item_template_json, {}),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function ensureTenantStoreRefs(tenantId, storeId, now) {
+  const normalizedTenantId = cleanId(tenantId || "TEN-LOCAL") || "TEN-LOCAL";
+  upsertTenant(normalizedTenantId, normalizedTenantId, now);
+  const normalizedStoreId = cleanId(storeId);
+  if (normalizedStoreId) {
+    upsertStore(normalizedTenantId, normalizedStoreId, normalizedStoreId, now);
+  }
+}
+
+function recordAuditLog(action, entityType, entityId, before, after, metadata = {}) {
+  db.prepare(`
+    INSERT INTO audit_logs (
+      actor_type, actor_id, action, entity_type, entity_id,
+      before_json, after_json, metadata_json, created_at
+    ) VALUES ('admin', ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    ADMIN_USER,
+    action,
+    entityType,
+    cleanString(entityId),
+    before ? JSON.stringify(before) : null,
+    after ? JSON.stringify(after) : null,
+    JSON.stringify(metadata || {}),
+    nowIso()
+  );
 }
 
 function normalizeDeviceInput(input) {
@@ -3407,6 +4688,104 @@ function parseJson(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function parseJsonArray(value) {
+  const parsed = typeof value === "string" ? parseJson(value, []) : value;
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function normalizeJsonObject(value, fallback = {}) {
+  let source = value;
+  if (source === undefined || source === null || source === "") {
+    source = fallback;
+  }
+  if (typeof source === "string") {
+    source = source.trim() ? parseJson(source, fallback) : fallback;
+  }
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw requestError("json object value must be an object", 400);
+  }
+  return source;
+}
+
+function normalizeIdList(value, fallback = []) {
+  return normalizeStringList(value, fallback)
+    .map((item) => cleanId(item))
+    .filter(Boolean)
+    .filter((item, index, items) => items.indexOf(item) === index);
+}
+
+function normalizeStringList(value, fallback = []) {
+  let source = value;
+  if (source === undefined || source === null || source === "") {
+    source = fallback;
+  }
+  if (typeof source === "string") {
+    const trimmed = source.trim();
+    source = trimmed.startsWith("[")
+      ? parseJson(trimmed, [])
+      : trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(source)) {
+    throw requestError("list value must be an array or comma-separated string", 400);
+  }
+  return source
+    .map((item) => cleanString(item).slice(0, 120))
+    .filter(Boolean)
+    .filter((item, index, items) => items.indexOf(item) === index);
+}
+
+function normalizeLayoutList(value, fallback = []) {
+  const layouts = normalizeStringList(value, fallback);
+  for (const layout of layouts) {
+    if (!CAMPAIGN_PLACEMENT_LAYOUTS.has(layout)) {
+      throw requestError(`allowed_layouts must use: ${Array.from(CAMPAIGN_PLACEMENT_LAYOUTS).join(", ")}`, 400);
+    }
+  }
+  return layouts;
+}
+
+function normalizeTimeSlotList(value, fallback = []) {
+  const slots = normalizeStringList(value, fallback).map((slot) => slot.replace(/\s+/g, ""));
+  for (const slot of slots) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/.test(slot)) {
+      throw requestError("time slots must be HH:mm-HH:mm", 400);
+    }
+  }
+  return slots;
+}
+
+function normalizeDate(value, label) {
+  const date = cleanString(value);
+  if (!date) return "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw requestError(`${label} must be YYYY-MM-DD`, 400);
+  }
+  return date;
+}
+
+function normalizeUrl(value, label) {
+  const url = cleanString(value).slice(0, 1000);
+  if (!url) return "";
+  if (url.startsWith("/")) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return url;
+  } catch {
+    // handled below
+  }
+  throw requestError(`${label} must be an http(s) URL or local path`, 400);
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = cleanString(value).toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
 }
 
 function escapeHtml(value) {

@@ -6,6 +6,12 @@
     releaseManifests: [],
     contentManifests: [],
     contentRollout: null,
+    advertisers: [],
+    campaigns: [],
+    sponsorshipProducts: [],
+    campaignPlacements: [],
+    campaignAssets: [],
+    playlistRules: [],
     issuedToken: null
   };
 
@@ -69,11 +75,90 @@
     failed: "失敗"
   };
 
+  const ADVERTISER_STATUS_OPTIONS = [
+    ["active", "active"],
+    ["paused", "paused"],
+    ["archived", "archived"]
+  ];
+
+  const CAMPAIGN_STATUS_OPTIONS = [
+    ["draft", "draft"],
+    ["active", "active"],
+    ["paused", "paused"],
+    ["completed", "completed"],
+    ["archived", "archived"]
+  ];
+
+  const SPONSORSHIP_PRODUCT_STATUS_OPTIONS = [
+    ["active", "active"],
+    ["draft", "draft"],
+    ["retired", "retired"]
+  ];
+
+  const CAMPAIGN_PLACEMENT_STATUS_OPTIONS = [
+    ["draft", "draft"],
+    ["active", "active"],
+    ["paused", "paused"],
+    ["retired", "retired"]
+  ];
+
+  const CAMPAIGN_ASSET_STATUS_OPTIONS = [
+    ["active", "active"],
+    ["draft", "draft"],
+    ["retired", "retired"]
+  ];
+
+  const CAMPAIGN_ASSET_ROLE_OPTIONS = [
+    ["main_video", "main video"],
+    ["wide_background", "wide background"],
+    ["qr_panel", "QR panel"],
+    ["logo", "logo"],
+    ["still", "still"],
+    ["thumbnail", "thumbnail"],
+    ["other", "other"]
+  ];
+
+  const PLAYLIST_RULE_STATUS_OPTIONS = [
+    ["draft", "draft"],
+    ["active", "active"],
+    ["paused", "paused"],
+    ["retired", "retired"]
+  ];
+
+  const PLAYLIST_RULE_TYPE_OPTIONS = [
+    ["weighted", "weighted"],
+    ["manual", "manual"],
+    ["time_slot", "time slot"],
+    ["exclusive", "exclusive"]
+  ];
+
+  const PRICE_MODEL_OPTIONS = [
+    ["manual_quote", "手動見積"],
+    ["monthly_fixed", "月額固定"],
+    ["period_fixed", "期間固定"],
+    ["impression_reference", "imp参考"],
+    ["free", "無償協賛"]
+  ];
+
+  const CAMPAIGN_PLACEMENT_LAYOUT_OPTIONS = [
+    ["wide", "3面"],
+    ["two-plus-one", "2面+1面"],
+    ["left-center", "左+中央"],
+    ["center-right", "中央+右"],
+    ["three-zone", "3分割"],
+    ["single-left", "左単面"],
+    ["single-center", "中央単面"],
+    ["single-right", "右単面"],
+    ["qr-panel", "QR"],
+    ["ticker", "ticker"]
+  ];
+
   const els = {
     summary: document.getElementById("summary"),
     devices: document.getElementById("devices"),
     alerts: document.getElementById("alerts"),
     notifications: document.getElementById("notifications"),
+    sponsorship: document.getElementById("sponsorship"),
     releaseManifests: document.getElementById("release-manifests"),
     contentManifests: document.getElementById("content-manifests"),
     assets: document.getElementById("assets"),
@@ -98,11 +183,33 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [
+      summary,
+      devices,
+      alerts,
+      notifications,
+      advertisers,
+      campaigns,
+      sponsorshipProducts,
+      campaignPlacements,
+      campaignAssets,
+      playlistRules,
+      releaseManifests,
+      contentManifests,
+      assets,
+      logBundles,
+      contentRollout
+    ] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/alerts"),
       fetchJson("/api/admin/alert-notifications"),
+      fetchJson("/api/admin/advertisers"),
+      fetchJson("/api/admin/campaigns"),
+      fetchJson("/api/admin/sponsorship-products"),
+      fetchJson("/api/admin/campaign-placements"),
+      fetchJson("/api/admin/campaign-assets"),
+      fetchJson("/api/admin/playlist-rules"),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/assets"),
@@ -114,6 +221,12 @@
     state.summary = summary;
     state.devices = devices.devices || [];
     state.assets = assets.assets || [];
+    state.advertisers = advertisers.advertisers || [];
+    state.campaigns = campaigns.campaigns || [];
+    state.sponsorshipProducts = sponsorshipProducts.sponsorship_products || [];
+    state.campaignPlacements = campaignPlacements.campaign_placements || [];
+    state.campaignAssets = campaignAssets.campaign_assets || [];
+    state.playlistRules = playlistRules.playlist_rules || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
     state.contentRollout = contentRollout?.rollout || null;
@@ -121,6 +234,7 @@
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
+    renderSponsorship();
     renderReleaseManifests(state.releaseManifests);
     renderContentManifests(state.contentManifests);
     renderAssets(state.assets, assets.max_upload_mb);
@@ -418,6 +532,485 @@
     const testButton = document.getElementById("test-notification");
     if (testButton) {
       testButton.addEventListener("click", handleNotificationTest);
+    }
+  }
+
+  function renderSponsorship() {
+    if (!els.sponsorship) return;
+    els.sponsorship.innerHTML = `
+      <div class="sponsorship-grid">
+        <form class="sponsorship-card advertiser-create">
+          <h3>広告主</h3>
+          <input name="advertiser_id" type="text" placeholder="Advertiser ID" aria-label="Advertiser ID">
+          <input name="advertiser_name" type="text" placeholder="広告主名" aria-label="広告主名" required>
+          <input name="agency_name" type="text" placeholder="代理店" aria-label="代理店">
+          <input name="contact_email" type="email" placeholder="Email" aria-label="Email">
+          <select name="status" aria-label="Advertiser status">
+            ${optionTags(ADVERTISER_STATUS_OPTIONS, "active")}
+          </select>
+          <button type="submit">作成</button>
+        </form>
+        <form class="sponsorship-card campaign-create">
+          <h3>Campaign</h3>
+          <input name="campaign_id" type="text" placeholder="Campaign ID" aria-label="Campaign ID">
+          <select name="advertiser_id" aria-label="Advertiser">
+            <option value="">広告主なし</option>
+            ${state.advertisers.map((advertiser) => (
+              `<option value="${escapeHtml(advertiser.advertiser_id)}">${escapeHtml(advertiser.advertiser_name || advertiser.advertiser_id)}</option>`
+            )).join("")}
+          </select>
+          <input name="campaign_name" type="text" placeholder="Campaign名" aria-label="Campaign名" required>
+          <select name="status" aria-label="Campaign status">
+            ${optionTags(CAMPAIGN_STATUS_OPTIONS, "draft")}
+          </select>
+          <input name="start_date" type="date" aria-label="Start date">
+          <input name="end_date" type="date" aria-label="End date">
+          <input name="target_store_ids" type="text" placeholder="Store IDs" aria-label="Store IDs">
+          <input name="target_time_slots" type="text" placeholder="09:00-18:00" aria-label="Time slots">
+          <input name="qr_url" type="url" placeholder="QR URL" aria-label="QR URL">
+          <button type="submit">作成</button>
+        </form>
+        <form class="sponsorship-card sponsorship-product-create">
+          <h3>協賛商品</h3>
+          <input name="sponsorship_product_id" type="text" placeholder="Product ID" aria-label="Product ID">
+          <input name="tenant_id" type="text" value="TEN-LOCAL" placeholder="Tenant ID" aria-label="Tenant ID">
+          <input name="store_id" type="text" placeholder="Store ID" aria-label="Store ID">
+          <input name="product_name" type="text" placeholder="商品名" aria-label="商品名" required>
+          <input name="allowed_layouts" type="text" value="wide,two-plus-one,three-zone,qr-panel" aria-label="Allowed layouts">
+          <input name="max_share_percent" type="number" min="1" max="100" value="20" aria-label="Max share percent">
+          <input name="default_duration" type="number" min="1" max="300" value="15" aria-label="Default duration">
+          <select name="price_model" aria-label="Price model">
+            ${optionTags(PRICE_MODEL_OPTIONS, "manual_quote")}
+          </select>
+          <select name="status" aria-label="Product status">
+            ${optionTags(SPONSORSHIP_PRODUCT_STATUS_OPTIONS, "active")}
+          </select>
+          <button type="submit">作成</button>
+        </form>
+        <form class="sponsorship-card campaign-placement-create">
+          <h3>配置</h3>
+          <input name="campaign_placement_id" type="text" placeholder="Placement ID" aria-label="Placement ID">
+          <select name="campaign_id" aria-label="Campaign" required>
+            <option value="">Campaign</option>
+            ${state.campaigns.map((campaign) => (
+              `<option value="${escapeHtml(campaign.campaign_id)}">${escapeHtml(campaign.campaign_name || campaign.campaign_id)}</option>`
+            )).join("")}
+          </select>
+          <select name="sponsorship_product_id" aria-label="Sponsorship product" required>
+            <option value="">協賛商品</option>
+            ${state.sponsorshipProducts.map((product) => (
+              `<option value="${escapeHtml(product.sponsorship_product_id)}">${escapeHtml(product.product_name || product.sponsorship_product_id)}</option>`
+            )).join("")}
+          </select>
+          <select name="layout" aria-label="Layout">
+            ${optionTags(CAMPAIGN_PLACEMENT_LAYOUT_OPTIONS, "wide")}
+          </select>
+          <input name="share_percent" type="number" min="1" max="100" value="10" aria-label="Share percent">
+          <input name="start_date" type="date" aria-label="Start date">
+          <input name="end_date" type="date" aria-label="End date">
+          <input name="time_slots" type="text" placeholder="09:00-18:00" aria-label="Time slots">
+          <select name="status" aria-label="Placement status">
+            ${optionTags(CAMPAIGN_PLACEMENT_STATUS_OPTIONS, "draft")}
+          </select>
+          <button type="submit">作成</button>
+        </form>
+        <form class="sponsorship-card campaign-asset-create">
+          <h3>Campaign素材</h3>
+          <input name="campaign_asset_id" type="text" placeholder="Campaign asset ID" aria-label="Campaign asset ID">
+          <select name="campaign_id" aria-label="Campaign" required>
+            <option value="">Campaign</option>
+            ${state.campaigns.map((campaign) => (
+              `<option value="${escapeHtml(campaign.campaign_id)}">${escapeHtml(campaign.campaign_name || campaign.campaign_id)}</option>`
+            )).join("")}
+          </select>
+          <select name="asset_id" aria-label="Cloud asset" required>
+            <option value="">Cloud素材</option>
+            ${state.assets.map((asset) => (
+              `<option value="${escapeHtml(asset.asset_id)}">${escapeHtml(asset.label || asset.asset_id)}</option>`
+            )).join("")}
+          </select>
+          <select name="role" aria-label="Asset role">
+            ${optionTags(CAMPAIGN_ASSET_ROLE_OPTIONS, "main_video")}
+          </select>
+          <input name="label" type="text" placeholder="素材ラベル" aria-label="Campaign asset label">
+          <input name="display_order" type="number" min="0" max="1000" value="0" aria-label="Display order">
+          <select name="status" aria-label="Campaign asset status">
+            ${optionTags(CAMPAIGN_ASSET_STATUS_OPTIONS, "active")}
+          </select>
+          <button type="submit">作成</button>
+        </form>
+        <form class="sponsorship-card playlist-rule-create">
+          <h3>Playlist rule</h3>
+          <input name="playlist_rule_id" type="text" placeholder="Rule ID" aria-label="Playlist rule ID">
+          <select name="campaign_placement_id" aria-label="Campaign placement" required>
+            <option value="">配置</option>
+            ${state.campaignPlacements.map((placement) => (
+              `<option value="${escapeHtml(placement.campaign_placement_id)}">${escapeHtml(placement.campaign_placement_id)}</option>`
+            )).join("")}
+          </select>
+          <input name="rule_name" type="text" placeholder="Rule名" aria-label="Rule name" required>
+          <select name="rule_type" aria-label="Rule type">
+            ${optionTags(PLAYLIST_RULE_TYPE_OPTIONS, "weighted")}
+          </select>
+          <input name="weight_percent" type="number" min="0" max="100" value="10" aria-label="Weight percent">
+          <input name="priority" type="number" min="0" max="100" value="0" aria-label="Priority">
+          <select name="status" aria-label="Playlist rule status">
+            ${optionTags(PLAYLIST_RULE_STATUS_OPTIONS, "draft")}
+          </select>
+          <button type="submit">作成</button>
+        </form>
+      </div>
+      <div class="sponsorship-tables">
+        ${renderAdvertisersTable()}
+        ${renderCampaignsTable()}
+        ${renderSponsorshipProductsTable()}
+        ${renderCampaignPlacementsTable()}
+        ${renderCampaignAssetsTable()}
+        ${renderPlaylistRulesTable()}
+      </div>
+    `;
+
+    els.sponsorship.querySelector(".advertiser-create")?.addEventListener("submit", handleAdvertiserCreate);
+    els.sponsorship.querySelector(".campaign-create")?.addEventListener("submit", handleCampaignCreate);
+    els.sponsorship.querySelector(".sponsorship-product-create")?.addEventListener("submit", handleSponsorshipProductCreate);
+    els.sponsorship.querySelector(".campaign-placement-create")?.addEventListener("submit", handleCampaignPlacementCreate);
+    els.sponsorship.querySelector(".campaign-asset-create")?.addEventListener("submit", handleCampaignAssetCreate);
+    els.sponsorship.querySelector(".playlist-rule-create")?.addEventListener("submit", handlePlaylistRuleCreate);
+    els.sponsorship.querySelectorAll(".advertiser-status-action").forEach((form) => {
+      form.addEventListener("submit", handleAdvertiserStatusUpdate);
+    });
+    els.sponsorship.querySelectorAll(".campaign-status-action").forEach((form) => {
+      form.addEventListener("submit", handleCampaignStatusUpdate);
+    });
+    els.sponsorship.querySelectorAll(".sponsorship-product-status-action").forEach((form) => {
+      form.addEventListener("submit", handleSponsorshipProductStatusUpdate);
+    });
+    els.sponsorship.querySelectorAll(".campaign-placement-status-action").forEach((form) => {
+      form.addEventListener("submit", handleCampaignPlacementStatusUpdate);
+    });
+    els.sponsorship.querySelectorAll(".campaign-asset-status-action").forEach((form) => {
+      form.addEventListener("submit", handleCampaignAssetStatusUpdate);
+    });
+    els.sponsorship.querySelectorAll(".playlist-rule-status-action").forEach((form) => {
+      form.addEventListener("submit", handlePlaylistRuleStatusUpdate);
+    });
+  }
+
+  function renderAdvertisersTable() {
+    if (state.advertisers.length === 0) return `<p class="empty">広告主はまだ登録されていません。</p>`;
+    return `
+      <table class="sponsorship-table">
+        <thead><tr><th>広告主</th><th>代理店</th><th>連絡先</th><th>Status</th><th>運用</th></tr></thead>
+        <tbody>
+          ${state.advertisers.slice(0, 20).map((advertiser) => `
+            <tr>
+              <td>${escapeHtml(advertiser.advertiser_name)}<small>${escapeHtml(advertiser.advertiser_id)}</small></td>
+              <td>${escapeHtml(advertiser.agency_name || "")}</td>
+              <td>${escapeHtml(advertiser.contact_email || "")}</td>
+              <td><span class="update-status update-status-${statusClass(advertiser.status)}">${escapeHtml(advertiser.status)}</span></td>
+              <td>
+                <form class="sponsorship-status-form advertiser-status-action" data-advertiser-id="${escapeHtml(advertiser.advertiser_id)}">
+                  <select name="status" aria-label="Advertiser status">${optionTags(ADVERTISER_STATUS_OPTIONS, advertiser.status)}</select>
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderCampaignsTable() {
+    if (state.campaigns.length === 0) return `<p class="empty">campaignはまだ登録されていません。</p>`;
+    return `
+      <table class="sponsorship-table">
+        <thead><tr><th>Campaign</th><th>広告主</th><th>期間</th><th>対象</th><th>Status</th><th>運用</th></tr></thead>
+        <tbody>
+          ${state.campaigns.slice(0, 20).map((campaign) => `
+            <tr>
+              <td>${escapeHtml(campaign.campaign_name)}<small>${escapeHtml(campaign.campaign_id)}</small></td>
+              <td>${escapeHtml(campaign.advertiser_name || campaign.advertiser_id || "")}</td>
+              <td>${escapeHtml(dateRange(campaign.start_date, campaign.end_date))}</td>
+              <td>${escapeHtml((campaign.target_store_ids || []).join(", "))}<small>${escapeHtml((campaign.target_time_slots || []).join(", "))}</small></td>
+              <td><span class="update-status update-status-${statusClass(campaign.status)}">${escapeHtml(campaign.status)}</span></td>
+              <td>
+                <form class="sponsorship-status-form campaign-status-action" data-campaign-id="${escapeHtml(campaign.campaign_id)}">
+                  <select name="status" aria-label="Campaign status">${optionTags(CAMPAIGN_STATUS_OPTIONS, campaign.status)}</select>
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderSponsorshipProductsTable() {
+    if (state.sponsorshipProducts.length === 0) return `<p class="empty">協賛商品はまだ登録されていません。</p>`;
+    return `
+      <table class="sponsorship-table">
+        <thead><tr><th>協賛商品</th><th>Tenant/Store</th><th>Layout</th><th>上限</th><th>Price</th><th>Status</th><th>運用</th></tr></thead>
+        <tbody>
+          ${state.sponsorshipProducts.slice(0, 20).map((product) => `
+            <tr>
+              <td>${escapeHtml(product.product_name)}<small>${escapeHtml(product.sponsorship_product_id)}</small></td>
+              <td>${escapeHtml(product.tenant_id)}<small>${escapeHtml(product.store_id || "")}</small></td>
+              <td>${escapeHtml((product.allowed_layouts || []).join(", "))}</td>
+              <td>${formatNumber(product.max_share_percent)}%<small>${formatNumber(product.default_duration)}秒</small></td>
+              <td>${escapeHtml(product.price_model || "")}</td>
+              <td><span class="update-status update-status-${statusClass(product.status)}">${escapeHtml(product.status)}</span></td>
+              <td>
+                <form class="sponsorship-status-form sponsorship-product-status-action" data-product-id="${escapeHtml(product.sponsorship_product_id)}">
+                  <select name="status" aria-label="Product status">${optionTags(SPONSORSHIP_PRODUCT_STATUS_OPTIONS, product.status)}</select>
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderCampaignPlacementsTable() {
+    if (state.campaignPlacements.length === 0) return `<p class="empty">campaign配置はまだ登録されていません。</p>`;
+    return `
+      <table class="sponsorship-table">
+        <thead><tr><th>配置</th><th>Campaign</th><th>協賛商品</th><th>Layout</th><th>期間/時間帯</th><th>Status</th><th>運用</th></tr></thead>
+        <tbody>
+          ${state.campaignPlacements.slice(0, 20).map((placement) => `
+            <tr>
+              <td>${escapeHtml(placement.campaign_placement_id)}<small>${escapeHtml(placement.tenant_id)} / ${escapeHtml(placement.store_id || "")}</small></td>
+              <td>${escapeHtml(placement.campaign_name || placement.campaign_id)}</td>
+              <td>${escapeHtml(placement.product_name || placement.sponsorship_product_id)}</td>
+              <td>${escapeHtml(placement.layout)}<small>${formatNumber(placement.share_percent)}%</small></td>
+              <td>${escapeHtml(dateRange(placement.start_date, placement.end_date))}<small>${escapeHtml((placement.time_slots || []).join(", "))}</small></td>
+              <td><span class="update-status update-status-${statusClass(placement.status)}">${escapeHtml(placement.status)}</span></td>
+              <td>
+                <form class="sponsorship-status-form campaign-placement-status-action" data-placement-id="${escapeHtml(placement.campaign_placement_id)}">
+                  <select name="status" aria-label="Placement status">${optionTags(CAMPAIGN_PLACEMENT_STATUS_OPTIONS, placement.status)}</select>
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderCampaignAssetsTable() {
+    if (state.campaignAssets.length === 0) return `<p class="empty">campaign素材はまだ登録されていません。</p>`;
+    return `
+      <table class="sponsorship-table">
+        <thead><tr><th>Campaign素材</th><th>Campaign</th><th>Cloud素材</th><th>Role</th><th>Order</th><th>Status</th><th>運用</th></tr></thead>
+        <tbody>
+          ${state.campaignAssets.slice(0, 20).map((asset) => `
+            <tr>
+              <td>${escapeHtml(asset.label || asset.campaign_asset_id)}<small>${escapeHtml(asset.campaign_asset_id)}</small></td>
+              <td>${escapeHtml(asset.campaign_name || asset.campaign_id)}<small>${escapeHtml(asset.advertiser_name || "")}</small></td>
+              <td>${escapeHtml(asset.asset_label || asset.asset_id)}<small>${escapeHtml(asset.asset_id || "")}</small></td>
+              <td>${escapeHtml(asset.role || "")}</td>
+              <td>${formatNumber(asset.display_order)}</td>
+              <td><span class="update-status update-status-${statusClass(asset.status)}">${escapeHtml(asset.status)}</span></td>
+              <td>
+                <form class="sponsorship-status-form campaign-asset-status-action" data-campaign-asset-id="${escapeHtml(asset.campaign_asset_id)}">
+                  <select name="status" aria-label="Campaign asset status">${optionTags(CAMPAIGN_ASSET_STATUS_OPTIONS, asset.status)}</select>
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderPlaylistRulesTable() {
+    if (state.playlistRules.length === 0) return `<p class="empty">playlist ruleはまだ登録されていません。</p>`;
+    return `
+      <table class="sponsorship-table">
+        <thead><tr><th>Rule</th><th>配置</th><th>Campaign/商品</th><th>Type</th><th>Weight</th><th>Status</th><th>運用</th></tr></thead>
+        <tbody>
+          ${state.playlistRules.slice(0, 20).map((rule) => `
+            <tr>
+              <td>${escapeHtml(rule.rule_name)}<small>${escapeHtml(rule.playlist_rule_id)}</small></td>
+              <td>${escapeHtml(rule.campaign_placement_id)}<small>${escapeHtml(rule.placement_layout || "")}</small></td>
+              <td>${escapeHtml(rule.campaign_name || rule.campaign_id)}<small>${escapeHtml(rule.product_name || rule.sponsorship_product_id || "")}</small></td>
+              <td>${escapeHtml(rule.rule_type || "")}<small>priority ${formatNumber(rule.priority)}</small></td>
+              <td>${formatNumber(rule.weight_percent)}%</td>
+              <td><span class="update-status update-status-${statusClass(rule.status)}">${escapeHtml(rule.status)}</span></td>
+              <td>
+                <form class="sponsorship-status-form playlist-rule-status-action" data-playlist-rule-id="${escapeHtml(rule.playlist_rule_id)}">
+                  <select name="status" aria-label="Playlist rule status">${optionTags(PLAYLIST_RULE_STATUS_OPTIONS, rule.status)}</select>
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  async function handleAdvertiserCreate(event) {
+    event.preventDefault();
+    await submitJsonForm(event.currentTarget, "/api/admin/advertisers", {
+      advertiser_id: event.currentTarget.elements.advertiser_id.value,
+      advertiser_name: event.currentTarget.elements.advertiser_name.value,
+      agency_name: event.currentTarget.elements.agency_name.value,
+      contact_email: event.currentTarget.elements.contact_email.value,
+      status: event.currentTarget.elements.status.value
+    });
+  }
+
+  async function handleCampaignCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, "/api/admin/campaigns", {
+      campaign_id: form.elements.campaign_id.value,
+      advertiser_id: form.elements.advertiser_id.value,
+      campaign_name: form.elements.campaign_name.value,
+      status: form.elements.status.value,
+      start_date: form.elements.start_date.value,
+      end_date: form.elements.end_date.value,
+      target_store_ids: form.elements.target_store_ids.value,
+      target_time_slots: form.elements.target_time_slots.value,
+      qr_url: form.elements.qr_url.value
+    });
+  }
+
+  async function handleSponsorshipProductCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, "/api/admin/sponsorship-products", {
+      sponsorship_product_id: form.elements.sponsorship_product_id.value,
+      tenant_id: form.elements.tenant_id.value,
+      store_id: form.elements.store_id.value,
+      product_name: form.elements.product_name.value,
+      allowed_layouts: form.elements.allowed_layouts.value,
+      max_share_percent: form.elements.max_share_percent.value,
+      default_duration: form.elements.default_duration.value,
+      price_model: form.elements.price_model.value,
+      status: form.elements.status.value
+    });
+  }
+
+  async function handleCampaignPlacementCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, "/api/admin/campaign-placements", {
+      campaign_placement_id: form.elements.campaign_placement_id.value,
+      campaign_id: form.elements.campaign_id.value,
+      sponsorship_product_id: form.elements.sponsorship_product_id.value,
+      layout: form.elements.layout.value,
+      share_percent: form.elements.share_percent.value,
+      start_date: form.elements.start_date.value,
+      end_date: form.elements.end_date.value,
+      time_slots: form.elements.time_slots.value,
+      status: form.elements.status.value
+    });
+  }
+
+  async function handleCampaignAssetCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, "/api/admin/campaign-assets", {
+      campaign_asset_id: form.elements.campaign_asset_id.value,
+      campaign_id: form.elements.campaign_id.value,
+      asset_id: form.elements.asset_id.value,
+      role: form.elements.role.value,
+      label: form.elements.label.value,
+      display_order: form.elements.display_order.value,
+      status: form.elements.status.value
+    });
+  }
+
+  async function handlePlaylistRuleCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, "/api/admin/playlist-rules", {
+      playlist_rule_id: form.elements.playlist_rule_id.value,
+      campaign_placement_id: form.elements.campaign_placement_id.value,
+      rule_name: form.elements.rule_name.value,
+      rule_type: form.elements.rule_type.value,
+      weight_percent: form.elements.weight_percent.value,
+      priority: form.elements.priority.value,
+      status: form.elements.status.value
+    });
+  }
+
+  async function handleAdvertiserStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, `/api/admin/advertisers/${encodeURIComponent(form.dataset.advertiserId)}`, {
+      status: form.elements.status.value
+    }, "PATCH", false);
+  }
+
+  async function handleCampaignStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, `/api/admin/campaigns/${encodeURIComponent(form.dataset.campaignId)}`, {
+      status: form.elements.status.value
+    }, "PATCH", false);
+  }
+
+  async function handleSponsorshipProductStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, `/api/admin/sponsorship-products/${encodeURIComponent(form.dataset.productId)}`, {
+      status: form.elements.status.value
+    }, "PATCH", false);
+  }
+
+  async function handleCampaignPlacementStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, `/api/admin/campaign-placements/${encodeURIComponent(form.dataset.placementId)}`, {
+      status: form.elements.status.value
+    }, "PATCH", false);
+  }
+
+  async function handleCampaignAssetStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, `/api/admin/campaign-assets/${encodeURIComponent(form.dataset.campaignAssetId)}`, {
+      status: form.elements.status.value
+    }, "PATCH", false);
+  }
+
+  async function handlePlaylistRuleStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await submitJsonForm(form, `/api/admin/playlist-rules/${encodeURIComponent(form.dataset.playlistRuleId)}`, {
+      status: form.elements.status.value
+    }, "PATCH", false);
+  }
+
+  async function submitJsonForm(form, url, payload, method = "POST", resetOnSuccess = true) {
+    const button = form.querySelector("button[type='submit']");
+    const originalText = button?.textContent || "保存";
+    if (button) {
+      button.disabled = true;
+      button.textContent = method === "POST" ? "作成中" : "保存中";
+    }
+    try {
+      await fetchJson(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (resetOnSuccess) form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "保存に失敗しました。");
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
     }
   }
 
@@ -1034,6 +1627,24 @@
 
   function nextPlaylistVersion(date = new Date()) {
     return `pl-${date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`;
+  }
+
+  function optionTags(options, selectedValue = "") {
+    return options.map(([value, label]) => (
+      `<option value="${escapeHtml(value)}"${value === selectedValue ? " selected" : ""}>${escapeHtml(label)}</option>`
+    )).join("");
+  }
+
+  function statusClass(status) {
+    if (status === "active" || status === "completed") return "success";
+    if (status === "paused" || status === "draft") return "pending";
+    if (status === "retired" || status === "archived") return "idle";
+    return "idle";
+  }
+
+  function dateRange(start, end) {
+    if (start && end) return `${start} - ${end}`;
+    return start || end || "";
   }
 
   function formatTime(value) {

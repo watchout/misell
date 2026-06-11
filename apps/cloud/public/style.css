@@ -134,7 +134,8 @@ table {
 #devices,
 #release-manifests,
 #content-manifests,
-#assets {
+#assets,
+#sponsorship {
   overflow-x: auto;
 }
 
@@ -253,6 +254,51 @@ td small {
 
 .notifications-table {
   table-layout: fixed;
+}
+
+.sponsorship-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(6, minmax(250px, 1fr));
+  margin-bottom: 10px;
+  min-width: 1600px;
+}
+
+.sponsorship-card {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
+  padding: 10px;
+}
+
+.sponsorship-card h3 {
+  color: #52616f;
+  font-size: 13px;
+  margin: 0;
+}
+
+.sponsorship-card button {
+  justify-self: start;
+}
+
+.sponsorship-tables {
+  display: grid;
+  gap: 10px;
+  min-width: 1280px;
+}
+
+.sponsorship-table {
+  table-layout: fixed;
+}
+
+.sponsorship-status-form {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(94px, 1fr) auto;
+  min-width: 180px;
 }
 
 .release-manifest-create {

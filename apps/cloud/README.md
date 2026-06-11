@@ -200,6 +200,24 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 - `GET /api/admin/alerts` with Basic auth
 - `GET /api/admin/alert-notifications` with Basic auth
 - `POST /api/admin/alert-notifications/test` with Basic auth
+- `GET /api/admin/advertisers` with Basic auth
+- `POST /api/admin/advertisers` with Basic auth
+- `PATCH /api/admin/advertisers/:advertiser_id` with Basic auth
+- `GET /api/admin/campaigns` with Basic auth
+- `POST /api/admin/campaigns` with Basic auth
+- `PATCH /api/admin/campaigns/:campaign_id` with Basic auth
+- `GET /api/admin/sponsorship-products` with Basic auth
+- `POST /api/admin/sponsorship-products` with Basic auth
+- `PATCH /api/admin/sponsorship-products/:sponsorship_product_id` with Basic auth
+- `GET /api/admin/campaign-placements` with Basic auth
+- `POST /api/admin/campaign-placements` with Basic auth
+- `PATCH /api/admin/campaign-placements/:campaign_placement_id` with Basic auth
+- `GET /api/admin/campaign-assets` with Basic auth
+- `POST /api/admin/campaign-assets` with Basic auth
+- `PATCH /api/admin/campaign-assets/:campaign_asset_id` with Basic auth
+- `GET /api/admin/playlist-rules` with Basic auth
+- `POST /api/admin/playlist-rules` with Basic auth
+- `PATCH /api/admin/playlist-rules/:playlist_rule_id` with Basic auth
 - `POST /api/device/heartbeat` with Bearer device token
 - `GET /api/device/update-policy` with Bearer device token
 - `POST /api/device/update-result` with Bearer device token
