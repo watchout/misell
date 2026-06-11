@@ -286,3 +286,14 @@ This MVP content manifest distributes playlist JSON only. Asset file distributio
 - Local development DB: `data/misell-cloud.sqlite`
 - macOS LaunchAgent DB: `~/.local/share/misell-cloud/data/misell-cloud.sqlite`
 - DB files are ignored by Git.
+
+## Schema Migrations
+
+Cloud startup creates the legacy baseline schema and then applies additive migrations recorded in `schema_migrations`.
+
+Operational notes:
+
+- Treat the legacy `CREATE TABLE IF NOT EXISTS` block as the baseline. Future schema changes should be added as new schema migration versions.
+- Migrations are additive and do not run automatic down/rollback SQL.
+- Reverting app code does not drop tables added by a migration; unused additive tables may remain in SQLite.
+- For an emergency rollback that must remove migrated schema or data, restore a verified SQLite backup instead of relying on app startup.
