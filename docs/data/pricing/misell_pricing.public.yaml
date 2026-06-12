@@ -1,0 +1,193 @@
+schema_version: "1.0.0"
+profile: public
+dataset_id: misell_pricing_public_2026_06
+canonical_source: docs/data/pricing/misell_pricing.public.yaml
+source_status_default: needs_human_approval
+currency: JPY
+tax_basis: ex_tax
+generated_on: "2026-06-08"
+
+shared_terms:
+  minimum_contract_months: 12
+  recommended_contract_months: 24
+  quote_rule: Standard scope, site conditions, device count, installation method, and content operation scope must be confirmed before issuing a final quote.
+  customer_claim_policy:
+    - Advertising revenue, visitor increases, QR counts, view counts, or sales increases are not guaranteed.
+    - AI report text must be based on actual logs and must not invent numeric results.
+    - Camera or sensor features require legal, privacy, signage, and site-condition approval before proposal.
+    - Individual identification, face recognition, and person-level tracking are outside the public offer.
+
+plans:
+  - id: lite
+    display_name: Lite
+    source_status: needs_human_approval
+    customer_positioning: Small-site or first paid rollout plan for basic three-screen signage operation.
+    contract:
+      minimum_months: 12
+      recommended_months: 24
+    monthly_fee:
+      amount: 49800
+      billing_interval: month
+    initial_fee:
+      kind: variants
+      variants:
+        - id: lite_variant_01
+          display_name: Lite variant 01
+          amount: 580000
+          source_status: needs_human_approval
+        - id: lite_variant_02
+          display_name: Lite variant 02
+          amount: 980000
+          source_status: needs_human_approval
+        - id: lite_variant_03
+          display_name: Lite variant 03
+          amount: 980000
+          source_status: needs_human_approval
+        - id: lite_variant_04
+          display_name: Lite variant 04
+          amount: 1380000
+          source_status: needs_human_approval
+    included_scope:
+      - Three-screen signage display operation
+      - Basic playlist setup
+      - Monthly content replacement within standard scope
+      - Basic device status check
+      - Basic support
+    excluded_scope:
+      - Advertising sales operation
+      - Detailed advertiser reporting
+      - Large-volume creative production
+      - Non-standard installation work
+      - Camera, sensor, or person-flow measurement features
+    ai_positioning:
+      included:
+        - None in the base plan.
+      optional:
+        - AI copy draft support can be proposed only after scope and human approval.
+      not_included:
+        - AI camera or AI count.
+        - Individual identification or person-level tracking.
+    measurement_policy:
+      included:
+        - Playback logs.
+        - Basic operational status.
+      not_guaranteed:
+        - QR counts.
+        - View counts.
+        - Advertising revenue.
+        - Sales lift.
+
+  - id: standard
+    display_name: Standard
+    source_status: needs_human_approval
+    customer_positioning: Default paid rollout plan for signage operation, QR measurement, and monthly reporting.
+    contract:
+      minimum_months: 12
+      recommended_months: 24
+    monthly_fee:
+      amount: 79800
+      billing_interval: month
+    initial_fee:
+      kind: variants
+      variants:
+        - id: standard_variant_01
+          display_name: Standard variant 01
+          amount: 880000
+          source_status: needs_human_approval
+        - id: standard_variant_02
+          display_name: Standard variant 02
+          amount: 1480000
+          source_status: needs_human_approval
+        - id: standard_variant_03
+          display_name: Standard variant 03
+          amount: 1330000
+          source_status: needs_human_approval
+        - id: standard_variant_04
+          display_name: Standard variant 04
+          amount: 1930000
+          source_status: needs_human_approval
+    included_scope:
+      - Lite scope.
+      - Additional monthly content replacement within standard scope.
+      - QR measurement setup.
+      - Monthly report.
+      - Basic POP tag workflow.
+      - Operation improvement proposal.
+    excluded_scope:
+      - Advertising sales agency work.
+      - Full advertising review operation.
+      - Camera, sensor, or person-flow measurement features.
+      - Custom system integration.
+    ai_positioning:
+      included:
+        - AI report draft support based on existing playback and QR logs can be proposed after human approval.
+      optional:
+        - AI copy draft support.
+        - AI translation draft support.
+      not_included:
+        - AI camera or AI count.
+        - Individual identification or person-level tracking.
+    measurement_policy:
+      included:
+        - Playback logs.
+        - QR access logs.
+        - Monthly report based on collected logs.
+      not_guaranteed:
+        - Exact view counts.
+        - Advertising revenue.
+        - Sales lift.
+
+  - id: media
+    display_name: Media
+    source_status: needs_human_approval
+    customer_positioning: Advertising-slot operation plan for facilities that want media-kit and advertiser reporting support.
+    contract:
+      minimum_months: 12
+      recommended_months: 24
+    monthly_fee:
+      amount: 128000
+      billing_interval: month
+    initial_fee:
+      kind: quote
+      quote_label: Individual quote after media operation scope and site conditions are confirmed.
+      source_status: needs_human_approval
+    included_scope:
+      - Standard scope.
+      - Media-kit preparation support.
+      - Advertising-slot menu design.
+      - Basic review of submitted advertising creative.
+      - Advertiser-facing placement report.
+      - Advertising operation improvement proposal.
+    excluded_scope:
+      - Guaranteed advertiser acquisition.
+      - Guaranteed advertising revenue.
+      - Advertising review for every regulated industry without separate approval.
+      - Camera, sensor, or person-flow measurement features without privacy approval.
+    ai_positioning:
+      included:
+        - AI report draft support based on existing playback and QR logs can be proposed after human approval.
+      optional:
+        - AI copy draft support.
+        - AI translation draft support.
+        - AI scheduling proposal support.
+      not_included:
+        - Individual identification or person-level tracking.
+        - Automatic attribution of sales to signage.
+    measurement_policy:
+      included:
+        - Playback logs.
+        - QR access logs.
+        - Advertiser-facing report based on collected logs.
+      not_guaranteed:
+        - Exact view counts.
+        - Impression guarantee.
+        - Advertising revenue.
+        - Sales lift.
+
+governance:
+  rasen_boundary: Rasen may use schema, templates, and abstract adapters only. Misell product-specific public prices remain in this Misell dataset.
+  internal_data_storage: Real internal economics and partner terms must live outside this public repository, such as a private repository, local database, or approved ignored local store.
+  approval_gate:
+    - Keep every public price record at source_status needs_human_approval until human approval is recorded.
+    - Run npm run pricing:audit before any pricing implementation PR is accepted.
+    - Do not duplicate hand-maintained official price tables in proposal docs; reference this canonical dataset instead.

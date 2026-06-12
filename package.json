@@ -7,13 +7,16 @@
     "check:player": "npm --prefix apps/player run check",
     "check:cloud": "npm --prefix apps/cloud run check",
     "check:shell": "bash -n apps/player/scripts/*.sh apps/cloud/scripts/*.sh",
+    "pricing:audit": "node scripts/check-pricing-public-data.js",
     "validate:playlist": "npm --prefix apps/player run validate:playlist",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.js",
     "test:e2e:headed": "playwright test --config tests/e2e/playwright.config.js --headed",
-    "test:ci": "npm run check:player && npm run validate:playlist && npm run check:cloud && npm run check:shell && npm run test:e2e"
+    "test:ci": "npm run check:player && npm run validate:playlist && npm run check:cloud && npm run check:shell && npm run pricing:audit && npm run test:e2e"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0"
+    "@playwright/test": "^1.60.0",
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.0"
   },
   "engines": {
     "node": ">=20"

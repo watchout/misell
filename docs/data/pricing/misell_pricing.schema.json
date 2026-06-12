@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/watchout/misell/docs/data/pricing/misell_pricing.schema.json",
+  "title": "Misell public pricing dataset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "dataset_id",
+    "canonical_source",
+    "source_status_default",
+    "currency",
+    "tax_basis",
+    "generated_on",
+    "shared_terms",
+    "plans",
+    "governance"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "profile": {
+      "type": "string",
+      "const": "public"
+    },
+    "dataset_id": {
+      "type": "string",
+      "pattern": "^misell_pricing_public_[0-9]{4}_[0-9]{2}$"
+    },
+    "canonical_source": {
+      "type": "string",
+      "const": "docs/data/pricing/misell_pricing.public.yaml"
+    },
+    "source_status_default": {
+      "$ref": "#/$defs/sourceStatus"
+    },
+    "currency": {
+      "type": "string",
+      "const": "JPY"
+    },
+    "tax_basis": {
+      "type": "string",
+      "const": "ex_tax"
+    },
+    "generated_on": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "shared_terms": {
+      "$ref": "#/$defs/sharedTerms"
+    },
+    "plans": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "$ref": "#/$defs/plan"
+      }
+    },
+    "governance": {
+      "$ref": "#/$defs/governance"
+    }
+  },
+  "$defs": {
+    "sourceStatus": {
+      "type": "string",
+      "const": "needs_human_approval"
+    },
+    "moneyAmount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000000
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "textArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "sharedTerms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_contract_months",
+        "recommended_contract_months",
+        "quote_rule",
+        "customer_claim_policy"
+      ],
+      "properties": {
+        "minimum_contract_months": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "recommended_contract_months": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quote_rule": {
+          "$ref": "#/$defs/text"
+        },
+        "customer_claim_policy": {
+          "$ref": "#/$defs/textArray"
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "source_status",
+        "customer_positioning",
+        "contract",
+        "monthly_fee",
+        "initial_fee",
+        "included_scope",
+        "excluded_scope",
+        "ai_positioning",
+        "measurement_policy"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": [
+            "lite",
+            "standard",
+            "media"
+          ]
+        },
+        "display_name": {
+          "$ref": "#/$defs/text"
+        },
+        "source_status": {
+          "$ref": "#/$defs/sourceStatus"
+        },
+        "customer_positioning": {
+          "$ref": "#/$defs/text"
+        },
+        "contract": {
+          "$ref": "#/$defs/contract"
+        },
+        "monthly_fee": {
+          "$ref": "#/$defs/monthlyFee"
+        },
+        "initial_fee": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/variantInitialFee"
+            },
+            {
+              "$ref": "#/$defs/quoteInitialFee"
+            }
+          ]
+        },
+        "included_scope": {
+          "$ref": "#/$defs/textArray"
+        },
+        "excluded_scope": {
+          "$ref": "#/$defs/textArray"
+        },
+        "ai_positioning": {
+          "$ref": "#/$defs/aiPositioning"
+        },
+        "measurement_policy": {
+          "$ref": "#/$defs/measurementPolicy"
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_months",
+        "recommended_months"
+      ],
+      "properties": {
+        "minimum_months": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "recommended_months": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "monthlyFee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "billing_interval"
+      ],
+      "properties": {
+        "amount": {
+          "$ref": "#/$defs/moneyAmount"
+        },
+        "billing_interval": {
+          "type": "string",
+          "const": "month"
+        }
+      }
+    },
+    "variantInitialFee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "variants"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "variants"
+        },
+        "variants": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/initialVariant"
+          }
+        }
+      }
+    },
+    "quoteInitialFee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "quote_label",
+        "source_status"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "quote"
+        },
+        "quote_label": {
+          "$ref": "#/$defs/text"
+        },
+        "source_status": {
+          "$ref": "#/$defs/sourceStatus"
+        }
+      }
+    },
+    "initialVariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "amount",
+        "source_status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "display_name": {
+          "$ref": "#/$defs/text"
+        },
+        "amount": {
+          "$ref": "#/$defs/moneyAmount"
+        },
+        "source_status": {
+          "$ref": "#/$defs/sourceStatus"
+        }
+      }
+    },
+    "aiPositioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included",
+        "optional",
+        "not_included"
+      ],
+      "properties": {
+        "included": {
+          "$ref": "#/$defs/textArray"
+        },
+        "optional": {
+          "$ref": "#/$defs/textArray"
+        },
+        "not_included": {
+          "$ref": "#/$defs/textArray"
+        }
+      }
+    },
+    "measurementPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included",
+        "not_guaranteed"
+      ],
+      "properties": {
+        "included": {
+          "$ref": "#/$defs/textArray"
+        },
+        "not_guaranteed": {
+          "$ref": "#/$defs/textArray"
+        }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rasen_boundary",
+        "internal_data_storage",
+        "approval_gate"
+      ],
+      "properties": {
+        "rasen_boundary": {
+          "$ref": "#/$defs/text"
+        },
+        "internal_data_storage": {
+          "$ref": "#/$defs/text"
+        },
+        "approval_gate": {
+          "$ref": "#/$defs/textArray"
+        }
+      }
+    }
+  }
+}

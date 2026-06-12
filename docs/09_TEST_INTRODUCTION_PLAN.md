@@ -85,15 +85,15 @@
 ### 無償/低額テスト
 
 - 期間：2〜4週間
-- 初期：実費または無償
-- 月額：無償または低額
+- 初期：案件条件とsource statusを確認して提示
+- 月額：案件条件とsource statusを確認して提示
 - 条件：写真撮影、事例化、フィードバック、レポート掲載許可
 
 ### 有償PoC
 
 - 期間：1〜3か月
-- 初期：98,000円〜298,000円
-- 月額：49,800円〜79,800円
+- 初期：`docs/data/pricing/misell_pricing.public.yaml` を参照して提示
+- 月額：`docs/data/pricing/misell_pricing.public.yaml` を参照して提示
 - 条件：月次レポート提出、継続判断
 
 ## テストで見るKPI

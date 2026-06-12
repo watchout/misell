@@ -1,0 +1,15 @@
+example_only: true
+profile: internal_example
+description: Dummy-only template for private Misell internal economics data.
+do_not_use_for_quote: true
+do_not_copy_real_values_into_public_repo: true
+
+records:
+  - plan_id: example_plan
+    variant_id: example_variant
+    private_store_hint: Move real values to a private repository, local database, or approved ignored local store.
+    example_values_only:
+      setup_input: 0
+      monthly_input: 0
+      partner_condition: example_only
+      approval_status: not_real_data
