@@ -164,6 +164,7 @@ npm audit --audit-level=moderate
 - docs/73_ORDER_TO_INSTALL_WORKFLOW_SPEC.md
 - docs/74_BILLING_PAYMENT_PORTAL_SPEC.md
 - docs/75_PARTNER_RESELLER_CHANNEL_STRATEGY_SPEC.md
+- docs/76_RBAC_AND_SELF_SERVICE_OPERATION_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
