@@ -155,6 +155,7 @@ npm audit --audit-level=moderate
 - docs/65_QR_GENERATION_GUIDE.md
 - docs/66_EQUIPMENT_AND_PRICE_REFERENCE.md
 - docs/67_MASTER_CONTROL_AND_CONTENT_DELIVERY_DESIGN.md
+- docs/67_MISELL_STUDIO_NOVISIGN_BENCHMARK_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
