@@ -159,6 +159,7 @@ npm audit --audit-level=moderate
 - docs/68_MARKET_PRICING_RESEARCH_AND_PLAN_CONCEPT.md
 - docs/69_MEDIA_AD_DELIVERY_IMPLEMENTATION_SPEC.md
 - docs/70_MULTI_SCREEN_ORIENTATION_CONTENT_MODEL.md
+- docs/71_REPORTING_DASHBOARD_IMPLEMENTATION_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
