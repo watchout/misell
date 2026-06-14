@@ -156,6 +156,7 @@ npm audit --audit-level=moderate
 - docs/66_EQUIPMENT_AND_PRICE_REFERENCE.md
 - docs/67_MASTER_CONTROL_AND_CONTENT_DELIVERY_DESIGN.md
 - docs/67_MISELL_STUDIO_NOVISIGN_BENCHMARK_SPEC.md
+- docs/68_MARKET_PRICING_RESEARCH_AND_PLAN_CONCEPT.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
