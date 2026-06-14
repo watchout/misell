@@ -162,6 +162,7 @@ npm audit --audit-level=moderate
 - docs/71_REPORTING_DASHBOARD_IMPLEMENTATION_SPEC.md
 - docs/72_CONTRACT_BILLING_AND_RENTAL_ASSET_SPEC.md
 - docs/73_ORDER_TO_INSTALL_WORKFLOW_SPEC.md
+- docs/74_BILLING_PAYMENT_PORTAL_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
