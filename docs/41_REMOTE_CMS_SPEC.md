@@ -95,6 +95,50 @@
 - qr_url
 - status
 
+キャンペーンは固定の広告枠に直接紐づけない。導入先が定義した協賛商品に対して、期間、対象店舗/場所、画面構成、表示比率、時間帯、QR導線を設定する。
+
+協賛商品として設定できる例：
+
+- 地域スポンサー枠
+- イベント協賛
+- 商品紹介枠
+- 施設案内協賛
+- 3面ジャック
+- 2面+1面スポンサー枠
+- QRクーポン枠
+- 無償協賛/協力企業表示
+
+協賛商品が持つ項目：
+
+- sponsorship_product_id
+- tenant_id / store_id
+- product_name
+- description
+- allowed_layouts
+- default_duration
+- max_share_percent
+- available_time_slots
+- target_screen_groups
+- price_model
+- approval_required
+- report_metrics
+- status
+
+キャンペーン配置が持つ項目：
+
+- campaign_placement_id
+- campaign_id
+- sponsorship_product_id
+- target_store_ids
+- target_screen_group_ids
+- layout
+- share_percent
+- start_date
+- end_date
+- time_slots
+- priority
+- status
+
 ### 5. プレイリスト管理
 
 playlistは店舗別または端末別に作成する。

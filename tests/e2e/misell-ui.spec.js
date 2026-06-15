@@ -634,6 +634,77 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(page.locator("#summary")).toContainText("正常");
   await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-dashboard.png"), fullPage: true });
 
+  action("Create advertiser, campaign, sponsorship product, and placement through cloud admin UI");
+  const advertiserForm = page.locator("form.advertiser-create");
+  await advertiserForm.locator("input[name='advertiser_id']").fill("adv-browser");
+  await advertiserForm.locator("input[name='advertiser_name']").fill("Browser Advertiser");
+  await advertiserForm.locator("input[name='agency_name']").fill("Browser Agency");
+  await advertiserForm.locator("input[name='contact_email']").fill("browser-adv@example.com");
+  await advertiserForm.locator("button[type='submit']").click();
+  await expect(page.locator("#sponsorship")).toContainText("Browser Advertiser", { timeout: 5000 });
+
+  const campaignForm = page.locator("form.campaign-create");
+  await campaignForm.locator("input[name='campaign_id']").fill("cmp-browser-sponsor");
+  await campaignForm.locator("select[name='advertiser_id']").selectOption("adv-browser");
+  await campaignForm.locator("input[name='campaign_name']").fill("Browser Sponsor Campaign");
+  await campaignForm.locator("select[name='status']").selectOption("active");
+  await campaignForm.locator("input[name='start_date']").fill("2026-06-01");
+  await campaignForm.locator("input[name='end_date']").fill("2026-06-30");
+  await campaignForm.locator("input[name='target_store_ids']").fill("STO-BROWSER");
+  await campaignForm.locator("input[name='target_time_slots']").fill("09:00-18:00");
+  await campaignForm.locator("input[name='qr_url']").fill("https://example.com/browser-sponsor");
+  await campaignForm.locator("button[type='submit']").click();
+  await expect(page.locator("#sponsorship")).toContainText("Browser Sponsor Campaign", { timeout: 5000 });
+
+  const productForm = page.locator("form.sponsorship-product-create");
+  await productForm.locator("input[name='sponsorship_product_id']").fill("sp-browser-regional");
+  await productForm.locator("input[name='tenant_id']").fill("TEN-BROWSER");
+  await productForm.locator("input[name='store_id']").fill("STO-BROWSER");
+  await productForm.locator("input[name='product_name']").fill("Browser Regional Sponsor");
+  await productForm.locator("input[name='allowed_layouts']").fill("wide,two-plus-one,qr-panel");
+  await productForm.locator("input[name='max_share_percent']").fill("25");
+  await productForm.locator("input[name='default_duration']").fill("15");
+  await productForm.locator("select[name='price_model']").selectOption("monthly_fixed");
+  await productForm.locator("button[type='submit']").click();
+  await expect(page.locator("#sponsorship")).toContainText("Browser Regional Sponsor", { timeout: 5000 });
+
+  const placementForm = page.locator("form.campaign-placement-create");
+  await placementForm.locator("input[name='campaign_placement_id']").fill("place-browser-wide");
+  await placementForm.locator("select[name='campaign_id']").selectOption("cmp-browser-sponsor");
+  await placementForm.locator("select[name='sponsorship_product_id']").selectOption("sp-browser-regional");
+  await placementForm.locator("select[name='layout']").selectOption("wide");
+  await placementForm.locator("input[name='share_percent']").fill("10");
+  await placementForm.locator("input[name='start_date']").fill("2026-06-01");
+  await placementForm.locator("input[name='end_date']").fill("2026-06-30");
+  await placementForm.locator("input[name='time_slots']").fill("09:00-18:00");
+  await placementForm.locator("select[name='status']").selectOption("active");
+  await placementForm.locator("button[type='submit']").click();
+  await expect(page.locator("#sponsorship")).toContainText("place-browser-wide", { timeout: 5000 });
+  const placements = await authedRequest(cloudBase, "/api/admin/campaign-placements");
+  const browserPlacement = placements.json.campaign_placements.find((placement) => placement.campaign_placement_id === "place-browser-wide");
+  expect(browserPlacement).toBeTruthy();
+  expect(browserPlacement.layout).toBe("wide");
+  expect(browserPlacement.share_percent).toBe(10);
+  expect(browserPlacement.product_name).toBe("Browser Regional Sponsor");
+
+  const playlistRuleForm = page.locator("form.playlist-rule-create");
+  await playlistRuleForm.locator("input[name='playlist_rule_id']").fill("rule-browser-wide");
+  await playlistRuleForm.locator("select[name='campaign_placement_id']").selectOption("place-browser-wide");
+  await playlistRuleForm.locator("input[name='rule_name']").fill("Browser wide weighted rule");
+  await playlistRuleForm.locator("select[name='rule_type']").selectOption("weighted");
+  await playlistRuleForm.locator("input[name='weight_percent']").fill("20");
+  await playlistRuleForm.locator("input[name='priority']").fill("8");
+  await playlistRuleForm.locator("select[name='status']").selectOption("active");
+  await playlistRuleForm.locator("button[type='submit']").click();
+  await expect(page.locator("#sponsorship")).toContainText("Browser wide weighted rule", { timeout: 5000 });
+  const playlistRules = await authedRequest(cloudBase, "/api/admin/playlist-rules");
+  const browserRule = playlistRules.json.playlist_rules.find((rule) => rule.playlist_rule_id === "rule-browser-wide");
+  expect(browserRule).toBeTruthy();
+  expect(browserRule.campaign_placement_id).toBe("place-browser-wide");
+  expect(browserRule.weight_percent).toBe(20);
+  expect(browserRule.status).toBe("active");
+  await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-sponsorship.png"), fullPage: true });
+
   action("Update device status and notes through dashboard form");
   const deviceForm = page.locator("form.device-action").first();
   await deviceForm.locator("select[name='status']").selectOption("maintenance");
@@ -739,6 +810,25 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   expect(uploadedAsset.type).toBe("image");
   expect(uploadedAsset.mime_type).toBe("image/png");
   expect(uploadedAsset.download_path).toBe("/api/admin/assets/browser-cloud-asset/download");
+
+  action("Attach cloud asset to campaign through sponsorship UI");
+  const campaignAssetForm = page.locator("form.campaign-asset-create");
+  await campaignAssetForm.locator("input[name='campaign_asset_id']").fill("ca-browser-main");
+  await campaignAssetForm.locator("select[name='campaign_id']").selectOption("cmp-browser-sponsor");
+  await campaignAssetForm.locator("select[name='asset_id']").selectOption("browser-cloud-asset");
+  await campaignAssetForm.locator("select[name='role']").selectOption("main_video");
+  await campaignAssetForm.locator("input[name='label']").fill("Browser sponsor main visual");
+  await campaignAssetForm.locator("input[name='display_order']").fill("1");
+  await campaignAssetForm.locator("select[name='status']").selectOption("active");
+  await campaignAssetForm.locator("button[type='submit']").click();
+  await expect(page.locator("#sponsorship")).toContainText("Browser sponsor main visual", { timeout: 5000 });
+  const campaignAssets = await authedRequest(cloudBase, "/api/admin/campaign-assets");
+  const browserCampaignAsset = campaignAssets.json.campaign_assets.find((asset) => asset.campaign_asset_id === "ca-browser-main");
+  expect(browserCampaignAsset).toBeTruthy();
+  expect(browserCampaignAsset.campaign_id).toBe("cmp-browser-sponsor");
+  expect(browserCampaignAsset.asset_id).toBe("browser-cloud-asset");
+  expect(browserCampaignAsset.role).toBe("main_video");
+
   const cloudAssetImageResponse = await page.request.get(`${cloudBase}${uploadedAsset.download_path}`);
   expect(cloudAssetImageResponse.ok()).toBeTruthy();
   expect(cloudAssetImageResponse.headers()["content-type"]).toContain("image/png");
