@@ -8,6 +8,7 @@ const Database = require("better-sqlite3");
 const express = require("express");
 const basicAuth = require("express-basic-auth");
 const multer = require("multer");
+const { buildManifestContract } = require("./lib/studio-phase1-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -404,8 +405,10 @@ app.post("/api/admin/content-manifests", requireAdminAuth, (req, res, next) => {
       db.prepare(`
         INSERT INTO content_manifests (
           content_id, playlist_version, release_channel, status, title, notes,
+          tenant_id, site_id, display_wall_id, screen_id,
+          manifest_schema_version, manifest_version, content_hash, lifecycle_status,
           playlist_json, created_at, updated_at, published_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.content_id,
         input.playlist_version,
@@ -413,6 +416,14 @@ app.post("/api/admin/content-manifests", requireAdminAuth, (req, res, next) => {
         input.status,
         input.title,
         input.notes,
+        input.tenant_id,
+        input.site_id,
+        input.display_wall_id,
+        input.screen_id,
+        input.manifest_schema_version,
+        input.manifest_version,
+        input.content_hash,
+        input.lifecycle_status,
         JSON.stringify(input.playlist),
         now,
         now,
@@ -456,6 +467,14 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
           status = ?,
           title = ?,
           notes = ?,
+          tenant_id = ?,
+          site_id = ?,
+          display_wall_id = ?,
+          screen_id = ?,
+          manifest_schema_version = ?,
+          manifest_version = ?,
+          content_hash = ?,
+          lifecycle_status = ?,
           playlist_json = ?,
           updated_at = ?,
           published_at = ?
@@ -466,6 +485,14 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
         input.status,
         input.title,
         input.notes,
+        input.tenant_id,
+        input.site_id,
+        input.display_wall_id,
+        input.screen_id,
+        input.manifest_schema_version,
+        input.manifest_version,
+        input.content_hash,
+        input.lifecycle_status,
         JSON.stringify(input.playlist),
         now,
         publishedAt,
@@ -1736,6 +1763,122 @@ function schemaMigrations() {
           CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, created_at DESC);
         `);
       }
+    },
+    {
+      version: 3,
+      name: "studio_phase1_domain_publish_and_approval_contracts",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS screens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            screen_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            position TEXT NOT NULL,
+            display_order INTEGER NOT NULL,
+            name TEXT,
+            orientation TEXT NOT NULL DEFAULT 'landscape',
+            resolution_width INTEGER NOT NULL DEFAULT 1920,
+            resolution_height INTEGER NOT NULL DEFAULT 1080,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY(screen_group_id) REFERENCES screen_groups(screen_group_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS screen_device_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            binding_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            screen_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            bound_at TEXT NOT NULL,
+            unbound_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(screen_id) REFERENCES screens(screen_id) ON DELETE CASCADE,
+            FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS content_approvals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            site_id TEXT,
+            display_wall_id TEXT,
+            content_type TEXT NOT NULL,
+            subject_type TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            subject_hash TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL DEFAULT '',
+            approval_status TEXT NOT NULL DEFAULT 'draft',
+            requested_by TEXT,
+            requested_at TEXT,
+            decided_by TEXT,
+            decided_at TEXT,
+            expires_at TEXT,
+            rejection_reason TEXT,
+            revoked_reason TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS publish_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            publish_history_id TEXT NOT NULL UNIQUE,
+            content_id TEXT NOT NULL,
+            tenant_id TEXT,
+            site_id TEXT,
+            display_wall_id TEXT,
+            screen_id TEXT,
+            action TEXT NOT NULL,
+            manifest_version INTEGER NOT NULL,
+            manifest_schema_version INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            previous_content_id TEXT,
+            rollback_from_content_id TEXT,
+            actor_role TEXT,
+            actor_id TEXT,
+            approval_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            approval_hash TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(content_id) REFERENCES content_manifests(content_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_screens_group_order ON screens(screen_group_id, display_order);
+          CREATE INDEX IF NOT EXISTS idx_screens_tenant_store ON screens(tenant_id, store_id, status);
+          CREATE INDEX IF NOT EXISTS idx_screen_device_bindings_screen ON screen_device_bindings(screen_id, status);
+          CREATE INDEX IF NOT EXISTS idx_screen_device_bindings_device ON screen_device_bindings(device_id, status);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_screen_device_bindings_active_screen ON screen_device_bindings(screen_id) WHERE status = 'active';
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_screen_device_bindings_active_device ON screen_device_bindings(device_id) WHERE status = 'active';
+          CREATE INDEX IF NOT EXISTS idx_content_approvals_subject ON content_approvals(subject_type, subject_id, approval_status);
+          CREATE INDEX IF NOT EXISTS idx_content_approvals_tenant_type ON content_approvals(tenant_id, content_type, approval_status);
+          CREATE INDEX IF NOT EXISTS idx_content_approvals_scope_hash ON content_approvals(tenant_id, site_id, display_wall_id, content_hash, approval_status);
+          CREATE INDEX IF NOT EXISTS idx_publish_history_content ON publish_history(content_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_publish_history_scope ON publish_history(tenant_id, site_id, display_wall_id, created_at DESC);
+        `);
+
+        addColumnIfMissing("content_manifests", "tenant_id", "TEXT");
+        addColumnIfMissing("content_manifests", "site_id", "TEXT");
+        addColumnIfMissing("content_manifests", "display_wall_id", "TEXT");
+        addColumnIfMissing("content_manifests", "screen_id", "TEXT");
+        addColumnIfMissing("content_manifests", "manifest_schema_version", "INTEGER NOT NULL DEFAULT 1");
+        addColumnIfMissing("content_manifests", "manifest_version", "INTEGER NOT NULL DEFAULT 1");
+        addColumnIfMissing("content_manifests", "content_hash", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing("content_manifests", "lifecycle_status", "TEXT NOT NULL DEFAULT 'draft'");
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_content_manifests_scope ON content_manifests(tenant_id, site_id, display_wall_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_content_manifests_hash ON content_manifests(content_hash);
+        `);
+      }
     }
   ];
 }
@@ -1760,7 +1903,6 @@ function applySchemaMigrations() {
 }
 
 function migrateDevicesTable() {
-  const existingColumns = new Set(db.prepare("PRAGMA table_info(devices)").all().map((column) => column.name));
   const columns = [
     ["token_status", "TEXT NOT NULL DEFAULT 'active'"],
     ["token_generation", "INTEGER NOT NULL DEFAULT 1"],
@@ -1781,9 +1923,7 @@ function migrateDevicesTable() {
   ];
 
   for (const [name, definition] of columns) {
-    if (!existingColumns.has(name)) {
-      db.exec(`ALTER TABLE devices ADD COLUMN ${name} ${definition}`);
-    }
+    addColumnIfMissing("devices", name, definition);
   }
 
   const terminalDevices = db.prepare(`
@@ -1810,6 +1950,23 @@ function migrateDevicesTable() {
     });
     migrateTerminalTokens(terminalDevices);
   }
+}
+
+function addColumnIfMissing(tableName, columnName, definition) {
+  const table = cleanSqlIdentifier(tableName);
+  const column = cleanSqlIdentifier(columnName);
+  const existingColumns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((item) => item.name));
+  if (!existingColumns.has(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function cleanSqlIdentifier(value) {
+  const identifier = String(value || "").trim();
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
+    throw new Error(`Invalid SQL identifier: ${identifier}`);
+  }
+  return identifier;
 }
 
 function normalizeDeviceInput(input) {
@@ -1942,6 +2099,32 @@ function normalizeContentManifestInput(input, existing = {}) {
   const assetsSupplied = Object.prototype.hasOwnProperty.call(input, "assets") ||
     Object.prototype.hasOwnProperty.call(input, "asset_ids") ||
     Object.prototype.hasOwnProperty.call(input, "assetIds");
+  const assets = assetsSupplied ? normalizeContentManifestAssets(input.assets ?? input.asset_ids ?? input.assetIds) : [];
+  const hashAssets = assetsSupplied
+    ? assets
+    : (existing.content_id ? listContentManifestAssets(existing.content_id).map((asset) => ({
+      asset_id: asset.asset_id,
+      target_path: asset.target_path,
+      required: asset.required,
+      sha256: asset.sha256
+    })) : []);
+  const tenantId = cleanId(input.tenant_id ?? input.tenantId ?? existing.tenant_id);
+  const siteId = cleanId(input.site_id ?? input.siteId ?? input.store_id ?? input.storeId ?? existing.site_id);
+  const displayWallId = cleanId(input.display_wall_id ?? input.displayWallId ?? input.screen_group_id ?? input.screenGroupId ?? existing.display_wall_id);
+  const screenId = cleanId(input.screen_id ?? input.screenId ?? existing.screen_id);
+  const manifestSchemaVersion = Math.max(1, asInteger(input.manifest_schema_version ?? input.manifestSchemaVersion ?? existing.manifest_schema_version) || 1);
+  const manifestVersion = Math.max(1, asInteger(input.manifest_version ?? input.manifestVersion ?? existing.manifest_version) || 1);
+  const lifecycleStatus = cleanString(input.lifecycle_status ?? input.lifecycleStatus ?? existing.lifecycle_status ?? status) || status;
+  const manifestContract = buildManifestContract({
+    tenant_id: tenantId,
+    site_id: siteId,
+    display_wall_id: displayWallId,
+    screen_id: screenId,
+    manifest_schema_version: manifestSchemaVersion,
+    manifest_version: manifestVersion,
+    playlist,
+    assets: hashAssets
+  });
 
   return {
     content_id: contentId,
@@ -1950,8 +2133,16 @@ function normalizeContentManifestInput(input, existing = {}) {
     status,
     title: cleanString(input.title ?? existing.title).slice(0, 160),
     notes: cleanString(input.notes ?? existing.notes).slice(0, 1000),
+    tenant_id: tenantId,
+    site_id: siteId,
+    display_wall_id: displayWallId,
+    screen_id: screenId,
+    manifest_schema_version: manifestSchemaVersion,
+    manifest_version: manifestVersion,
+    content_hash: cleanString(input.content_hash ?? input.contentHash) || manifestContract.content_hash,
+    lifecycle_status: lifecycleStatus,
     playlist,
-    assets: assetsSupplied ? normalizeContentManifestAssets(input.assets ?? input.asset_ids ?? input.assetIds) : [],
+    assets,
     assets_supplied: assetsSupplied
   };
 }
@@ -2895,6 +3086,14 @@ function publicContentManifest(row, includePlaylist = false) {
     status: cleanString(row.status),
     title: cleanString(row.title),
     notes: cleanString(row.notes),
+    tenant_id: cleanString(row.tenant_id),
+    site_id: cleanString(row.site_id),
+    display_wall_id: cleanString(row.display_wall_id),
+    screen_id: cleanString(row.screen_id),
+    manifest_schema_version: asInteger(row.manifest_schema_version) || 1,
+    manifest_version: asInteger(row.manifest_version) || 1,
+    content_hash: cleanString(row.content_hash),
+    lifecycle_status: cleanString(row.lifecycle_status || row.status),
     created_at: cleanString(row.created_at),
     updated_at: cleanString(row.updated_at),
     published_at: cleanString(row.published_at)
@@ -2976,6 +3175,13 @@ function buildDeviceContentPolicy(device) {
     source: manifest ? "content_manifest" : "none",
     content_id: cleanString(manifest?.content_id),
     playlist_version: targetPlaylistVersion,
+    manifest_schema_version: asInteger(manifest?.manifest_schema_version) || 1,
+    manifest_version: asInteger(manifest?.manifest_version) || 1,
+    content_hash: cleanString(manifest?.content_hash),
+    tenant_id: cleanString(manifest?.tenant_id),
+    site_id: cleanString(manifest?.site_id),
+    display_wall_id: cleanString(manifest?.display_wall_id),
+    screen_id: cleanString(manifest?.screen_id),
     release_channel: cleanString(manifest?.release_channel),
     published_at: cleanString(manifest?.published_at),
     assets: manifest ? manifest.assets || [] : [],
