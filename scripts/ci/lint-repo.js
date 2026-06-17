@@ -10,10 +10,11 @@ const files = execFileSync("git", ["ls-files"], { encoding: "utf8" })
   .filter((file) => !file.includes("/node_modules/"));
 
 const errors = [];
+const conflictMarkerPattern = /^(?:<{7}(?: .*)?|={7}|>{7}(?: .*)?)$/m;
 for (const file of files) {
   if (!/\.(js|json|md|yml|yaml|html|css|sh)$/.test(file)) continue;
   const text = fs.readFileSync(file, "utf8");
-  if (text.includes("<<<<<<<") || text.includes("=======") || text.includes(">>>>>>>")) {
+  if (conflictMarkerPattern.test(text)) {
     errors.push(`${file} contains merge conflict markers`);
   }
 }
