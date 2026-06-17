@@ -165,6 +165,7 @@ npm audit --audit-level=moderate
 - docs/74_BILLING_PAYMENT_PORTAL_SPEC.md
 - docs/75_PARTNER_RESELLER_CHANNEL_STRATEGY_SPEC.md
 - docs/76_RBAC_AND_SELF_SERVICE_OPERATION_SPEC.md
+- docs/77_POC_PARTNER_PRICING_AND_BUYOUT_STRATEGY.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
