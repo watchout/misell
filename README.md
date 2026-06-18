@@ -168,6 +168,7 @@ npm audit --audit-level=moderate
 - docs/77_POC_PARTNER_PRICING_AND_BUYOUT_STRATEGY.md
 - docs/78_FINAL_30DAY_IMPACT_OFFER_AND_PROPOSAL_STRATEGY.md
 - docs/79_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md
+- docs/80_CLOUD_LOCAL_BACKUP_AND_ROLLBACK_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
