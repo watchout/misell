@@ -18,6 +18,27 @@
 
 ただし、ガチャ、クーポン、商品注文、予約、部屋番号、氏名、電話番号、メールアドレスを扱うため、本仕様は `needs:legal-privacy` および `route:ceo-approval` の対象とする。実装着手前に、本ドキュメントのLegal/Privacy Gateを満たすこと。
 
+## Phase位置づけ / doc-tree
+
+本仕様は `docs/` 配下のプロダクト仕様であり、既存の以下ドキュメントを拡張する。
+
+- `docs/65_QR_GENERATION_GUIDE.md`
+- `docs/69_MEDIA_AD_DELIVERY_IMPLEMENTATION_SPEC.md`
+- `docs/71_REPORTING_DASHBOARD_IMPLEMENTATION_SPEC.md`
+
+`cloud-main/docs/` 側へ分岐した仕様がある場合は、本仕様を正とし、重複仕様は後続PRで `docs/` 配下へ統合する。
+
+Phase上の位置づけは以下。
+
+| Phase | 位置づけ | 内容 |
+| --- | --- | --- |
+| Phase 0 | 現行MVP | 3連表示、LAN更新、ローカル継続再生、監視 |
+| Phase 1 | QR/Media | QR生成、QRログ、広告配信、Proof of Play |
+| Phase 2 | Action Commerce MVP | クーポン、商品LP、ガチャ、ミニカート、店頭確認 |
+| Phase 3 | Commerce拡張 | 決済、POS/LINE/ホテルシステム連携 |
+
+本PRはPhase 2の仕様追加であり、実装PRではない。
+
 ## Gate / Governance
 
 ### 実装前必須Gate
