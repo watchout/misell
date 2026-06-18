@@ -11,7 +11,7 @@
 - `docs/47_ARCHITECTURE_BOUNDARIES_AND_MVP_GATES.md`
 - `docs/58_CLOUD_MONITORING_MVP_SPEC.md`
 - `docs/67_MASTER_CONTROL_AND_CONTENT_DELIVERY_DESIGN.md`
-- `docs/79_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md`
+- `docs/81_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md`
 
 ## 決定事項
 
@@ -384,6 +384,60 @@ Report snapshot:
   metrics_json / PDF / CSV を固定保存
 ```
 
+### バックアップ保管先
+
+商品化前の最小構成ではConoHa VPS内のローカル世代バックアップで開始できる。ただし、商品化する時点で同一VPS内だけのbackupを正式運用として扱ってはならない。
+
+決定:
+
+```text
+MVP:
+  ConoHa VPS内ローカル世代バックアップ
+  daily / weekly / monthly
+  restore手順の手動確認
+
+商品化:
+  S3互換または別リージョン/別事業者ストレージへ暗号化保管
+  Cloud DB dump / asset manifest / report snapshotを別ストレージへ逃がす
+```
+
+別ストレージ候補:
+
+- S3互換object storage
+- Cloudflare R2
+- Backblaze B2
+- ConoHa外のS3互換ストレージ
+
+### backup security
+
+Cloud backupには、tenant、store、device、campaign、QR、coupon、cart、billing、contract、report snapshotなど、個人情報または課金/契約情報を含む可能性がある。
+
+必須:
+
+- backupは暗号化して保管する。
+- backup encryption keyをGit、DB dump、backup archive内に含めない。
+- backup取得、一覧、download、restoreは `misell_owner` または明示された `device_ops` / infra担当だけに限定する。
+- backup操作はaudit logに残す。
+- backup URLを公開URLにしない。
+- backup archiveには最小限の権限だけを付ける。
+- 退役済みtenant/storeの保持期間と削除手順を定義する。
+- restore検証を定期実施する。
+
+restore / DR drill:
+
+```text
+monthly:
+  最新backupから別DBへrestoreできることを確認する
+
+quarterly:
+  DB + asset manifest + report snapshotの整合性を確認する
+
+before major release:
+  migration後のbackup/restoreをdry-runする
+```
+
+restore drillは、実施日、対象backup、restore先、結果、失敗理由、担当者を記録する。検証されていないbackupは、復旧証跡として扱わない。
+
 ## 容量・保持期間
 
 端末はdownload前に必要容量を見積もる。
@@ -419,6 +473,8 @@ SQLite: 定期VACUUM / WAL checkpoint
 8. Cloud activeとLocal appliedのズレが管理画面で見える
 9. rollback実行履歴がCloudへ残る
 10. Cloud DBとasset storageの定期バックアップ手順がある
+11. backupが暗号化され、アクセス制御されている
+12. restore / DR drillの実施履歴が残る
 ```
 
 ## 禁止事項
