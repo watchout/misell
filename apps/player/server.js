@@ -84,6 +84,7 @@ let deviceSecrets = null;
 let validatePlaylistDocument = null;
 let lastPlayback = null;
 let localState = null;
+let localStateError = "";
 
 const defaultPlaylist = {
   version: 1,
@@ -151,14 +152,24 @@ async function ensureRuntimeFiles(options = {}) {
   deviceIdentity = await loadDeviceIdentity(deviceConfig);
   deviceSecrets = loadDeviceSecrets(deviceConfig);
   validatePlaylistDocument = await loadPlaylistValidator();
-  if (options.openLocalState !== false) {
-    localState = openLocalState(LOCAL_STATE_DB_PATH);
-  }
   await Promise.all([
     ensureFile(logFilePath(PLAYLOG_KEY)),
     ensureFile(logFilePath(ADMIN_LOG_KEY)),
     ensureFile(logFilePath(ERROR_LOG_KEY))
   ]);
+  if (options.openLocalState !== false) {
+    try {
+      localState = openLocalState(LOCAL_STATE_DB_PATH);
+      localStateError = "";
+    } catch (error) {
+      localState = null;
+      localStateError = "local_state open failed";
+      await appendJsonl(ERROR_LOG_KEY, {
+        action: "local_state.open_failed",
+        message: error.message || localStateError
+      }).catch(() => {});
+    }
+  }
 }
 
 function runtimePath(envName, fallbackPath) {
@@ -378,9 +389,30 @@ async function buildStatusPayload() {
     network_status: "unknown",
     display_status: process.env.DISPLAY ? "display-env-present" : "unknown",
     device_token_configured: Boolean(deviceSecrets?.device_token_configured),
-    local_state: localState?.summary() || null,
+    local_state: safeLocalStateSummary(),
+    local_state_error: localStateError || null,
     last_error: lastError
   };
+}
+
+function safeLocalStateSummary() {
+  if (localStateError && !localState) {
+    return { ok: false, error: localStateError };
+  }
+  if (!localState) return null;
+  try {
+    return {
+      ok: true,
+      ...localState.summary({ include_db_path: false })
+    };
+  } catch (error) {
+    localStateError = "local_state summary failed";
+    appendJsonl(ERROR_LOG_KEY, {
+      action: "local_state.summary_failed",
+      message: error.message || localStateError
+    }).catch(() => {});
+    return { ok: false, error: localStateError };
+  }
 }
 
 async function getDiskFreeMb(targetDir) {
@@ -2387,20 +2419,32 @@ function rememberPlayback(entry) {
 
 async function persistPlaybackLog(entry) {
   rememberPlayback(entry);
-  await appendJsonl(PLAYLOG_KEY, entry);
+  let queuedToLocalState = false;
+  let localStateQueueError = "";
   try {
     enqueuePlaybackLog(entry);
+    queuedToLocalState = true;
   } catch (error) {
+    localStateQueueError = error.message || "local state enqueue failed";
+  }
+
+  await appendJsonl(PLAYLOG_KEY, {
+    ...entry,
+    queued_to_local_state: queuedToLocalState,
+    local_state_error: localStateQueueError
+  });
+
+  if (localStateQueueError) {
     await appendJsonl(ERROR_LOG_KEY, {
       action: "local_state.enqueue_playlog_failed",
       event_id: cleanString(entry.event_id),
-      message: error.message || "local state enqueue failed"
+      message: localStateQueueError
     });
   }
 }
 
 function enqueuePlaybackLog(entry) {
-  if (!localState) return;
+  if (!localState) throw new Error(localStateError || "local state unavailable");
   const occurredAt = cleanString(entry.timestamp) || new Date().toISOString();
   const payload = {
     ...deviceIdentity,

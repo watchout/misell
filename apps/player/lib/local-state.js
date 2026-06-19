@@ -6,6 +6,7 @@ const Database = require("better-sqlite3");
 
 const SCHEMA_VERSION = 1;
 const PLAYLOG_ENDPOINT = "/api/device/playlog";
+const EVENT_ID_PATTERN = /^[a-zA-Z0-9_.:-]{1,160}$/;
 
 function openLocalState(dbPath) {
   if (!dbPath) throw new Error("local state dbPath is required");
@@ -31,6 +32,8 @@ function applySchema(db) {
       event_type TEXT NOT NULL,
       endpoint TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
+      claim_token TEXT,
+      claimed_at TEXT,
       payload_json TEXT NOT NULL,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       next_attempt_at TEXT,
@@ -86,6 +89,9 @@ function applySchema(db) {
       ON local_asset_states(status, updated_at DESC);
   `);
 
+  addColumnIfMissing(db, "outbound_events", "claim_token", "TEXT");
+  addColumnIfMissing(db, "outbound_events", "claimed_at", "TEXT");
+
   db.prepare(`
     INSERT INTO local_state_meta (key, value, updated_at)
     VALUES ('schema_version', ?, ?)
@@ -105,7 +111,18 @@ class LocalState {
           created_at, updated_at
         ) VALUES (?, ?, ?, 'pending', ?, ?, ?)
       `),
-      listPending: db.prepare(`
+      resetExpiredClaims: db.prepare(`
+        UPDATE outbound_events SET
+          status = 'failed',
+          claim_token = '',
+          claimed_at = '',
+          updated_at = ?
+        WHERE endpoint = ?
+          AND status = 'sending'
+          AND sent_at IS NULL
+          AND claimed_at <= ?
+      `),
+      listClaimable: db.prepare(`
         SELECT * FROM outbound_events
         WHERE endpoint = ?
           AND status IN ('pending', 'failed')
@@ -113,9 +130,27 @@ class LocalState {
         ORDER BY id ASC
         LIMIT ?
       `),
+      claimById: db.prepare(`
+        UPDATE outbound_events SET
+          status = 'sending',
+          claim_token = ?,
+          claimed_at = ?,
+          last_attempt_at = ?,
+          updated_at = ?
+        WHERE id = ?
+          AND status IN ('pending', 'failed')
+          AND (next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)
+      `),
+      listClaimedByToken: db.prepare(`
+        SELECT * FROM outbound_events
+        WHERE claim_token = ?
+        ORDER BY id ASC
+      `),
       markSent: db.prepare(`
         UPDATE outbound_events SET
           status = 'sent',
+          claim_token = '',
+          claimed_at = '',
           sent_at = ?,
           last_attempt_at = ?,
           response_status = ?,
@@ -126,13 +161,23 @@ class LocalState {
       markFailed: db.prepare(`
         UPDATE outbound_events SET
           status = 'failed',
+          claim_token = '',
+          claimed_at = '',
           attempt_count = attempt_count + 1,
           next_attempt_at = ?,
           last_attempt_at = ?,
           response_status = ?,
           last_error = ?,
           updated_at = ?
-        WHERE event_id = ?
+        WHERE event_id = ? AND status != 'sent'
+      `),
+      purgeSent: db.prepare(`
+        DELETE FROM outbound_events
+        WHERE endpoint = ?
+          AND status = 'sent'
+          AND sent_at IS NOT NULL
+          AND sent_at != ''
+          AND sent_at < ?
       `),
       contentInsert: db.prepare(`
         INSERT INTO applied_content (
@@ -174,8 +219,7 @@ class LocalState {
 
   enqueueOutboundEvent(input) {
     const payload = normalizePayload(input.payload);
-    const eventId = cleanId(input.event_id || input.eventId || payload.event_id || payload.eventId);
-    if (!eventId) throw new Error("event_id is required for outbound event");
+    const eventId = validateEventId(input.event_id || input.eventId || payload.event_id || payload.eventId);
     const existing = this.statements.getOutbound.get(eventId);
     if (existing) return { inserted: false, event: publicOutboundEvent(existing) };
 
@@ -190,17 +234,35 @@ class LocalState {
     const endpoint = cleanString(options.endpoint || PLAYLOG_ENDPOINT);
     const limit = boundedLimit(options.limit, 100, 1, 500);
     const now = cleanString(options.now) || nowIso();
-    return this.statements.listPending.all(endpoint, now, limit).map(publicOutboundEvent);
+    return this.statements.listClaimable.all(endpoint, now, limit).map(publicOutboundEvent);
+  }
+
+  claimPendingOutboundEvents(options = {}) {
+    const endpoint = cleanString(options.endpoint || PLAYLOG_ENDPOINT);
+    const limit = boundedLimit(options.limit, 100, 1, 500);
+    const now = cleanString(options.now) || nowIso();
+    const staleSeconds = boundedLimit(options.stale_claim_seconds ?? options.staleClaimSeconds, 600, 30, 86400);
+    const staleBefore = new Date(Date.parse(now) - staleSeconds * 1000).toISOString();
+    const claimToken = cleanString(options.claim_token || options.claimToken || crypto.randomUUID());
+    const claim = this.db.transaction(() => {
+      this.statements.resetExpiredClaims.run(now, endpoint, staleBefore);
+      const rows = this.statements.listClaimable.all(endpoint, now, limit);
+      for (const row of rows) {
+        this.statements.claimById.run(claimToken, now, now, now, row.id, now);
+      }
+      return this.statements.listClaimedByToken.all(claimToken);
+    });
+    return claim().map(publicOutboundEvent);
   }
 
   markOutboundSent(eventId, options = {}) {
     const now = cleanString(options.now) || nowIso();
-    this.statements.markSent.run(now, now, asInteger(options.response_status ?? options.responseStatus), now, cleanId(eventId));
+    this.statements.markSent.run(now, now, asInteger(options.response_status ?? options.responseStatus), now, validateEventId(eventId));
   }
 
   markOutboundFailed(eventId, error, options = {}) {
     const now = cleanString(options.now) || nowIso();
-    const existing = this.statements.getOutbound.get(cleanId(eventId));
+    const existing = this.statements.getOutbound.get(validateEventId(eventId));
     const attemptCount = Number(existing?.attempt_count || 0) + 1;
     const retrySeconds = Math.min(3600, 60 * (2 ** Math.min(attemptCount - 1, 5)));
     const nextAttemptAt = cleanString(options.next_attempt_at || options.nextAttemptAt) ||
@@ -211,8 +273,16 @@ class LocalState {
       asInteger(options.response_status ?? options.responseStatus),
       cleanString(error).slice(0, 1000),
       now,
-      cleanId(eventId)
+      validateEventId(eventId)
     );
+  }
+
+  purgeSentOutboundEvents(options = {}) {
+    const endpoint = cleanString(options.endpoint || PLAYLOG_ENDPOINT);
+    const retentionDays = boundedLimit(options.retention_days ?? options.retentionDays, 30, 1, 3650);
+    const now = cleanString(options.now) || nowIso();
+    const cutoff = new Date(Date.parse(now) - retentionDays * 86400000).toISOString();
+    return this.statements.purgeSent.run(endpoint, cutoff).changes;
   }
 
   recordAppliedContent(input) {
@@ -251,13 +321,16 @@ class LocalState {
     );
   }
 
-  summary() {
-    return {
-      db_path: this.dbPath,
+  summary(options = {}) {
+    const summary = {
       outbound_events: countsByStatus(this.statements.outboundStatusCounts.all()),
       latest_content: publicAppliedContent(this.statements.latestContent.get()),
       assets: countsByStatus(this.statements.assetStatusCounts.all())
     };
+    if (options.include_db_path !== false && options.includeDbPath !== false) {
+      summary.db_path = this.dbPath;
+    }
+    return summary;
   }
 
   close() {
@@ -268,12 +341,14 @@ class LocalState {
 function publicOutboundEvent(row) {
   if (!row) return null;
   return {
-    event_id: cleanId(row.event_id),
+    event_id: cleanString(row.event_id),
     event_type: cleanString(row.event_type),
     endpoint: cleanString(row.endpoint),
     status: cleanString(row.status),
     payload: parseJson(row.payload_json, {}),
     attempt_count: asInteger(row.attempt_count) || 0,
+    claim_token: cleanString(row.claim_token),
+    claimed_at: cleanString(row.claimed_at),
     next_attempt_at: cleanString(row.next_attempt_at),
     last_attempt_at: cleanString(row.last_attempt_at),
     sent_at: cleanString(row.sent_at),
@@ -342,6 +417,13 @@ function asInteger(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function addColumnIfMissing(db, tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name);
+  if (!columns.includes(columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
 function cleanString(value) {
   return String(value || "").trim();
 }
@@ -350,11 +432,21 @@ function cleanId(value) {
   return cleanString(value).replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 160);
 }
 
+function validateEventId(value) {
+  const eventId = cleanString(value);
+  if (!eventId) throw new Error("event_id is required for outbound event");
+  if (!EVENT_ID_PATTERN.test(eventId)) {
+    throw new Error("event_id must be 1-160 chars of a-z, A-Z, 0-9, _, ., :, or -");
+  }
+  return eventId;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
 
 module.exports = {
+  EVENT_ID_PATTERN,
   PLAYLOG_ENDPOINT,
   openLocalState,
   sha256File

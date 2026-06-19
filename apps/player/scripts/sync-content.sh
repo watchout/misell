@@ -252,15 +252,15 @@ if [[ "${APPLY}" != "1" ]]; then
   exit 0
 fi
 
-post_result "updating" "content sync started"
-"${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
-
 previous_playlist="$(mktemp)"
 if [[ -f "${PLAYLIST_PATH}" ]]; then
   PREVIOUS_PLAYLIST_VERSION="$(playlist_version_for_file "${PLAYLIST_PATH}")"
   cp "${PLAYLIST_PATH}" "${previous_playlist}"
 fi
 temp_playlist="$(mktemp)"
+
+post_result "updating" "content sync started"
+"${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
 
 if ! write_playlist_from_policy "${temp_playlist}"; then
   post_result "failed" "could not write playlist from content policy"

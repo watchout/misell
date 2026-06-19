@@ -15,6 +15,8 @@ loadEnvFile();
 const args = parseArgs(process.argv.slice(2));
 const dryRun = Boolean(args.dry_run);
 const limit = Number.parseInt(args.limit || process.env.MISELL_PLAYLOG_SYNC_LIMIT || "100", 10);
+const timeoutMs = boundedInteger(args.timeout_ms || process.env.MISELL_PLAYLOG_SYNC_TIMEOUT_MS, 15000, 1000, 120000);
+const sentRetentionDays = boundedInteger(args.sent_retention_days || process.env.MISELL_PLAYLOG_SENT_RETENTION_DAYS, 30, 1, 3650);
 const playlogUrl = playlogEndpointUrl();
 const deviceToken = process.env.MISELL_DEVICE_TOKEN || process.env.DEVICE_TOKEN || "";
 const state = openLocalState(localStateDbPath());
@@ -34,23 +36,29 @@ async function main() {
       throw new Error("MISELL_DEVICE_TOKEN is required for playlog sync");
     }
 
-    const events = state.listPendingOutboundEvents({ endpoint: PLAYLOG_ENDPOINT, limit });
+    const events = dryRun
+      ? state.listPendingOutboundEvents({ endpoint: PLAYLOG_ENDPOINT, limit })
+      : state.claimPendingOutboundEvents({ endpoint: PLAYLOG_ENDPOINT, limit });
     if (dryRun) {
-      print({ ok: true, dry_run: true, playlog_url: playlogUrl, pending: events.length, events: events.map((event) => event.event_id) });
+      print({ ok: true, dry_run: true, playlog_url: playlogUrl, timeout_ms: timeoutMs, pending: events.length, events: events.map((event) => event.event_id) });
       return;
     }
 
     let sent = 0;
     let failed = 0;
     for (const event of events) {
+      let timeout = null;
       try {
+        const controller = new AbortController();
+        timeout = setTimeout(() => controller.abort(), timeoutMs);
         const response = await fetch(playlogUrl, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             authorization: `Bearer ${deviceToken}`
           },
-          body: JSON.stringify(event.payload)
+          body: JSON.stringify(event.payload),
+          signal: controller.signal
         });
         const text = await response.text();
         if (!response.ok) {
@@ -62,22 +70,36 @@ async function main() {
         state.markOutboundSent(event.event_id, { response_status: response.status });
       } catch (error) {
         failed += 1;
-        state.markOutboundFailed(event.event_id, error.message || "playlog sync failed");
+        const message = error.name === "AbortError"
+          ? `playlog sync timed out after ${timeoutMs}ms`
+          : (error.message || "playlog sync failed");
+        state.markOutboundFailed(event.event_id, message);
+      } finally {
+        if (timeout) clearTimeout(timeout);
       }
     }
 
+    const purged_sent = state.purgeSentOutboundEvents({ endpoint: PLAYLOG_ENDPOINT, retention_days: sentRetentionDays });
     print({
       ok: failed === 0,
       playlog_url: playlogUrl,
+      timeout_ms: timeoutMs,
       attempted: events.length,
       sent,
       failed,
+      purged_sent,
       local_state: state.summary()
     });
     if (failed > 0) process.exitCode = 1;
   } finally {
     state.close();
   }
+}
+
+function boundedInteger(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
 }
 
 function loadEnvFile() {

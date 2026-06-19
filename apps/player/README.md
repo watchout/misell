@@ -366,6 +366,15 @@ npm run playlogs:sync
 
 When `MISELL_HEARTBEAT_URL` points at `/api/device/heartbeat`, `scripts/emit-heartbeat.sh` derives `/api/device/playlog` and runs playlog sync after a successful heartbeat. Set `MISELL_SKIP_PLAYLOG_SYNC=1` to disable that best-effort backfill.
 
+Playlog sync settings:
+
+```bash
+MISELL_PLAYLOG_SYNC_TIMEOUT_MS=15000
+MISELL_PLAYLOG_SENT_RETENTION_DAYS=30
+```
+
+Only playback events created after this local-state deployment are queued in SQLite. Existing `logs/playlog.jsonl` rows are not migrated or backfilled by this PR.
+
 Inspect local state:
 
 ```bash
