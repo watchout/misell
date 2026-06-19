@@ -38,6 +38,22 @@ const CONTENT_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
 const ASSET_SYNC_RESULT_STATUS = new Set(["checking", "downloading", "ready", "failed"]);
 const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
+const ITEM_STATUS = new Set(["active", "archived"]);
+const OFFER_STATUS = new Set(["draft", "active", "retired", "archived"]);
+const OFFER_REVISION_STATUS = new Set(["draft", "active", "retired"]);
+const COUNTER_ORDER_STATUS = new Set(["issued", "redeemed", "expired", "cancelled"]);
+const QR_DESTINATION_TYPES = new Set([
+  "external_url",
+  "coupon",
+  "product",
+  "menu",
+  "survey",
+  "line",
+  "reservation",
+  "counter_order_offer"
+]);
+const DEFAULT_TIMEZONE = "Asia/Tokyo";
+const DEFAULT_CURRENCY = "JPY";
 const WARNING_DISK_MB = 10240;
 const CRITICAL_DISK_MB = 2048;
 const WARNING_MEMORY_PERCENT = 85;
@@ -206,6 +222,198 @@ app.get("/api/admin/devices/:device_id", requireAdminAuth, (req, res) => {
     return;
   }
   res.json({ ok: true, device });
+});
+
+app.get("/api/admin/store-settings", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, store_settings: listStoreSettings() });
+});
+
+app.get("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res) => {
+  const settings = getStoreSettings(cleanId(req.params.store_id), { withDefaults: true });
+  if (!settings) {
+    res.status(404).json({ error: "Store not found" });
+    return;
+  }
+  res.json({ ok: true, store_settings: settings });
+});
+
+app.put("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res, next) => {
+  try {
+    const settings = upsertStoreSettings(cleanId(req.params.store_id), req.body || {});
+    res.json({ ok: true, store_settings: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res, next) => {
+  try {
+    const settings = upsertStoreSettings(cleanId(req.params.store_id), req.body || {});
+    res.json({ ok: true, store_settings: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/items", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, items: listItems() });
+});
+
+app.post("/api/admin/items", requireAdminAuth, (req, res, next) => {
+  try {
+    const item = createItem(req.body || {});
+    res.status(201).json({ ok: true, item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/items/:item_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const item = updateItem(cleanId(req.params.item_id), req.body || {});
+    if (!item) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+    res.json({ ok: true, item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/offers", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, offers: listOffers() });
+});
+
+app.post("/api/admin/offers", requireAdminAuth, (req, res, next) => {
+  try {
+    const offer = createOffer(req.body || {});
+    res.status(201).json({ ok: true, offer });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/offers/:offer_id", requireAdminAuth, (req, res) => {
+  const offer = getOffer(cleanId(req.params.offer_id), { includeRevisions: true });
+  if (!offer) {
+    res.status(404).json({ error: "Offer not found" });
+    return;
+  }
+  res.json({ ok: true, offer });
+});
+
+app.post("/api/admin/offers/:offer_id/revisions", requireAdminAuth, (req, res, next) => {
+  try {
+    const revision = createOfferRevision(cleanId(req.params.offer_id), req.body || {});
+    res.status(201).json({ ok: true, offer_revision: revision, offer: getOffer(cleanId(req.params.offer_id), { includeRevisions: true }) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/qr-links", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, qr_links: listQrLinks() });
+});
+
+app.post("/api/admin/qr-links", requireAdminAuth, (req, res, next) => {
+  try {
+    const qrLink = createQrLink(req.body || {});
+    res.status(201).json({ ok: true, qr_link: qrLink });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/q/:qr_token", (req, res, next) => {
+  try {
+    const qrLink = getQrLinkByToken(cleanId(req.params.qr_token));
+    if (!qrLink) {
+      res.status(404).json({ error: "QR link not found" });
+      return;
+    }
+    assertQrLinkUsable(qrLink);
+    const qrScan = recordQrScan(qrLink, req);
+    if (qrLink.destination_type === "external_url") {
+      res.redirect(qrLink.destination_url);
+      return;
+    }
+    const offerRevision = qrLink.offer_revision_id ? getOfferRevision(qrLink.offer_revision_id) : null;
+    res.json({
+      ok: true,
+      qr_link: qrLink,
+      qr_scan: qrScan,
+      offer_revision: offerRevision
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/q/:qr_token/orders", (req, res, next) => {
+  try {
+    const qrLink = getQrLinkByToken(cleanId(req.params.qr_token));
+    if (!qrLink) {
+      res.status(404).json({ error: "QR link not found" });
+      return;
+    }
+    assertQrLinkUsable(qrLink);
+    if (qrLink.destination_type !== "counter_order_offer") {
+      throw requestError("QR link does not issue counter orders", 400);
+    }
+    const qrScan = resolveQrScanForOrder(qrLink, req);
+    const result = createCounterOrder({
+      ...(req.body || {}),
+      qr_link_id: qrLink.qr_link_id,
+      qr_scan_id: qrScan.qr_scan_id,
+      visit_id: cleanId(req.body?.visit_id || req.body?.visitId || qrScan.visit_id),
+      offer_id: qrLink.offer_id,
+      offer_revision_id: qrLink.offer_revision_id,
+      tenant_id: qrLink.tenant_id,
+      store_id: qrLink.store_id,
+      screen_group_id: qrLink.screen_group_id,
+      content_id: qrLink.content_id,
+      campaign_id: qrLink.campaign_id
+    });
+    res.status(201).json({ ok: true, qr_scan: qrScan, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/order/:order_token", (req, res) => {
+  const order = getCounterOrderByToken(cleanString(req.params.order_token));
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+  res.json({ ok: true, counter_order: order });
+});
+
+app.get("/api/admin/counter-orders", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, counter_orders: listCounterOrders(req.query || {}) });
+});
+
+app.post("/api/admin/counter-orders", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createCounterOrder(req.body || {});
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/counter-orders/:counter_order_id/status", requireAdminAuth, (req, res, next) => {
+  try {
+    const order = updateCounterOrderStatus(cleanId(req.params.counter_order_id), req.body || {});
+    if (!order) {
+      res.status(404).json({ error: "Counter order not found" });
+      return;
+    }
+    res.json({ ok: true, counter_order: order });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/admin/device-log-bundles", requireAdminAuth, (req, res) => {
@@ -439,6 +647,7 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
       res.status(404).json({ error: "Content manifest not found" });
       return;
     }
+    assertActiveContentPatchAllowed(existing, req.body || {});
 
     const input = normalizeContentManifestInput(req.body || {}, existing);
     const now = nowIso();
@@ -1097,18 +1306,37 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
     const payload = req.body || {};
     assertPayloadDeviceMatches(req.device, payload);
     const now = nowIso();
+    const eventId = cleanId(payload.event_id || payload.eventId);
+    if (!eventId) {
+      throw requestError("event_id is required for playlog idempotency", 400);
+    }
+    const existing = db.prepare(`
+      SELECT id, received_at FROM playlogs
+      WHERE tenant_id = ? AND device_id = ? AND event_id = ?
+    `).get(req.device.tenant_id, req.device.device_id, eventId);
+    if (existing) {
+      res.status(200).json({
+        ok: true,
+        duplicate: true,
+        event_id: eventId,
+        received_at: existing.received_at
+      });
+      return;
+    }
+    const occurredAt = cleanString(payload.occurred_at || payload.timestamp || now);
     db.prepare(`
       INSERT INTO playlogs (
         device_id, tenant_id, store_id, screen_group_id, received_at, played_at,
-        playlist_version, playlist_item_id, campaign_id, asset_id, layout, duration, result, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        playlist_version, playlist_item_id, campaign_id, asset_id, layout, duration, result,
+        event_id, event_type, occurred_at, content_id, playback_id, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.device.device_id,
       req.device.tenant_id,
       req.device.store_id,
       req.device.screen_group_id,
       now,
-      cleanString(payload.timestamp),
+      occurredAt,
       cleanString(payload.playlist_version),
       cleanString(payload.playlist_item_id || payload.item_id || payload.itemId),
       cleanString(payload.campaign_id),
@@ -1116,9 +1344,14 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
       cleanString(payload.layout),
       asInteger(payload.duration),
       cleanString(payload.result || "started"),
+      eventId,
+      cleanString(payload.event_type || "playback"),
+      occurredAt,
+      cleanId(payload.content_id || payload.contentId),
+      cleanId(payload.playback_id || payload.playbackId),
       JSON.stringify(payload)
     );
-    res.status(201).json({ ok: true, received_at: now });
+    res.status(201).json({ ok: true, event_id: eventId, received_at: now });
   } catch (error) {
     next(error);
   }
@@ -1736,6 +1969,260 @@ function schemaMigrations() {
           CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, created_at DESC);
         `);
       }
+    },
+    {
+      version: 3,
+      name: "mvp_offer_order_event_foundation",
+      up() {
+        addColumnIfMissing("playlogs", "event_id", "TEXT");
+        addColumnIfMissing("playlogs", "event_type", "TEXT");
+        addColumnIfMissing("playlogs", "occurred_at", "TEXT");
+        addColumnIfMissing("playlogs", "content_id", "TEXT");
+        addColumnIfMissing("playlogs", "playback_id", "TEXT");
+        addColumnIfMissing("error_logs", "event_id", "TEXT");
+        addColumnIfMissing("error_logs", "event_type", "TEXT");
+        addColumnIfMissing("error_logs", "screen_group_id", "TEXT");
+        addColumnIfMissing("device_log_bundles", "event_id", "TEXT");
+
+        addColumnIfMissing("campaigns", "tenant_id", "TEXT");
+        addColumnIfMissing("campaigns", "store_id", "TEXT");
+        addColumnIfMissing("qr_links", "tenant_id", "TEXT");
+        addColumnIfMissing("qr_links", "store_id", "TEXT");
+        addColumnIfMissing("qr_links", "screen_group_id", "TEXT");
+        addColumnIfMissing("qr_links", "content_id", "TEXT");
+        addColumnIfMissing("qr_links", "offer_id", "TEXT");
+        addColumnIfMissing("qr_links", "offer_revision_id", "TEXT");
+        addColumnIfMissing("qr_links", "qr_token", "TEXT");
+        addColumnIfMissing("qr_links", "destination_type", "TEXT NOT NULL DEFAULT 'external_url'");
+        addColumnIfMissing("qr_links", "valid_from", "TEXT");
+        addColumnIfMissing("qr_links", "valid_until", "TEXT");
+        addColumnIfMissing("qr_scans", "qr_scan_id", "TEXT");
+        addColumnIfMissing("qr_scans", "tenant_id", "TEXT");
+        addColumnIfMissing("qr_scans", "screen_group_id", "TEXT");
+        addColumnIfMissing("qr_scans", "content_id", "TEXT");
+        addColumnIfMissing("qr_scans", "offer_id", "TEXT");
+        addColumnIfMissing("qr_scans", "offer_revision_id", "TEXT");
+        addColumnIfMissing("qr_scans", "visit_id", "TEXT");
+        addColumnIfMissing("qr_scans", "near_store_status", "TEXT");
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS store_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL UNIQUE,
+            timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
+            business_day_start_time TEXT NOT NULL DEFAULT '00:00',
+            order_issue_cutoff_time TEXT,
+            pickup_available_from TEXT,
+            pickup_available_until TEXT,
+            currency TEXT NOT NULL DEFAULT 'JPY',
+            tax_included INTEGER NOT NULL DEFAULT 1,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            default_unit_price INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'JPY',
+            tax_included INTEGER NOT NULL DEFAULT 1,
+            tax_amount INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS offers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            offer_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            campaign_id TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            current_offer_revision_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS offer_revisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            offer_revision_id TEXT NOT NULL UNIQUE,
+            offer_id TEXT NOT NULL,
+            revision_number INTEGER NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            campaign_id TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            title TEXT NOT NULL,
+            description TEXT,
+            pickup_location TEXT,
+            pickup_available_from TEXT,
+            pickup_available_until TEXT,
+            order_issue_cutoff_time TEXT,
+            valid_from TEXT,
+            valid_until TEXT,
+            max_orders_total INTEGER,
+            max_orders_per_day INTEGER,
+            max_orders_per_visit INTEGER,
+            currency TEXT NOT NULL DEFAULT 'JPY',
+            tax_included INTEGER NOT NULL DEFAULT 1,
+            tax_amount INTEGER,
+            total_amount INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            published_at TEXT,
+            UNIQUE(offer_id, revision_number),
+            FOREIGN KEY(offer_id) REFERENCES offers(offer_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS offer_revision_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            offer_revision_item_id TEXT NOT NULL UNIQUE,
+            offer_revision_id TEXT NOT NULL,
+            item_id TEXT,
+            item_name_snapshot TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            unit_price_snapshot INTEGER NOT NULL DEFAULT 0,
+            subtotal_amount INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'JPY',
+            tax_included INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(offer_revision_id) REFERENCES offer_revisions(offer_revision_id) ON DELETE CASCADE,
+            FOREIGN KEY(item_id) REFERENCES items(item_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS counter_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            counter_order_id TEXT NOT NULL UNIQUE,
+            order_number TEXT NOT NULL,
+            verify_code TEXT NOT NULL,
+            order_token_hash TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT,
+            content_id TEXT,
+            campaign_id TEXT,
+            offer_id TEXT NOT NULL,
+            offer_revision_id TEXT NOT NULL,
+            qr_link_id TEXT,
+            qr_scan_id TEXT,
+            visit_id TEXT,
+            business_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'issued',
+            currency TEXT NOT NULL DEFAULT 'JPY',
+            tax_included INTEGER NOT NULL DEFAULT 1,
+            tax_amount INTEGER,
+            total_amount INTEGER NOT NULL DEFAULT 0,
+            issued_at TEXT NOT NULL,
+            expires_at TEXT,
+            redeemed_at TEXT,
+            redeemed_by_user_id TEXT,
+            cancelled_at TEXT,
+            cancelled_by_user_id TEXT,
+            cancellation_reason TEXT,
+            raw_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, business_date, order_number),
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY(offer_id) REFERENCES offers(offer_id) ON DELETE RESTRICT,
+            FOREIGN KEY(offer_revision_id) REFERENCES offer_revisions(offer_revision_id) ON DELETE RESTRICT,
+            FOREIGN KEY(qr_link_id) REFERENCES qr_links(qr_link_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS counter_order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            counter_order_item_id TEXT NOT NULL UNIQUE,
+            counter_order_id TEXT NOT NULL,
+            item_id TEXT,
+            item_name_snapshot TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            unit_price_snapshot INTEGER NOT NULL DEFAULT 0,
+            subtotal_amount INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'JPY',
+            tax_included INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(counter_order_id) REFERENCES counter_orders(counter_order_id) ON DELETE CASCADE,
+            FOREIGN KEY(item_id) REFERENCES items(item_id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS store_access_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_access_token_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            pin_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            failed_attempts INTEGER NOT NULL DEFAULT 0,
+            locked_until TEXT,
+            rotated_at TEXT,
+            pin_rotated_at TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS device_commands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_command_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT,
+            device_id TEXT NOT NULL,
+            command_type TEXT NOT NULL,
+            params_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'queued',
+            requested_by_user_id TEXT,
+            requested_at TEXT NOT NULL,
+            ttl_expires_at TEXT NOT NULL,
+            claimed_at TEXT,
+            completed_at TEXT,
+            result_json TEXT,
+            error TEXT,
+            audit_log_id INTEGER,
+            FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+          );
+
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_playlogs_event_idempotency
+            ON playlogs(tenant_id, device_id, event_id)
+            WHERE event_id IS NOT NULL AND event_id != '';
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_error_logs_event_idempotency
+            ON error_logs(tenant_id, device_id, event_id)
+            WHERE event_id IS NOT NULL AND event_id != '';
+          CREATE INDEX IF NOT EXISTS idx_store_settings_store ON store_settings(store_id);
+          CREATE INDEX IF NOT EXISTS idx_items_tenant_status ON items(tenant_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_offers_store_status ON offers(store_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_offer_revisions_offer ON offer_revisions(offer_id, revision_number DESC);
+          CREATE INDEX IF NOT EXISTS idx_offer_revisions_status ON offer_revisions(status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_offer_revision_items_revision ON offer_revision_items(offer_revision_id);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_qr_links_token ON qr_links(qr_token)
+            WHERE qr_token IS NOT NULL AND qr_token != '';
+          CREATE INDEX IF NOT EXISTS idx_qr_links_offer ON qr_links(offer_id, offer_revision_id);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_qr_scans_scan_id ON qr_scans(qr_scan_id)
+            WHERE qr_scan_id IS NOT NULL AND qr_scan_id != '';
+          CREATE INDEX IF NOT EXISTS idx_counter_orders_store_date ON counter_orders(store_id, business_date, status);
+          CREATE INDEX IF NOT EXISTS idx_counter_orders_offer ON counter_orders(offer_revision_id, status, issued_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_counter_orders_visit ON counter_orders(offer_revision_id, visit_id, issued_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_counter_order_items_order ON counter_order_items(counter_order_id);
+          CREATE INDEX IF NOT EXISTS idx_store_access_tokens_store ON store_access_tokens(store_id, status);
+          CREATE INDEX IF NOT EXISTS idx_device_commands_device ON device_commands(device_id, status, requested_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_device_commands_status ON device_commands(status, ttl_expires_at);
+        `);
+      }
     }
   ];
 }
@@ -1756,6 +2243,16 @@ function applySchemaMigrations() {
     });
     runMigration();
     appliedVersions.add(migration.version);
+  }
+}
+
+function addColumnIfMissing(tableName, columnName, definition) {
+  const safeTable = cleanId(tableName);
+  const safeColumn = cleanId(columnName);
+  if (!safeTable || !safeColumn) throw new Error("Invalid migration column target");
+  const existingColumns = new Set(db.prepare(`PRAGMA table_info(${safeTable})`).all().map((column) => column.name));
+  if (!existingColumns.has(safeColumn)) {
+    db.exec(`ALTER TABLE ${safeTable} ADD COLUMN ${safeColumn} ${definition}`);
   }
 }
 
@@ -1845,6 +2342,1037 @@ function normalizeDeviceTokenAction(input) {
   return {
     reason: cleanString(input.reason || input.notes || input.note).slice(0, 1000)
   };
+}
+
+function listStoreSettings() {
+  return db.prepare(`
+    SELECT
+      s.tenant_id,
+      s.store_id,
+      s.name AS store_name,
+      ss.timezone,
+      ss.business_day_start_time,
+      ss.order_issue_cutoff_time,
+      ss.pickup_available_from,
+      ss.pickup_available_until,
+      ss.currency,
+      ss.tax_included,
+      ss.notes,
+      ss.created_at,
+      ss.updated_at
+    FROM stores s
+    LEFT JOIN store_settings ss ON ss.store_id = s.store_id
+    ORDER BY s.store_id
+  `).all().map((row) => publicStoreSettings(withDefaultStoreSettings(row)));
+}
+
+function getStoreSettings(storeId, options = {}) {
+  const store = db.prepare("SELECT * FROM stores WHERE store_id = ?").get(cleanId(storeId));
+  if (!store) return null;
+  const settings = db.prepare("SELECT * FROM store_settings WHERE store_id = ?").get(store.store_id);
+  if (!settings && !options.withDefaults) return null;
+  return publicStoreSettings(withDefaultStoreSettings({ ...store, ...(settings || {}) }));
+}
+
+function upsertStoreSettings(storeId, input) {
+  const store = db.prepare("SELECT * FROM stores WHERE store_id = ?").get(cleanId(storeId));
+  if (!store) throw requestError("Store not found", 404);
+  const existing = db.prepare("SELECT * FROM store_settings WHERE store_id = ?").get(store.store_id);
+  const normalized = normalizeStoreSettingsInput(input, { ...store, ...(existing || {}) });
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO store_settings (
+      tenant_id, store_id, timezone, business_day_start_time, order_issue_cutoff_time,
+      pickup_available_from, pickup_available_until, currency, tax_included,
+      notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(store_id) DO UPDATE SET
+      timezone = excluded.timezone,
+      business_day_start_time = excluded.business_day_start_time,
+      order_issue_cutoff_time = excluded.order_issue_cutoff_time,
+      pickup_available_from = excluded.pickup_available_from,
+      pickup_available_until = excluded.pickup_available_until,
+      currency = excluded.currency,
+      tax_included = excluded.tax_included,
+      notes = excluded.notes,
+      updated_at = excluded.updated_at
+  `).run(
+    store.tenant_id,
+    store.store_id,
+    normalized.timezone,
+    normalized.business_day_start_time,
+    normalized.order_issue_cutoff_time,
+    normalized.pickup_available_from,
+    normalized.pickup_available_until,
+    normalized.currency,
+    normalized.tax_included ? 1 : 0,
+    normalized.notes,
+    existing?.created_at || now,
+    now
+  );
+  recordAuditLog("admin", "", "store_settings.upsert", "store", store.store_id, existing, getStoreSettings(store.store_id), {}, now);
+  return getStoreSettings(store.store_id, { withDefaults: true });
+}
+
+function normalizeStoreSettingsInput(input, existing = {}) {
+  const timezone = cleanString(input.timezone ?? existing.timezone ?? DEFAULT_TIMEZONE) || DEFAULT_TIMEZONE;
+  if (!isValidTimezone(timezone)) throw requestError("timezone is invalid", 400);
+  const businessDayStartTime = cleanString(input.business_day_start_time ?? existing.business_day_start_time ?? "00:00") || "00:00";
+  assertOptionalBusinessTime("business_day_start_time", businessDayStartTime, true);
+  const orderIssueCutoffTime = cleanString(input.order_issue_cutoff_time ?? existing.order_issue_cutoff_time);
+  const pickupAvailableFrom = cleanString(input.pickup_available_from ?? existing.pickup_available_from);
+  const pickupAvailableUntil = cleanString(input.pickup_available_until ?? existing.pickup_available_until);
+  assertOptionalBusinessTime("order_issue_cutoff_time", orderIssueCutoffTime);
+  assertOptionalBusinessTime("pickup_available_from", pickupAvailableFrom);
+  assertOptionalBusinessTime("pickup_available_until", pickupAvailableUntil);
+  return {
+    timezone,
+    business_day_start_time: businessDayStartTime,
+    order_issue_cutoff_time: orderIssueCutoffTime,
+    pickup_available_from: pickupAvailableFrom,
+    pickup_available_until: pickupAvailableUntil,
+    currency: normalizeCurrency(input.currency ?? existing.currency),
+    tax_included: normalizeBooleanFlag(input.tax_included ?? existing.tax_included ?? true),
+    notes: cleanString(input.notes ?? existing.notes).slice(0, 1000)
+  };
+}
+
+function withDefaultStoreSettings(row) {
+  return {
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    store_name: cleanString(row.store_name || row.name),
+    timezone: cleanString(row.timezone) || DEFAULT_TIMEZONE,
+    business_day_start_time: cleanString(row.business_day_start_time) || "00:00",
+    order_issue_cutoff_time: cleanString(row.order_issue_cutoff_time),
+    pickup_available_from: cleanString(row.pickup_available_from),
+    pickup_available_until: cleanString(row.pickup_available_until),
+    currency: normalizeCurrency(row.currency || DEFAULT_CURRENCY),
+    tax_included: row.tax_included === undefined || row.tax_included === null ? true : row.tax_included !== 0,
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function publicStoreSettings(row) {
+  return {
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    store_name: cleanString(row.store_name),
+    timezone: row.timezone,
+    business_day_start_time: row.business_day_start_time,
+    order_issue_cutoff_time: row.order_issue_cutoff_time,
+    pickup_available_from: row.pickup_available_from,
+    pickup_available_until: row.pickup_available_until,
+    currency: row.currency,
+    tax_included: row.tax_included,
+    notes: row.notes,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+function listItems(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM items
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicItem);
+}
+
+function createItem(input) {
+  const normalized = normalizeItemInput(input);
+  const existing = db.prepare("SELECT item_id FROM items WHERE item_id = ?").get(normalized.item_id);
+  if (existing) throw requestError("Item already exists", 409);
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO items (
+      item_id, tenant_id, item_name, description, status, default_unit_price,
+      currency, tax_included, tax_amount, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    normalized.item_id,
+    normalized.tenant_id,
+    normalized.item_name,
+    normalized.description,
+    normalized.status,
+    normalized.default_unit_price,
+    normalized.currency,
+    normalized.tax_included ? 1 : 0,
+    normalized.tax_amount,
+    now,
+    now
+  );
+  return getItem(normalized.item_id);
+}
+
+function updateItem(itemId, input) {
+  const existing = db.prepare("SELECT * FROM items WHERE item_id = ?").get(cleanId(itemId));
+  if (!existing) return null;
+  const normalized = normalizeItemInput(input, existing);
+  const now = nowIso();
+  db.prepare(`
+    UPDATE items SET
+      tenant_id = ?,
+      item_name = ?,
+      description = ?,
+      status = ?,
+      default_unit_price = ?,
+      currency = ?,
+      tax_included = ?,
+      tax_amount = ?,
+      updated_at = ?
+    WHERE item_id = ?
+  `).run(
+    normalized.tenant_id,
+    normalized.item_name,
+    normalized.description,
+    normalized.status,
+    normalized.default_unit_price,
+    normalized.currency,
+    normalized.tax_included ? 1 : 0,
+    normalized.tax_amount,
+    now,
+    existing.item_id
+  );
+  recordAuditLog("admin", "", "item.update", "item", existing.item_id, existing, getItem(existing.item_id), {}, now);
+  return getItem(existing.item_id);
+}
+
+function getItem(itemId) {
+  const row = db.prepare("SELECT * FROM items WHERE item_id = ?").get(cleanId(itemId));
+  return row ? publicItem(row) : null;
+}
+
+function normalizeItemInput(input, existing = {}) {
+  const itemId = existing.item_id ? cleanId(existing.item_id) : cleanId(input.item_id || input.itemId || nextEntityId("item", input.item_name || input.name));
+  const tenantId = cleanId(input.tenant_id ?? existing.tenant_id ?? "TEN-LOCAL");
+  const itemName = cleanString(input.item_name ?? input.name ?? existing.item_name).slice(0, 160);
+  if (!itemId) throw requestError("item_id is required", 400);
+  if (!tenantId) throw requestError("tenant_id is required", 400);
+  if (!itemName) throw requestError("item_name is required", 400);
+  const status = cleanString(input.status ?? existing.status ?? "active");
+  if (!ITEM_STATUS.has(status)) throw requestError(`status must be one of: ${Array.from(ITEM_STATUS).join(", ")}`, 400);
+  return {
+    item_id: itemId,
+    tenant_id: tenantId,
+    item_name: itemName,
+    description: cleanString(input.description ?? existing.description).slice(0, 1000),
+    status,
+    default_unit_price: normalizeAmount(input.default_unit_price ?? input.unit_price ?? existing.default_unit_price, 0),
+    currency: normalizeCurrency(input.currency ?? existing.currency),
+    tax_included: normalizeBooleanFlag(input.tax_included ?? existing.tax_included ?? true),
+    tax_amount: normalizeNullableAmount(input.tax_amount ?? existing.tax_amount)
+  };
+}
+
+function publicItem(row) {
+  return {
+    item_id: cleanId(row.item_id),
+    tenant_id: cleanId(row.tenant_id),
+    item_name: cleanString(row.item_name),
+    description: cleanString(row.description),
+    status: cleanString(row.status),
+    default_unit_price: asInteger(row.default_unit_price) || 0,
+    currency: normalizeCurrency(row.currency),
+    tax_included: row.tax_included !== 0,
+    tax_amount: asInteger(row.tax_amount),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listOffers(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM offers
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(boundedLimit).map((row) => publicOffer(row, { includeCurrentRevision: true }));
+}
+
+function createOffer(input) {
+  const normalized = normalizeOfferInput(input);
+  const existing = db.prepare("SELECT offer_id FROM offers WHERE offer_id = ?").get(normalized.offer_id);
+  if (existing) throw requestError("Offer already exists", 409);
+  const now = nowIso();
+  const create = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO offers (
+        offer_id, tenant_id, store_id, campaign_id, status,
+        current_offer_revision_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, '', ?, ?)
+    `).run(
+      normalized.offer_id,
+      normalized.tenant_id,
+      normalized.store_id,
+      normalized.campaign_id || null,
+      normalized.status,
+      now,
+      now
+    );
+    createOfferRevisionRecord(normalized.offer_id, normalized.revision, now);
+  });
+  create();
+  return getOffer(normalized.offer_id, { includeRevisions: true });
+}
+
+function getOffer(offerId, options = {}) {
+  const row = db.prepare("SELECT * FROM offers WHERE offer_id = ?").get(cleanId(offerId));
+  return row ? publicOffer(row, options) : null;
+}
+
+function publicOffer(row, options = {}) {
+  const offer = {
+    offer_id: cleanId(row.offer_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    campaign_id: cleanId(row.campaign_id),
+    status: cleanString(row.status),
+    current_offer_revision_id: cleanId(row.current_offer_revision_id),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+  if (options.includeCurrentRevision && offer.current_offer_revision_id) {
+    offer.current_revision = getOfferRevision(offer.current_offer_revision_id);
+  }
+  if (options.includeRevisions) {
+    offer.revisions = listOfferRevisions(offer.offer_id);
+  }
+  return offer;
+}
+
+function assertOptionalCampaignExists(campaignId) {
+  const normalized = cleanId(campaignId);
+  if (!normalized) return;
+  const exists = db.prepare("SELECT campaign_id FROM campaigns WHERE campaign_id = ?").get(normalized);
+  if (!exists) throw requestError("campaign_id must reference an existing campaign", 400);
+}
+
+function normalizeOfferInput(input) {
+  const storeId = cleanId(input.store_id || input.storeId);
+  const store = db.prepare("SELECT * FROM stores WHERE store_id = ?").get(storeId);
+  if (!store) throw requestError("store_id must reference an existing store", 400);
+  const offerId = cleanId(input.offer_id || input.offerId || nextEntityId("offer", input.title || input.name || storeId));
+  if (!offerId) throw requestError("offer_id is required", 400);
+  const status = cleanString(input.status || "draft");
+  if (!OFFER_STATUS.has(status)) throw requestError(`status must be one of: ${Array.from(OFFER_STATUS).join(", ")}`, 400);
+  const campaignId = cleanId(input.campaign_id || input.campaignId);
+  assertOptionalCampaignExists(campaignId);
+  return {
+    offer_id: offerId,
+    tenant_id: cleanId(input.tenant_id || store.tenant_id),
+    store_id: store.store_id,
+    campaign_id: campaignId,
+    status,
+    revision: normalizeOfferRevisionInput({
+      ...(input.revision || {}),
+      title: input.title ?? input.revision?.title,
+      description: input.description ?? input.revision?.description,
+      status: input.revision?.status || (status === "active" ? "active" : "draft"),
+      items: input.items ?? input.revision?.items
+    }, {
+      offer_id: offerId,
+      tenant_id: cleanId(input.tenant_id || store.tenant_id),
+      store_id: store.store_id,
+      campaign_id: campaignId,
+      revision_number: 1
+    })
+  };
+}
+
+function listOfferRevisions(offerId) {
+  return db.prepare(`
+    SELECT * FROM offer_revisions
+    WHERE offer_id = ?
+    ORDER BY revision_number DESC, id DESC
+  `).all(cleanId(offerId)).map(publicOfferRevision);
+}
+
+function getOfferRevision(offerRevisionId) {
+  const row = db.prepare("SELECT * FROM offer_revisions WHERE offer_revision_id = ?").get(cleanId(offerRevisionId));
+  return row ? publicOfferRevision(row) : null;
+}
+
+function createOfferRevision(offerId, input) {
+  const offer = db.prepare("SELECT * FROM offers WHERE offer_id = ?").get(cleanId(offerId));
+  if (!offer) throw requestError("Offer not found", 404);
+  const latest = db.prepare("SELECT MAX(revision_number) AS revision_number FROM offer_revisions WHERE offer_id = ?").get(offer.offer_id);
+  const revisionNumber = (asInteger(latest?.revision_number) || 0) + 1;
+  const normalized = normalizeOfferRevisionInput(input, {
+    offer_id: offer.offer_id,
+    tenant_id: offer.tenant_id,
+    store_id: offer.store_id,
+    campaign_id: offer.campaign_id,
+    revision_number: revisionNumber
+  });
+  const now = nowIso();
+  const create = db.transaction(() => {
+    createOfferRevisionRecord(offer.offer_id, normalized, now);
+  });
+  create();
+  return getOfferRevision(normalized.offer_revision_id);
+}
+
+function createOfferRevisionRecord(offerId, revision, now) {
+  if (revision.status === "active") {
+    db.prepare(`
+      UPDATE offer_revisions SET status = 'retired', updated_at = ?
+      WHERE offer_id = ? AND status = 'active'
+    `).run(now, cleanId(offerId));
+  }
+  db.prepare(`
+    INSERT INTO offer_revisions (
+      offer_revision_id, offer_id, revision_number, tenant_id, store_id,
+      campaign_id, status, title, description, pickup_location,
+      pickup_available_from, pickup_available_until, order_issue_cutoff_time,
+      valid_from, valid_until, max_orders_total, max_orders_per_day,
+      max_orders_per_visit, currency, tax_included, tax_amount, total_amount,
+      notes, created_by, created_at, updated_at, published_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    revision.offer_revision_id,
+    cleanId(offerId),
+    revision.revision_number,
+    revision.tenant_id,
+    revision.store_id,
+    revision.campaign_id || null,
+    revision.status,
+    revision.title,
+    revision.description,
+    revision.pickup_location,
+    revision.pickup_available_from,
+    revision.pickup_available_until,
+    revision.order_issue_cutoff_time,
+    revision.valid_from,
+    revision.valid_until,
+    revision.max_orders_total,
+    revision.max_orders_per_day,
+    revision.max_orders_per_visit,
+    revision.currency,
+    revision.tax_included ? 1 : 0,
+    revision.tax_amount,
+    revision.total_amount,
+    revision.notes,
+    revision.created_by,
+    now,
+    now,
+    revision.status === "active" ? now : null
+  );
+  for (const [index, item] of revision.items.entries()) {
+    db.prepare(`
+      INSERT INTO offer_revision_items (
+        offer_revision_item_id, offer_revision_id, item_id, item_name_snapshot,
+        quantity, unit_price_snapshot, subtotal_amount, currency, tax_included, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      nextEntityId("ori", `${revision.offer_revision_id}-${index + 1}`),
+      revision.offer_revision_id,
+      item.item_id,
+      item.item_name_snapshot,
+      item.quantity,
+      item.unit_price_snapshot,
+      item.subtotal_amount,
+      item.currency,
+      item.tax_included ? 1 : 0,
+      now
+    );
+  }
+  if (revision.status === "active") {
+    db.prepare(`
+      UPDATE offers SET status = 'active', current_offer_revision_id = ?, updated_at = ?
+      WHERE offer_id = ?
+    `).run(revision.offer_revision_id, now, cleanId(offerId));
+  } else {
+    db.prepare("UPDATE offers SET updated_at = ? WHERE offer_id = ?").run(now, cleanId(offerId));
+  }
+  recordAuditLog("admin", "", "offer_revision.create", "offer", cleanId(offerId), null, getOfferRevision(revision.offer_revision_id), {}, now);
+}
+
+function normalizeOfferRevisionInput(input, context = {}) {
+  const revisionNumber = asInteger(context.revision_number || input.revision_number) || 1;
+  const offerRevisionId = cleanId(input.offer_revision_id || input.offerRevisionId || `${context.offer_id}-r${revisionNumber}`);
+  const status = cleanString(input.status || "draft");
+  if (!OFFER_REVISION_STATUS.has(status)) throw requestError(`revision.status must be one of: ${Array.from(OFFER_REVISION_STATUS).join(", ")}`, 400);
+  const title = cleanString(input.title || input.name).slice(0, 160);
+  if (!title) throw requestError("revision.title is required", 400);
+  const pickupFrom = cleanString(input.pickup_available_from || input.pickupAvailableFrom);
+  const pickupUntil = cleanString(input.pickup_available_until || input.pickupAvailableUntil);
+  const orderIssueCutoff = cleanString(input.order_issue_cutoff_time || input.orderIssueCutoffTime);
+  assertOptionalBusinessTime("pickup_available_from", pickupFrom);
+  assertOptionalBusinessTime("pickup_available_until", pickupUntil);
+  assertOptionalBusinessTime("order_issue_cutoff_time", orderIssueCutoff);
+  const currency = normalizeCurrency(input.currency);
+  const taxIncluded = normalizeBooleanFlag(input.tax_included ?? true);
+  const items = normalizeOfferRevisionItems(input.items, { currency, tax_included: taxIncluded });
+  const calculatedTotal = items.reduce((sum, item) => sum + item.subtotal_amount, 0);
+  const campaignId = cleanId(context.campaign_id || input.campaign_id || input.campaignId);
+  assertOptionalCampaignExists(campaignId);
+  return {
+    offer_revision_id: offerRevisionId,
+    offer_id: cleanId(context.offer_id || input.offer_id),
+    revision_number: revisionNumber,
+    tenant_id: cleanId(context.tenant_id || input.tenant_id),
+    store_id: cleanId(context.store_id || input.store_id),
+    campaign_id: campaignId,
+    status,
+    title,
+    description: cleanString(input.description).slice(0, 2000),
+    pickup_location: cleanString(input.pickup_location || input.pickupLocation).slice(0, 240),
+    pickup_available_from: pickupFrom,
+    pickup_available_until: pickupUntil,
+    order_issue_cutoff_time: orderIssueCutoff,
+    valid_from: cleanString(input.valid_from || input.validFrom),
+    valid_until: cleanString(input.valid_until || input.validUntil),
+    max_orders_total: normalizeNullableLimit(input.max_orders_total ?? input.maxOrdersTotal),
+    max_orders_per_day: normalizeNullableLimit(input.max_orders_per_day ?? input.maxOrdersPerDay),
+    max_orders_per_visit: normalizeNullableLimit(input.max_orders_per_visit ?? input.maxOrdersPerVisit),
+    currency,
+    tax_included: taxIncluded,
+    tax_amount: normalizeNullableAmount(input.tax_amount),
+    total_amount: normalizeAmount(input.total_amount ?? calculatedTotal, calculatedTotal),
+    notes: cleanString(input.notes).slice(0, 1000),
+    created_by: cleanString(input.created_by || input.createdBy).slice(0, 120),
+    items
+  };
+}
+
+function normalizeOfferRevisionItems(value, defaults = {}) {
+  const source = Array.isArray(value) ? value : [];
+  return source.map((item, index) => {
+    const itemId = cleanId(item.item_id || item.itemId);
+    const catalogItem = itemId ? getItem(itemId) : null;
+    const itemName = cleanString(item.item_name || item.name || catalogItem?.item_name).slice(0, 160);
+    if (!itemName) throw requestError(`items[${index}].item_name is required`, 400);
+    const quantity = Math.max(1, normalizeAmount(item.quantity, 1));
+    const unitPrice = normalizeAmount(item.unit_price_snapshot ?? item.unit_price ?? catalogItem?.default_unit_price, 0);
+    const currency = normalizeCurrency(item.currency || catalogItem?.currency || defaults.currency);
+    const taxIncluded = normalizeBooleanFlag(item.tax_included ?? catalogItem?.tax_included ?? defaults.tax_included ?? true);
+    return {
+      item_id: itemId,
+      item_name_snapshot: itemName,
+      quantity,
+      unit_price_snapshot: unitPrice,
+      subtotal_amount: unitPrice * quantity,
+      currency,
+      tax_included: taxIncluded
+    };
+  });
+}
+
+function publicOfferRevision(row) {
+  const revision = {
+    offer_revision_id: cleanId(row.offer_revision_id),
+    offer_id: cleanId(row.offer_id),
+    revision_number: asInteger(row.revision_number) || 1,
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    campaign_id: cleanId(row.campaign_id),
+    status: cleanString(row.status),
+    title: cleanString(row.title),
+    description: cleanString(row.description),
+    pickup_location: cleanString(row.pickup_location),
+    pickup_available_from: cleanString(row.pickup_available_from),
+    pickup_available_until: cleanString(row.pickup_available_until),
+    order_issue_cutoff_time: cleanString(row.order_issue_cutoff_time),
+    valid_from: cleanString(row.valid_from),
+    valid_until: cleanString(row.valid_until),
+    max_orders_total: asInteger(row.max_orders_total),
+    max_orders_per_day: asInteger(row.max_orders_per_day),
+    max_orders_per_visit: asInteger(row.max_orders_per_visit),
+    currency: normalizeCurrency(row.currency),
+    tax_included: row.tax_included !== 0,
+    tax_amount: asInteger(row.tax_amount),
+    total_amount: asInteger(row.total_amount) || 0,
+    notes: cleanString(row.notes),
+    created_by: cleanString(row.created_by),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    published_at: cleanString(row.published_at)
+  };
+  revision.items = listOfferRevisionItems(revision.offer_revision_id);
+  return revision;
+}
+
+function listOfferRevisionItems(offerRevisionId) {
+  return db.prepare(`
+    SELECT * FROM offer_revision_items
+    WHERE offer_revision_id = ?
+    ORDER BY id ASC
+  `).all(cleanId(offerRevisionId)).map((row) => ({
+    offer_revision_item_id: cleanId(row.offer_revision_item_id),
+    offer_revision_id: cleanId(row.offer_revision_id),
+    item_id: cleanId(row.item_id),
+    item_name_snapshot: cleanString(row.item_name_snapshot),
+    quantity: asInteger(row.quantity) || 1,
+    unit_price_snapshot: asInteger(row.unit_price_snapshot) || 0,
+    subtotal_amount: asInteger(row.subtotal_amount) || 0,
+    currency: normalizeCurrency(row.currency),
+    tax_included: row.tax_included !== 0,
+    created_at: cleanString(row.created_at)
+  }));
+}
+
+function listQrLinks(limit = 100) {
+  const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM qr_links
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(boundedLimit).map(publicQrLink);
+}
+
+function createQrLink(input) {
+  const normalized = normalizeQrLinkInput(input);
+  const existing = db.prepare("SELECT qr_link_id FROM qr_links WHERE qr_link_id = ? OR qr_token = ?").get(normalized.qr_link_id, normalized.qr_token);
+  if (existing) throw requestError("QR link already exists", 409);
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO qr_links (
+      qr_link_id, campaign_id, advertiser_id, qr_id, label, destination_url,
+      short_path, status, tenant_id, store_id, screen_group_id, content_id,
+      offer_id, offer_revision_id, qr_token, destination_type, valid_from,
+      valid_until, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    normalized.qr_link_id,
+    normalized.campaign_id || null,
+    null,
+    normalized.qr_link_id,
+    normalized.label,
+    normalized.destination_url,
+    normalized.short_path,
+    normalized.status,
+    normalized.tenant_id,
+    normalized.store_id,
+    normalized.screen_group_id,
+    normalized.content_id,
+    normalized.offer_id || null,
+    normalized.offer_revision_id || null,
+    normalized.qr_token,
+    normalized.destination_type,
+    normalized.valid_from,
+    normalized.valid_until,
+    now,
+    now
+  );
+  return getQrLink(normalized.qr_link_id);
+}
+
+function normalizeQrLinkInput(input) {
+  const qrLinkId = cleanId(input.qr_link_id || input.qrLinkId || nextEntityId("qr", input.label || input.destination_type));
+  const qrToken = cleanId(input.qr_token || input.qrToken || crypto.randomBytes(12).toString("base64url"));
+  const destinationType = cleanString(input.destination_type || input.destinationType || "external_url");
+  if (!QR_DESTINATION_TYPES.has(destinationType)) throw requestError(`destination_type must be one of: ${Array.from(QR_DESTINATION_TYPES).join(", ")}`, 400);
+  const offerId = cleanId(input.offer_id || input.offerId);
+  const offerRevisionId = cleanId(input.offer_revision_id || input.offerRevisionId);
+  const offerRevision = offerRevisionId ? getOfferRevision(offerRevisionId) : (offerId ? resolveActiveOfferRevision(offerId) : null);
+  if (destinationType === "counter_order_offer" && !offerRevision) {
+    throw requestError("counter_order_offer QR links require an active offer_revision", 400);
+  }
+  const destinationUrl = cleanString(input.destination_url || input.destinationUrl) ||
+    (destinationType === "counter_order_offer" ? `/q/${qrToken}` : "");
+  if (!destinationUrl) throw requestError("destination_url is required", 400);
+  const campaignId = cleanId(input.campaign_id || input.campaignId || offerRevision?.campaign_id);
+  assertOptionalCampaignExists(campaignId);
+  return {
+    qr_link_id: qrLinkId,
+    qr_token: qrToken,
+    tenant_id: cleanId(input.tenant_id || offerRevision?.tenant_id),
+    store_id: cleanId(input.store_id || offerRevision?.store_id),
+    screen_group_id: cleanId(input.screen_group_id || input.screenGroupId),
+    content_id: cleanId(input.content_id || input.contentId),
+    campaign_id: campaignId,
+    offer_id: cleanId(offerId || offerRevision?.offer_id),
+    offer_revision_id: cleanId(offerRevisionId || offerRevision?.offer_revision_id),
+    label: cleanString(input.label || offerRevision?.title || qrLinkId).slice(0, 160),
+    destination_type: destinationType,
+    destination_url: destinationUrl,
+    short_path: cleanString(input.short_path || input.shortPath || `/q/${qrToken}`).slice(0, 160),
+    valid_from: cleanString(input.valid_from || input.validFrom),
+    valid_until: cleanString(input.valid_until || input.validUntil),
+    status: cleanString(input.status || "active") || "active"
+  };
+}
+
+function getQrLink(qrLinkId) {
+  const row = db.prepare("SELECT * FROM qr_links WHERE qr_link_id = ?").get(cleanId(qrLinkId));
+  return row ? publicQrLink(row) : null;
+}
+
+function getQrLinkByToken(qrToken) {
+  const token = cleanId(qrToken);
+  const row = db.prepare(`
+    SELECT * FROM qr_links
+    WHERE qr_token = ?
+       OR short_path = ?
+  `).get(token, `/q/${token}`);
+  return row ? publicQrLink(row) : null;
+}
+
+function assertQrLinkUsable(qrLink) {
+  const now = nowIso();
+  if (qrLink.status !== "active") throw requestError("QR link is not active", 410);
+  if (qrLink.valid_from && now < qrLink.valid_from) throw requestError("QR link is not valid yet", 410);
+  if (qrLink.valid_until && now > qrLink.valid_until) throw requestError("QR link has expired", 410);
+}
+
+function recordQrScan(qrLink, req) {
+  const now = nowIso();
+  const qrScanId = nextEntityId("qrs", qrLink.qr_link_id);
+  const userAgent = cleanString(req.get("user-agent")).slice(0, 500);
+  const referrer = cleanString(req.get("referer") || req.get("referrer")).slice(0, 500);
+  const ipHash = hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`);
+  const visitId = cleanId(req.query.visit_id || req.body?.visit_id || req.body?.visitId);
+  db.prepare(`
+    INSERT INTO qr_scans (
+      qr_scan_id, qr_link_id, campaign_id, advertiser_id, store_id, device_id,
+      scanned_at, user_agent, ip_hash, referrer, raw_json, tenant_id,
+      screen_group_id, content_id, offer_id, offer_revision_id, visit_id,
+      near_store_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    qrScanId,
+    qrLink.qr_link_id,
+    qrLink.campaign_id || null,
+    null,
+    qrLink.store_id,
+    null,
+    now,
+    userAgent,
+    ipHash,
+    referrer,
+    JSON.stringify({ query: req.query || {}, body: req.body || {} }),
+    qrLink.tenant_id,
+    qrLink.screen_group_id,
+    qrLink.content_id,
+    qrLink.offer_id || null,
+    qrLink.offer_revision_id || null,
+    visitId,
+    cleanString(req.query.near_store_status || "unknown")
+  );
+  return {
+    qr_scan_id: qrScanId,
+    qr_link_id: qrLink.qr_link_id,
+    campaign_id: qrLink.campaign_id,
+    store_id: qrLink.store_id,
+    scanned_at: now,
+    visit_id: visitId,
+    near_store_status: cleanString(req.query.near_store_status || "unknown")
+  };
+}
+
+function resolveQrScanForOrder(qrLink, req) {
+  const suppliedQrScanId = cleanId(req.body?.qr_scan_id || req.body?.qrScanId);
+  if (!suppliedQrScanId) return recordQrScan(qrLink, req);
+  const row = db.prepare(`
+    SELECT * FROM qr_scans
+    WHERE qr_scan_id = ? AND qr_link_id = ?
+  `).get(suppliedQrScanId, qrLink.qr_link_id);
+  if (!row) throw requestError("qr_scan_id was not found for this QR link", 400);
+  return publicQrScan(row);
+}
+
+function publicQrScan(row) {
+  return {
+    qr_scan_id: cleanId(row.qr_scan_id),
+    qr_link_id: cleanId(row.qr_link_id),
+    campaign_id: cleanId(row.campaign_id),
+    store_id: cleanId(row.store_id),
+    scanned_at: cleanString(row.scanned_at),
+    visit_id: cleanId(row.visit_id),
+    near_store_status: cleanString(row.near_store_status || "unknown")
+  };
+}
+
+function publicQrLink(row) {
+  return {
+    qr_link_id: cleanId(row.qr_link_id),
+    qr_token: cleanId(row.qr_token),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    content_id: cleanId(row.content_id),
+    campaign_id: cleanId(row.campaign_id),
+    offer_id: cleanId(row.offer_id),
+    offer_revision_id: cleanId(row.offer_revision_id),
+    label: cleanString(row.label),
+    destination_type: cleanString(row.destination_type || "external_url"),
+    destination_url: cleanString(row.destination_url),
+    short_path: cleanString(row.short_path),
+    status: cleanString(row.status),
+    valid_from: cleanString(row.valid_from),
+    valid_until: cleanString(row.valid_until),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function listCounterOrders(query = {}) {
+  const storeId = cleanId(query.store_id);
+  const status = cleanString(query.status);
+  const boundedLimit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  const rows = storeId
+    ? db.prepare(`
+      SELECT * FROM counter_orders
+      WHERE store_id = ?
+        AND (? = '' OR status = ?)
+      ORDER BY issued_at DESC, id DESC
+      LIMIT ?
+    `).all(storeId, status, status, boundedLimit)
+    : db.prepare(`
+      SELECT * FROM counter_orders
+      WHERE (? = '' OR status = ?)
+      ORDER BY issued_at DESC, id DESC
+      LIMIT ?
+    `).all(status, status, boundedLimit);
+  return rows.map(publicCounterOrder);
+}
+
+function createCounterOrder(input) {
+  const now = nowIso();
+  const revision = resolveCounterOrderOfferRevision(input);
+  validateCounterOrderIssuance(revision, input, now);
+  const storeSettings = getStoreSettings(revision.store_id, { withDefaults: true });
+  const businessDate = businessDateFor(now, storeSettings.timezone, storeSettings.business_day_start_time);
+  const orderNumber = nextOrderNumber(revision.store_id, businessDate);
+  const verifyCode = String(crypto.randomInt(0, 10000)).padStart(4, "0");
+  const orderToken = crypto.randomBytes(24).toString("base64url");
+  const orderId = cleanId(input.counter_order_id || input.counterOrderId || nextEntityId("co", `${revision.store_id}-${businessDate}-${orderNumber}`));
+  const qrLinkId = cleanId(input.qr_link_id || input.qrLinkId);
+  const qrLink = qrLinkId ? getQrLink(qrLinkId) : null;
+  const qrScanId = cleanId(input.qr_scan_id || input.qrScanId);
+  const visitId = cleanId(input.visit_id || input.visitId);
+  const expiresAt = cleanString(input.expires_at || input.expiresAt || revision.valid_until);
+  const raw = {
+    ...input,
+    order_token: undefined
+  };
+  const items = listOfferRevisionItems(revision.offer_revision_id);
+  const create = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO counter_orders (
+        counter_order_id, order_number, verify_code, order_token_hash,
+        tenant_id, store_id, screen_group_id, content_id, campaign_id,
+        offer_id, offer_revision_id, qr_link_id, qr_scan_id, visit_id,
+        business_date, status, currency, tax_included, tax_amount,
+        total_amount, issued_at, expires_at, raw_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      orderId,
+      orderNumber,
+      verifyCode,
+      hashToken(orderToken),
+      revision.tenant_id,
+      revision.store_id,
+      cleanId(input.screen_group_id || input.screenGroupId || qrLink?.screen_group_id),
+      cleanId(input.content_id || input.contentId || qrLink?.content_id),
+      cleanId(input.campaign_id || input.campaignId || revision.campaign_id || qrLink?.campaign_id) || null,
+      revision.offer_id,
+      revision.offer_revision_id,
+      qrLinkId || null,
+      qrScanId || null,
+      visitId || null,
+      businessDate,
+      revision.currency,
+      revision.tax_included ? 1 : 0,
+      revision.tax_amount,
+      revision.total_amount,
+      now,
+      expiresAt,
+      JSON.stringify(raw),
+      now,
+      now
+    );
+    for (const [index, item] of items.entries()) {
+      db.prepare(`
+        INSERT INTO counter_order_items (
+          counter_order_item_id, counter_order_id, item_id, item_name_snapshot,
+          quantity, unit_price_snapshot, subtotal_amount, currency, tax_included, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        nextEntityId("coi", `${orderId}-${index + 1}`),
+        orderId,
+        item.item_id,
+        item.item_name_snapshot,
+        item.quantity,
+        item.unit_price_snapshot,
+        item.subtotal_amount,
+        item.currency,
+        item.tax_included ? 1 : 0,
+        now
+      );
+    }
+  });
+  create();
+  return {
+    counter_order: getCounterOrder(orderId),
+    order_token: orderToken,
+    order_url: `/order/${orderToken}`
+  };
+}
+
+function updateCounterOrderStatus(counterOrderId, input) {
+  const existing = db.prepare("SELECT * FROM counter_orders WHERE counter_order_id = ?").get(cleanId(counterOrderId));
+  if (!existing) return null;
+  const status = cleanString(input.status);
+  if (!COUNTER_ORDER_STATUS.has(status)) throw requestError(`status must be one of: ${Array.from(COUNTER_ORDER_STATUS).join(", ")}`, 400);
+  const now = nowIso();
+  const redeemedAt = status === "redeemed" ? now : (status === "issued" ? null : existing.redeemed_at);
+  const cancelledAt = status === "cancelled" ? now : (status === "issued" ? null : existing.cancelled_at);
+  db.prepare(`
+    UPDATE counter_orders SET
+      status = ?,
+      redeemed_at = ?,
+      redeemed_by_user_id = ?,
+      cancelled_at = ?,
+      cancelled_by_user_id = ?,
+      cancellation_reason = ?,
+      updated_at = ?
+    WHERE counter_order_id = ?
+  `).run(
+    status,
+    redeemedAt,
+    status === "redeemed" ? cleanString(input.actor_id || input.redeemed_by_user_id || "admin").slice(0, 120) : (status === "issued" ? "" : existing.redeemed_by_user_id),
+    cancelledAt,
+    status === "cancelled" ? cleanString(input.actor_id || input.cancelled_by_user_id || "admin").slice(0, 120) : (status === "issued" ? "" : existing.cancelled_by_user_id),
+    status === "cancelled" ? cleanString(input.reason || input.cancellation_reason).slice(0, 1000) : (status === "issued" ? "" : existing.cancellation_reason),
+    now,
+    existing.counter_order_id
+  );
+  recordAuditLog("admin", cleanString(input.actor_id || "admin"), "counter_order.status_update", "counter_order", existing.counter_order_id, existing, getCounterOrder(existing.counter_order_id), { status }, now);
+  return getCounterOrder(existing.counter_order_id);
+}
+
+function getCounterOrder(counterOrderId) {
+  const row = db.prepare("SELECT * FROM counter_orders WHERE counter_order_id = ?").get(cleanId(counterOrderId));
+  return row ? publicCounterOrder(row) : null;
+}
+
+function getCounterOrderByToken(orderToken) {
+  if (!orderToken) return null;
+  const row = db.prepare("SELECT * FROM counter_orders WHERE order_token_hash = ?").get(hashToken(orderToken));
+  return row ? publicCounterOrder(row) : null;
+}
+
+function publicCounterOrder(row) {
+  const order = {
+    counter_order_id: cleanId(row.counter_order_id),
+    order_number: cleanString(row.order_number),
+    verify_code: cleanString(row.verify_code),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    content_id: cleanId(row.content_id),
+    campaign_id: cleanId(row.campaign_id),
+    offer_id: cleanId(row.offer_id),
+    offer_revision_id: cleanId(row.offer_revision_id),
+    qr_link_id: cleanId(row.qr_link_id),
+    qr_scan_id: cleanId(row.qr_scan_id),
+    visit_id: cleanId(row.visit_id),
+    business_date: cleanString(row.business_date),
+    status: cleanString(row.status),
+    currency: normalizeCurrency(row.currency),
+    tax_included: row.tax_included !== 0,
+    tax_amount: asInteger(row.tax_amount),
+    total_amount: asInteger(row.total_amount) || 0,
+    issued_at: cleanString(row.issued_at),
+    expires_at: cleanString(row.expires_at),
+    redeemed_at: cleanString(row.redeemed_at),
+    redeemed_by_user_id: cleanString(row.redeemed_by_user_id),
+    cancelled_at: cleanString(row.cancelled_at),
+    cancelled_by_user_id: cleanString(row.cancelled_by_user_id),
+    cancellation_reason: cleanString(row.cancellation_reason),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+  order.items = db.prepare(`
+    SELECT * FROM counter_order_items
+    WHERE counter_order_id = ?
+    ORDER BY id ASC
+  `).all(order.counter_order_id).map((item) => ({
+    counter_order_item_id: cleanId(item.counter_order_item_id),
+    counter_order_id: cleanId(item.counter_order_id),
+    item_id: cleanId(item.item_id),
+    item_name_snapshot: cleanString(item.item_name_snapshot),
+    quantity: asInteger(item.quantity) || 1,
+    unit_price_snapshot: asInteger(item.unit_price_snapshot) || 0,
+    subtotal_amount: asInteger(item.subtotal_amount) || 0,
+    currency: normalizeCurrency(item.currency),
+    tax_included: item.tax_included !== 0,
+    created_at: cleanString(item.created_at)
+  }));
+  return order;
+}
+
+function resolveCounterOrderOfferRevision(input) {
+  const offerRevisionId = cleanId(input.offer_revision_id || input.offerRevisionId);
+  if (offerRevisionId) {
+    const revision = getOfferRevision(offerRevisionId);
+    if (!revision) throw requestError("offer_revision_id was not found", 404);
+    return revision;
+  }
+  const offerId = cleanId(input.offer_id || input.offerId);
+  if (!offerId) throw requestError("offer_revision_id or offer_id is required", 400);
+  const revision = resolveActiveOfferRevision(offerId);
+  if (!revision) throw requestError("Offer has no active revision", 400);
+  return revision;
+}
+
+function resolveActiveOfferRevision(offerId) {
+  const offer = db.prepare("SELECT * FROM offers WHERE offer_id = ?").get(cleanId(offerId));
+  if (!offer?.current_offer_revision_id) return null;
+  return getOfferRevision(offer.current_offer_revision_id);
+}
+
+function validateCounterOrderIssuance(revision, input, now) {
+  if (revision.status !== "active") throw requestError("Offer revision is not active", 409);
+  if (revision.valid_from && now < revision.valid_from) throw requestError("Offer revision is not valid yet", 409);
+  if (revision.valid_until && now > revision.valid_until) throw requestError("Offer revision has expired", 409);
+  const storeSettings = getStoreSettings(revision.store_id, { withDefaults: true });
+  if (storeSettings?.order_issue_cutoff_time && isAfterLocalTime(now, storeSettings.timezone, storeSettings.order_issue_cutoff_time)) {
+    throw requestError("Store order issue cutoff time has passed", 409);
+  }
+  if (revision.order_issue_cutoff_time && isAfterLocalTime(now, storeSettings.timezone, revision.order_issue_cutoff_time)) {
+    throw requestError("Offer order issue cutoff time has passed", 409);
+  }
+  const activeStatuses = ["issued", "redeemed"];
+  if (revision.max_orders_total !== null && revision.max_orders_total !== undefined) {
+    const count = db.prepare(`
+      SELECT COUNT(*) AS count FROM counter_orders
+      WHERE offer_revision_id = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
+    `).get(revision.offer_revision_id, ...activeStatuses).count;
+    if (count >= revision.max_orders_total) throw requestError("Offer total order limit reached", 409);
+  }
+  if (revision.max_orders_per_day !== null && revision.max_orders_per_day !== undefined) {
+    const businessDate = businessDateFor(now, storeSettings.timezone, storeSettings.business_day_start_time);
+    const count = db.prepare(`
+      SELECT COUNT(*) AS count FROM counter_orders
+      WHERE offer_revision_id = ? AND business_date = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
+    `).get(revision.offer_revision_id, businessDate, ...activeStatuses).count;
+    if (count >= revision.max_orders_per_day) throw requestError("Offer daily order limit reached", 409);
+  }
+  const visitId = cleanId(input.visit_id || input.visitId);
+  if (revision.max_orders_per_visit !== null && revision.max_orders_per_visit !== undefined && !visitId) {
+    throw requestError("visit_id is required when max_orders_per_visit is set", 400);
+  }
+  if (revision.max_orders_per_visit !== null && revision.max_orders_per_visit !== undefined) {
+    const count = db.prepare(`
+      SELECT COUNT(*) AS count FROM counter_orders
+      WHERE offer_revision_id = ? AND visit_id = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
+    `).get(revision.offer_revision_id, visitId, ...activeStatuses).count;
+    if (count >= revision.max_orders_per_visit) throw requestError("Offer visit order limit reached", 409);
+  }
+}
+
+function nextOrderNumber(storeId, businessDate) {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count FROM counter_orders
+    WHERE store_id = ? AND business_date = ?
+  `).get(cleanId(storeId), cleanString(businessDate));
+  return String((asInteger(row?.count) || 0) + 1).padStart(3, "0");
 }
 
 function normalizeDeviceUpdateTarget(input) {
@@ -1954,6 +3482,34 @@ function normalizeContentManifestInput(input, existing = {}) {
     assets: assetsSupplied ? normalizeContentManifestAssets(input.assets ?? input.asset_ids ?? input.assetIds) : [],
     assets_supplied: assetsSupplied
   };
+}
+
+function assertActiveContentPatchAllowed(existing, input) {
+  if (existing.status !== "active") return;
+  const supplied = (field) => Object.prototype.hasOwnProperty.call(input, field);
+  const forbiddenFields = [
+    "playlist",
+    "playlist_json",
+    "assets",
+    "asset_ids",
+    "assetIds"
+  ];
+  const touchedForbidden = forbiddenFields.find((field) => supplied(field));
+  if (touchedForbidden) {
+    throw requestError("ACTIVE_CONTENT_IMMUTABLE: clone active content to a new draft before changing playlist or assets", 409);
+  }
+  if (supplied("playlist_version") && cleanString(input.playlist_version) !== cleanString(existing.playlist_version)) {
+    throw requestError("ACTIVE_CONTENT_IMMUTABLE: playlist_version cannot change on active content", 409);
+  }
+  if (supplied("release_channel") && cleanString(input.release_channel) !== cleanString(existing.release_channel)) {
+    throw requestError("ACTIVE_CONTENT_IMMUTABLE: release_channel cannot change on active content", 409);
+  }
+  if (supplied("status")) {
+    const nextStatus = cleanString(input.status);
+    if (nextStatus !== "active" && nextStatus !== "retired") {
+      throw requestError("ACTIVE_CONTENT_IMMUTABLE: active content can only remain active or be retired", 409);
+    }
+  }
 }
 
 function normalizeContentManifestAssets(value) {
@@ -2488,6 +4044,126 @@ function validateCloudAssetHeader(extension, bytes) {
 function nextCloudAssetId(seed = "") {
   const base = cleanId(seed || "asset").slice(0, 48) || "asset";
   return cleanId(`${base}-${compactTimestamp()}-${crypto.randomBytes(4).toString("hex")}`);
+}
+
+function nextEntityId(prefix, seed = "") {
+  const base = cleanId(seed || prefix).slice(0, 44) || prefix;
+  return cleanId(`${prefix}-${base}-${compactTimestamp()}-${crypto.randomBytes(3).toString("hex")}`);
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function normalizeCurrency(value) {
+  const currency = cleanString(value || DEFAULT_CURRENCY).toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : DEFAULT_CURRENCY;
+}
+
+function normalizeBooleanFlag(value) {
+  if (value === undefined || value === null || value === "") return false;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const text = cleanString(value).toLowerCase();
+  return !["0", "false", "no", "off"].includes(text);
+}
+
+function normalizeAmount(value, fallback = 0) {
+  const amount = asInteger(value);
+  if (amount === null) return fallback;
+  return Math.max(0, amount);
+}
+
+function normalizeNullableAmount(value) {
+  const amount = asInteger(value);
+  return amount === null ? null : Math.max(0, amount);
+}
+
+function normalizeNullableLimit(value) {
+  const limit = asInteger(value);
+  return limit === null ? null : Math.max(0, limit);
+}
+
+function assertOptionalBusinessTime(label, value, required = false) {
+  const time = cleanString(value);
+  if (!time && !required) return;
+  if (!isValidScheduleTime(time)) {
+    throw requestError(`${label} must be HH:mm${required ? "" : " or empty"}`, 400);
+  }
+}
+
+function isValidTimezone(timezone) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function businessDateFor(isoValue, timezone = DEFAULT_TIMEZONE, businessDayStartTime = "00:00") {
+  const parts = localDateTimeParts(isoValue, timezone);
+  const startMinutes = minutesForTime(businessDayStartTime);
+  const localMinutes = parts.hour * 60 + parts.minute;
+  const utcDate = Date.UTC(parts.year, parts.month - 1, parts.day);
+  const businessDate = new Date(localMinutes < startMinutes ? utcDate - 86400000 : utcDate);
+  return businessDate.toISOString().slice(0, 10);
+}
+
+function isAfterLocalTime(isoValue, timezone, cutoffTime) {
+  const cutoffMinutes = minutesForTime(cutoffTime);
+  const parts = localDateTimeParts(isoValue, timezone);
+  return (parts.hour * 60 + parts.minute) > cutoffMinutes;
+}
+
+function minutesForTime(value) {
+  const [hours, minutes] = cleanString(value || "00:00").split(":").map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return 0;
+  return hours * 60 + minutes;
+}
+
+function localDateTimeParts(isoValue, timezone = DEFAULT_TIMEZONE) {
+  const date = new Date(isoValue || nowIso());
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second)
+  };
+}
+
+function recordAuditLog(actorType, actorId, action, entityType, entityId, beforeValue, afterValue, metadata = {}, createdAt = nowIso()) {
+  db.prepare(`
+    INSERT INTO audit_logs (
+      actor_type, actor_id, action, entity_type, entity_id,
+      before_json, after_json, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    cleanString(actorType || "admin"),
+    cleanString(actorId).slice(0, 120),
+    cleanString(action),
+    cleanString(entityType),
+    cleanId(entityId),
+    beforeValue ? JSON.stringify(beforeValue) : "",
+    afterValue ? JSON.stringify(afterValue) : "",
+    JSON.stringify(metadata || {}),
+    createdAt
+  );
 }
 
 function normalizedCloudAssetPath(value) {

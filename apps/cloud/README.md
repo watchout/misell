@@ -179,6 +179,18 @@ scripts/collect-device-evidence.sh --upload --label incident --reason "kiosk did
 
 When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derives `MISELL_LOGS_URL` as `/api/device/logs`.
 
+## Store Commerce and QR Foundation
+
+Cloud is the source of truth for store settings, offer definitions, QR links, counter orders, and device event idempotency. Terminals should treat local state as execution/cache state and backfill events with stable `event_id` values.
+
+Store settings are scoped per store and currently include timezone, business day start time, order issue cutoff time, pickup window, currency, and tax included flag. This allows stores with different closing and cutoff times to share the same Cloud schema.
+
+Offers use immutable revisions. `offers.current_offer_revision_id` points at the active revision, and each `offer_revision` snapshots item names, quantities, prices, tax flags, and order limits. Changing an active offer should create a new revision instead of mutating the published revision.
+
+QR links can resolve to public QR pages or issue counter orders for an active offer revision. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
+
+Device playlogs now require `event_id`. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
+
 ## API
 
 - `GET /api/health`
@@ -193,6 +205,25 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 - `GET /api/admin/content-manifests` with Basic auth
 - `POST /api/admin/content-manifests` with Basic auth
 - `PATCH /api/admin/content-manifests/:content_id` with Basic auth
+- `GET /api/admin/store-settings` with Basic auth
+- `GET /api/admin/stores/:store_id/settings` with Basic auth
+- `PUT /api/admin/stores/:store_id/settings` with Basic auth
+- `PATCH /api/admin/stores/:store_id/settings` with Basic auth
+- `GET /api/admin/items` with Basic auth
+- `POST /api/admin/items` with Basic auth
+- `PATCH /api/admin/items/:item_id` with Basic auth
+- `GET /api/admin/offers` with Basic auth
+- `POST /api/admin/offers` with Basic auth
+- `GET /api/admin/offers/:offer_id` with Basic auth
+- `POST /api/admin/offers/:offer_id/revisions` with Basic auth
+- `GET /api/admin/qr-links` with Basic auth
+- `POST /api/admin/qr-links` with Basic auth
+- `GET /api/admin/counter-orders` with Basic auth
+- `POST /api/admin/counter-orders` with Basic auth
+- `PATCH /api/admin/counter-orders/:counter_order_id/status` with Basic auth
+- `GET /q/:qr_token`
+- `POST /q/:qr_token/orders`
+- `GET /order/:order_token`
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth
