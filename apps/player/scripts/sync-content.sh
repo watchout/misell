@@ -11,6 +11,7 @@ DATA_DIR="${MISELL_DATA_DIR:-${APP_DIR}/data}"
 PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${DATA_DIR}/playlist.json}"
 LOCK_FILE="${MISELL_CONTENT_SYNC_LOCK_FILE:-${HOME}/.local/share/misell-player/content-sync.lock}"
 APPLY=1
+PREVIOUS_PLAYLIST_VERSION=""
 
 usage() {
   cat <<'EOF'
@@ -114,9 +115,45 @@ json_payload() {
   '
 }
 
+playlist_version_for_file() {
+  local playlist_path="$1"
+  if [[ ! -f "${playlist_path}" ]]; then
+    return 0
+  fi
+  PLAYLIST_PATH_FOR_VERSION="${playlist_path}" node -e '
+    const fs = require("fs");
+    try {
+      const playlist = JSON.parse(fs.readFileSync(process.env.PLAYLIST_PATH_FOR_VERSION, "utf8"));
+      process.stdout.write(String(playlist.playlist_version || playlist.version || ""));
+    } catch {
+      process.stdout.write("");
+    }
+  '
+}
+
+record_local_content_state() {
+  local status="$1"
+  local message="${2:-}"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  POLICY_JSON="${policy:-}" node "${APP_DIR}/scripts/local-state.js" record-content \
+    --status "${status}" \
+    --message "${message}" \
+    --content-id "${CONTENT_ID:-}" \
+    --playlist-version "${PLAYLIST_VERSION:-}" \
+    --source "${SOURCE:-}" \
+    --previous-playlist-version "${PREVIOUS_PLAYLIST_VERSION:-}" \
+    --playlist-path "${PLAYLIST_PATH}" >/dev/null || {
+      echo "Could not record local content state: ${status}" >&2
+      return 0
+    }
+}
+
 post_result() {
   local status="$1"
   local message="${2:-}"
+  record_local_content_state "${status}" "${message}"
   if [[ -z "${CONTENT_RESULT_URL}" || "${APPLY}" != "1" ]]; then
     return 0
   fi
@@ -215,14 +252,15 @@ if [[ "${APPLY}" != "1" ]]; then
   exit 0
 fi
 
-post_result "updating" "content sync started"
-"${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
-
 previous_playlist="$(mktemp)"
 if [[ -f "${PLAYLIST_PATH}" ]]; then
+  PREVIOUS_PLAYLIST_VERSION="$(playlist_version_for_file "${PLAYLIST_PATH}")"
   cp "${PLAYLIST_PATH}" "${previous_playlist}"
 fi
 temp_playlist="$(mktemp)"
+
+post_result "updating" "content sync started"
+"${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
 
 if ! write_playlist_from_policy "${temp_playlist}"; then
   post_result "failed" "could not write playlist from content policy"

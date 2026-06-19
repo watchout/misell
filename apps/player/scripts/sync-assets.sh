@@ -193,6 +193,7 @@ post_asset_result() {
   local local_path="${5:-}"
   local sha256="${6:-}"
   local size="${7:-0}"
+  record_local_asset_state "${status}" "${message}" "${asset_id}" "${target_path}" "${local_path}" "${sha256}" "${size}"
   if [[ -z "${ASSET_RESULT_URL}" || "${APPLY}" != "1" ]]; then
     return 0
   fi
@@ -205,6 +206,31 @@ post_asset_result() {
     --data-binary "${payload}" \
     "${ASSET_RESULT_URL}" >/dev/null || {
       echo "Could not report asset ${status} to cloud: ${asset_id}" >&2
+      return 0
+    }
+}
+
+record_local_asset_state() {
+  local status="$1"
+  local message="${2:-}"
+  local asset_id="$3"
+  local target_path="$4"
+  local local_path="${5:-}"
+  local sha256="${6:-}"
+  local size="${7:-0}"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  node "${APP_DIR}/scripts/local-state.js" record-asset \
+    --status "${status}" \
+    --message "${message}" \
+    --content-id "${CONTENT_ID:-}" \
+    --asset-id "${asset_id}" \
+    --target-path "${target_path}" \
+    --local-path "${local_path}" \
+    --sha256 "${sha256}" \
+    --size "${size}" >/dev/null || {
+      echo "Could not record local asset state: ${asset_id}" >&2
       return 0
     }
 }
