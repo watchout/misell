@@ -2313,7 +2313,13 @@ app.get("/api/events", (req, res) => {
 app.post("/api/playback-log", async (req, res, next) => {
   try {
     const body = req.body || {};
+    const timestamp = cleanString(body.timestamp || body.occurred_at || body.occurredAt) || new Date().toISOString();
+    const playbackId = cleanString(body.playback_id || body.playbackId) || nanoid(12);
     const entry = {
+      event_id: cleanString(body.event_id || body.eventId) || `play-${playbackId}`,
+      event_type: cleanString(body.event_type || body.eventType || "playback"),
+      timestamp,
+      playback_id: playbackId,
       playlist_version: cleanString(body.playlist_version),
       playlist_item_id: cleanString(body.playlist_item_id || body.itemId),
       itemId: cleanString(body.itemId),
@@ -2337,7 +2343,13 @@ app.post("/api/playback-log", async (req, res, next) => {
 app.post("/api/log/play", async (req, res, next) => {
   try {
     const body = req.body || {};
+    const timestamp = cleanString(body.timestamp || body.occurred_at || body.occurredAt) || new Date().toISOString();
+    const playbackId = cleanString(body.playback_id || body.playbackId) || nanoid(12);
     const entry = {
+      event_id: cleanString(body.event_id || body.eventId) || `play-${playbackId}`,
+      event_type: cleanString(body.event_type || body.eventType || "playback"),
+      timestamp,
+      playback_id: playbackId,
       playlist_version: cleanString(body.playlist_version),
       playlist_item_id: cleanString(body.playlist_item_id || body.item_id || body.itemId),
       itemId: cleanString(body.itemId || body.item_id),
@@ -2360,7 +2372,7 @@ app.post("/api/log/play", async (req, res, next) => {
 
 function rememberPlayback(entry) {
   lastPlayback = {
-    timestamp: new Date().toISOString(),
+    timestamp: cleanString(entry.timestamp) || new Date().toISOString(),
     item_id: cleanString(entry.item_id || entry.playlist_item_id || entry.itemId),
     layout: cleanString(entry.layout),
     result: cleanString(entry.result)
