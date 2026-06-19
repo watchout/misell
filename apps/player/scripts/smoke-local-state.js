@@ -55,6 +55,42 @@ async function main() {
     const afterLateFailure = state.summary();
     if (afterLateFailure.outbound_events.failed) throw new Error(`sent event reverted to failed: ${JSON.stringify(afterLateFailure)}`);
 
+    const claimGuardEndpoint = "/api/device/playlog-claim-smoke";
+    state.enqueueOutboundEvent({
+      event_id: "play-claim-guard",
+      endpoint: claimGuardEndpoint,
+      payload: { event_id: "play-claim-guard" }
+    });
+    const oldClaim = state.claimPendingOutboundEvents({
+      endpoint: claimGuardEndpoint,
+      limit: 1,
+      claim_token: "old-claim",
+      now: "2026-06-19T10:00:00.000Z"
+    })[0];
+    if (oldClaim?.claim_token !== "old-claim") throw new Error(`old claim failed: ${JSON.stringify(oldClaim)}`);
+    const newClaim = state.claimPendingOutboundEvents({
+      endpoint: claimGuardEndpoint,
+      limit: 1,
+      claim_token: "new-claim",
+      now: "2026-06-19T10:20:00.000Z",
+      stale_claim_seconds: 30
+    })[0];
+    if (newClaim?.claim_token !== "new-claim") throw new Error(`new claim failed: ${JSON.stringify(newClaim)}`);
+    state.markOutboundFailed("play-claim-guard", "late old claim failure", {
+      claim_token: "old-claim",
+      now: "2026-06-19T10:20:01.000Z",
+      response_status: 500
+    });
+    const afterOldClaimFailure = state.summary();
+    if (afterOldClaimFailure.outbound_events.failed) {
+      throw new Error(`old claim failure reverted newer claim: ${JSON.stringify(afterOldClaimFailure)}`);
+    }
+    state.markOutboundSent("play-claim-guard", {
+      claim_token: "new-claim",
+      now: "2026-06-19T10:20:02.000Z",
+      response_status: 201
+    });
+
     state.enqueueOutboundEvent({
       event_id: "play-purge-old",
       payload: { event_id: "play-purge-old" }
@@ -124,7 +160,7 @@ async function main() {
     const verify = openLocalState(dbPath);
     const summary = verify.summary();
     verify.close();
-    if (summary.outbound_events.sent !== 2) throw new Error(`sent count mismatch: ${JSON.stringify(summary)}`);
+    if (summary.outbound_events.sent !== 3) throw new Error(`sent count mismatch: ${JSON.stringify(summary)}`);
     if (summary.latest_content?.content_id !== "content-smoke") throw new Error("applied content was not recorded");
     if (summary.assets.ready !== 1) throw new Error("asset state was not recorded");
 
@@ -174,6 +210,7 @@ async function main() {
       playlog_sync: true,
       timeout_failure: true,
       sent_does_not_revert_to_failed: true,
+      claim_token_guard: true,
       unsafe_event_id_rejected: true,
       sent_retention_purge: true,
       player_fail_open: failOpen,

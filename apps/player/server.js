@@ -401,6 +401,7 @@ function safeLocalStateSummary() {
   }
   if (!localState) return null;
   try {
+    localStateError = "";
     return {
       ok: true,
       ...localState.summary({ include_db_path: false })

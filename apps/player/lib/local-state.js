@@ -157,6 +157,7 @@ class LocalState {
           last_error = '',
           updated_at = ?
         WHERE event_id = ?
+          AND (? = '' OR claim_token = ?)
       `),
       markFailed: db.prepare(`
         UPDATE outbound_events SET
@@ -169,7 +170,9 @@ class LocalState {
           response_status = ?,
           last_error = ?,
           updated_at = ?
-        WHERE event_id = ? AND status != 'sent'
+        WHERE event_id = ?
+          AND status != 'sent'
+          AND (? = '' OR claim_token = ?)
       `),
       purgeSent: db.prepare(`
         DELETE FROM outbound_events
@@ -257,11 +260,21 @@ class LocalState {
 
   markOutboundSent(eventId, options = {}) {
     const now = cleanString(options.now) || nowIso();
-    this.statements.markSent.run(now, now, asInteger(options.response_status ?? options.responseStatus), now, validateEventId(eventId));
+    const claimToken = cleanString(options.claim_token || options.claimToken);
+    this.statements.markSent.run(
+      now,
+      now,
+      asInteger(options.response_status ?? options.responseStatus),
+      now,
+      validateEventId(eventId),
+      claimToken,
+      claimToken
+    );
   }
 
   markOutboundFailed(eventId, error, options = {}) {
     const now = cleanString(options.now) || nowIso();
+    const claimToken = cleanString(options.claim_token || options.claimToken);
     const existing = this.statements.getOutbound.get(validateEventId(eventId));
     const attemptCount = Number(existing?.attempt_count || 0) + 1;
     const retrySeconds = Math.min(3600, 60 * (2 ** Math.min(attemptCount - 1, 5)));
@@ -273,7 +286,9 @@ class LocalState {
       asInteger(options.response_status ?? options.responseStatus),
       cleanString(error).slice(0, 1000),
       now,
-      validateEventId(eventId)
+      validateEventId(eventId),
+      claimToken,
+      claimToken
     );
   }
 

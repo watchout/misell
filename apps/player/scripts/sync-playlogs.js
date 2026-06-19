@@ -48,6 +48,7 @@ async function main() {
     let failed = 0;
     for (const event of events) {
       let timeout = null;
+      const claimOptions = { claim_token: event.claim_token };
       try {
         const controller = new AbortController();
         timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -63,17 +64,23 @@ async function main() {
         const text = await response.text();
         if (!response.ok) {
           failed += 1;
-          state.markOutboundFailed(event.event_id, `HTTP ${response.status}: ${text.slice(0, 500)}`, { response_status: response.status });
+          state.markOutboundFailed(event.event_id, `HTTP ${response.status}: ${text.slice(0, 500)}`, {
+            ...claimOptions,
+            response_status: response.status
+          });
           continue;
         }
         sent += 1;
-        state.markOutboundSent(event.event_id, { response_status: response.status });
+        state.markOutboundSent(event.event_id, {
+          ...claimOptions,
+          response_status: response.status
+        });
       } catch (error) {
         failed += 1;
         const message = error.name === "AbortError"
           ? `playlog sync timed out after ${timeoutMs}ms`
           : (error.message || "playlog sync failed");
-        state.markOutboundFailed(event.event_id, message);
+        state.markOutboundFailed(event.event_id, message, claimOptions);
       } finally {
         if (timeout) clearTimeout(timeout);
       }
