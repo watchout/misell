@@ -39,8 +39,15 @@ else
   exit 1
 fi
 
-curl -fsS --max-time 20 \
+response="$(curl -fsS --max-time 20 \
   -X POST \
   "${headers[@]}" \
   --data-binary "${payload}" \
-  "${HEARTBEAT_URL}"
+  "${HEARTBEAT_URL}")"
+echo "${response}"
+
+if [[ "${MISELL_SKIP_PLAYLOG_SYNC:-0}" != "1" && -f "${APP_DIR}/scripts/sync-playlogs.js" ]]; then
+  node "${APP_DIR}/scripts/sync-playlogs.js" --limit "${MISELL_PLAYLOG_SYNC_LIMIT:-100}" >/dev/null || {
+    echo "Could not sync queued playlogs" >&2
+  }
+fi

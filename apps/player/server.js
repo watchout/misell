@@ -15,6 +15,8 @@ const multer = require("multer");
 const { nanoid } = require("nanoid");
 const QRCode = require("qrcode");
 
+const { PLAYLOG_ENDPOINT, openLocalState } = require("./lib/local-state");
+
 const app = express();
 const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -30,6 +32,7 @@ const CONTENT_BACKUP_DIR = runtimePath("MISELL_CONTENT_BACKUP_DIR", path.join(DA
 const PLAYLIST_PATH = runtimePath("MISELL_PLAYLIST_PATH", path.join(DATA_DIR, "playlist.json"));
 const PLAYLIST_SCHEMA_PATH = runtimePath("MISELL_PLAYLIST_SCHEMA_PATH", path.join(ROOT_DIR, "data", "playlist.schema.json"));
 const DEVICE_CONFIG_PATH = runtimePath("MISELL_DEVICE_CONFIG_PATH", path.join(DATA_DIR, "config.json"));
+const LOCAL_STATE_DB_PATH = runtimePath("MISELL_LOCAL_STATE_DB_PATH", path.join(DATA_DIR, "local_state.sqlite"));
 const PLAYLOG_KEY = "playlog";
 const ADMIN_LOG_KEY = "admin";
 const ERROR_LOG_KEY = "error";
@@ -80,6 +83,7 @@ let deviceIdentity = null;
 let deviceSecrets = null;
 let validatePlaylistDocument = null;
 let lastPlayback = null;
+let localState = null;
 
 const defaultPlaylist = {
   version: 1,
@@ -117,7 +121,7 @@ const defaultPlaylist = {
   ]
 };
 
-async function ensureRuntimeFiles() {
+async function ensureRuntimeFiles(options = {}) {
   await Promise.all([
     fsp.mkdir(DATA_DIR, { recursive: true }),
     fsp.mkdir(path.dirname(PLAYLIST_PATH), { recursive: true }),
@@ -147,6 +151,9 @@ async function ensureRuntimeFiles() {
   deviceIdentity = await loadDeviceIdentity(deviceConfig);
   deviceSecrets = loadDeviceSecrets(deviceConfig);
   validatePlaylistDocument = await loadPlaylistValidator();
+  if (options.openLocalState !== false) {
+    localState = openLocalState(LOCAL_STATE_DB_PATH);
+  }
   await Promise.all([
     ensureFile(logFilePath(PLAYLOG_KEY)),
     ensureFile(logFilePath(ADMIN_LOG_KEY)),
@@ -371,6 +378,7 @@ async function buildStatusPayload() {
     network_status: "unknown",
     display_status: process.env.DISPLAY ? "display-env-present" : "unknown",
     device_token_configured: Boolean(deviceSecrets?.device_token_configured),
+    local_state: localState?.summary() || null,
     last_error: lastError
   };
 }
@@ -2332,8 +2340,7 @@ app.post("/api/playback-log", async (req, res, next) => {
       duration: clampInt(body.duration, 0, 0, 300),
       result: cleanString(body.result || "started")
     };
-    rememberPlayback(entry);
-    await appendJsonl(PLAYLOG_KEY, entry);
+    await persistPlaybackLog(entry);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -2362,8 +2369,7 @@ app.post("/api/log/play", async (req, res, next) => {
       duration: clampInt(body.duration, 0, 0, 300),
       result: cleanString(body.result || "started")
     };
-    rememberPlayback(entry);
-    await appendJsonl(PLAYLOG_KEY, entry);
+    await persistPlaybackLog(entry);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -2377,6 +2383,37 @@ function rememberPlayback(entry) {
     layout: cleanString(entry.layout),
     result: cleanString(entry.result)
   };
+}
+
+async function persistPlaybackLog(entry) {
+  rememberPlayback(entry);
+  await appendJsonl(PLAYLOG_KEY, entry);
+  try {
+    enqueuePlaybackLog(entry);
+  } catch (error) {
+    await appendJsonl(ERROR_LOG_KEY, {
+      action: "local_state.enqueue_playlog_failed",
+      event_id: cleanString(entry.event_id),
+      message: error.message || "local state enqueue failed"
+    });
+  }
+}
+
+function enqueuePlaybackLog(entry) {
+  if (!localState) return;
+  const occurredAt = cleanString(entry.timestamp) || new Date().toISOString();
+  const payload = {
+    ...deviceIdentity,
+    ...entry,
+    occurred_at: occurredAt,
+    timestamp: occurredAt
+  };
+  localState.enqueueOutboundEvent({
+    event_id: entry.event_id,
+    event_type: "playlog",
+    endpoint: PLAYLOG_ENDPOINT,
+    payload
+  });
 }
 
 app.use((req, res) => {
@@ -2399,7 +2436,7 @@ app.use((error, req, res, next) => {
 });
 
 async function runValidatePlaylistCli() {
-  await ensureRuntimeFiles();
+  await ensureRuntimeFiles({ openLocalState: false });
   const playlist = await readPlaylist({ validateSourceExists: true });
   console.log(JSON.stringify(playlistResponse(playlist), null, 2));
 }

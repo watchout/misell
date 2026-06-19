@@ -7,9 +7,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check public/player.js && node --check public/admin.js && node --check public/demo/industry-demo.js",
+    "check": "node --check server.js && node --check lib/local-state.js && node --check scripts/local-state.js && node --check scripts/sync-playlogs.js && node --check scripts/smoke-local-state.js && node --check public/player.js && node --check public/admin.js && node --check public/demo/industry-demo.js",
     "validate:playlist": "node server.js --validate-playlist",
+    "local-state:summary": "node scripts/local-state.js summary",
     "heartbeat": "scripts/emit-heartbeat.sh",
+    "playlogs:sync": "node scripts/sync-playlogs.js",
+    "smoke:local-state": "node scripts/smoke-local-state.js",
     "evidence": "scripts/collect-device-evidence.sh",
     "evidence:upload": "scripts/collect-device-evidence.sh --upload",
     "backup:content": "scripts/backup-content.sh",
@@ -19,6 +22,7 @@
   },
   "dependencies": {
     "ajv": "^8.20.0",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "express-basic-auth": "^1.2.1",
