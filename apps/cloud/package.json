@@ -9,6 +9,7 @@
     "dev": "NODE_ENV=development node server.js",
     "check": "node --check server.js && node --check public/admin.js",
     "smoke:mvp-foundation": "node scripts/smoke-mvp-foundation.mjs",
+    "smoke:mvp-audit-fixes": "node scripts/smoke-mvp-audit-fixes.mjs",
     "backup": "scripts/backup-sqlite.sh"
   },
   "dependencies": {

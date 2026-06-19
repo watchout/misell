@@ -333,12 +333,15 @@ app.get("/q/:qr_token", (req, res, next) => {
       return;
     }
     assertQrLinkUsable(qrLink);
+    const offerRevision = resolveQrLinkOfferRevision(qrLink);
+    if (qrLink.destination_type === "counter_order_offer" && !offerRevision) {
+      throw requestError("QR link has no active offer revision", 409);
+    }
     const qrScan = recordQrScan(qrLink, req);
     if (qrLink.destination_type === "external_url") {
       res.redirect(qrLink.destination_url);
       return;
     }
-    const offerRevision = qrLink.offer_revision_id ? getOfferRevision(qrLink.offer_revision_id) : null;
     res.json({
       ok: true,
       qr_link: qrLink,
@@ -362,18 +365,22 @@ app.post("/q/:qr_token/orders", (req, res, next) => {
       throw requestError("QR link does not issue counter orders", 400);
     }
     const qrScan = resolveQrScanForOrder(qrLink, req);
+    const offerRevision = resolveQrLinkOfferRevision(qrLink);
+    if (!offerRevision) {
+      throw requestError("QR link has no active offer revision", 409);
+    }
     const result = createCounterOrder({
       ...(req.body || {}),
       qr_link_id: qrLink.qr_link_id,
       qr_scan_id: qrScan.qr_scan_id,
       visit_id: cleanId(req.body?.visit_id || req.body?.visitId || qrScan.visit_id),
-      offer_id: qrLink.offer_id,
-      offer_revision_id: qrLink.offer_revision_id,
-      tenant_id: qrLink.tenant_id,
-      store_id: qrLink.store_id,
+      offer_id: offerRevision.offer_id,
+      offer_revision_id: qrLink.offer_revision_id || undefined,
+      tenant_id: qrLink.tenant_id || offerRevision.tenant_id,
+      store_id: qrLink.store_id || offerRevision.store_id,
       screen_group_id: qrLink.screen_group_id,
       content_id: qrLink.content_id,
-      campaign_id: qrLink.campaign_id
+      campaign_id: qrLink.campaign_id || offerRevision.campaign_id
     });
     res.status(201).json({ ok: true, qr_scan: qrScan, ...result });
   } catch (error) {
@@ -1306,10 +1313,10 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
     const payload = req.body || {};
     assertPayloadDeviceMatches(req.device, payload);
     const now = nowIso();
-    const eventId = cleanId(payload.event_id || payload.eventId);
-    if (!eventId) {
-      throw requestError("event_id is required for playlog idempotency", 400);
-    }
+    const suppliedOccurredAt = cleanString(payload.occurred_at || payload.timestamp || payload.played_at);
+    const occurredAt = suppliedOccurredAt || now;
+    const resolvedEvent = resolvePlaylogEventId(payload, req.device, suppliedOccurredAt);
+    const eventId = resolvedEvent.event_id;
     const existing = db.prepare(`
       SELECT id, received_at FROM playlogs
       WHERE tenant_id = ? AND device_id = ? AND event_id = ?
@@ -1319,11 +1326,11 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
         ok: true,
         duplicate: true,
         event_id: eventId,
+        event_id_generated: resolvedEvent.generated,
         received_at: existing.received_at
       });
       return;
     }
-    const occurredAt = cleanString(payload.occurred_at || payload.timestamp || now);
     db.prepare(`
       INSERT INTO playlogs (
         device_id, tenant_id, store_id, screen_group_id, received_at, played_at,
@@ -1351,7 +1358,7 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
       cleanId(payload.playback_id || payload.playbackId),
       JSON.stringify(payload)
     );
-    res.status(201).json({ ok: true, event_id: eventId, received_at: now });
+    res.status(201).json({ ok: true, event_id: eventId, event_id_generated: resolvedEvent.generated, received_at: now });
   } catch (error) {
     next(error);
   }
@@ -2584,6 +2591,27 @@ function publicItem(row) {
   };
 }
 
+function resolvePlaylogEventId(payload, device, occurredAt) {
+  const supplied = cleanId(payload.event_id || payload.eventId);
+  if (supplied) return { event_id: supplied, generated: false };
+
+  const identity = {
+    tenant_id: cleanId(device.tenant_id),
+    device_id: cleanId(device.device_id),
+    occurred_at: cleanString(occurredAt),
+    playlist_version: cleanString(payload.playlist_version),
+    playlist_item_id: cleanString(payload.playlist_item_id || payload.item_id || payload.itemId),
+    campaign_id: cleanString(payload.campaign_id),
+    asset_id: cleanString(payload.asset_id),
+    layout: cleanString(payload.layout),
+    duration: asInteger(payload.duration),
+    result: cleanString(payload.result || "started"),
+    playback_id: cleanId(payload.playback_id || payload.playbackId)
+  };
+  const digest = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 32);
+  return { event_id: `legacy-${digest}`, generated: true };
+}
+
 function listOffers(limit = 100) {
   const boundedLimit = Math.max(1, Math.min(asInteger(limit) || 100, 200));
   return db.prepare(`
@@ -2967,8 +2995,10 @@ function normalizeQrLinkInput(input) {
   const destinationType = cleanString(input.destination_type || input.destinationType || "external_url");
   if (!QR_DESTINATION_TYPES.has(destinationType)) throw requestError(`destination_type must be one of: ${Array.from(QR_DESTINATION_TYPES).join(", ")}`, 400);
   const offerId = cleanId(input.offer_id || input.offerId);
-  const offerRevisionId = cleanId(input.offer_revision_id || input.offerRevisionId);
-  const offerRevision = offerRevisionId ? getOfferRevision(offerRevisionId) : (offerId ? resolveActiveOfferRevision(offerId) : null);
+  const requestedOfferRevisionId = cleanId(input.offer_revision_id || input.offerRevisionId);
+  const pinOfferRevision = normalizeBooleanFlag(input.pin_offer_revision ?? input.pinOfferRevision ?? Boolean(requestedOfferRevisionId));
+  const offerRevision = requestedOfferRevisionId ? getOfferRevision(requestedOfferRevisionId) : (offerId ? resolveActiveOfferRevision(offerId) : null);
+  if (requestedOfferRevisionId && !offerRevision) throw requestError("offer_revision_id was not found", 404);
   if (destinationType === "counter_order_offer" && !offerRevision) {
     throw requestError("counter_order_offer QR links require an active offer_revision", 400);
   }
@@ -2986,7 +3016,7 @@ function normalizeQrLinkInput(input) {
     content_id: cleanId(input.content_id || input.contentId),
     campaign_id: campaignId,
     offer_id: cleanId(offerId || offerRevision?.offer_id),
-    offer_revision_id: cleanId(offerRevisionId || offerRevision?.offer_revision_id),
+    offer_revision_id: pinOfferRevision ? cleanId(requestedOfferRevisionId || offerRevision?.offer_revision_id) : "",
     label: cleanString(input.label || offerRevision?.title || qrLinkId).slice(0, 160),
     destination_type: destinationType,
     destination_url: destinationUrl,
@@ -3026,6 +3056,7 @@ function recordQrScan(qrLink, req) {
   const referrer = cleanString(req.get("referer") || req.get("referrer")).slice(0, 500);
   const ipHash = hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`);
   const visitId = cleanId(req.query.visit_id || req.body?.visit_id || req.body?.visitId);
+  const offerRevision = resolveQrLinkOfferRevision(qrLink);
   db.prepare(`
     INSERT INTO qr_scans (
       qr_scan_id, qr_link_id, campaign_id, advertiser_id, store_id, device_id,
@@ -3036,32 +3067,38 @@ function recordQrScan(qrLink, req) {
   `).run(
     qrScanId,
     qrLink.qr_link_id,
-    qrLink.campaign_id || null,
+    cleanId(qrLink.campaign_id || offerRevision?.campaign_id) || null,
     null,
-    qrLink.store_id,
+    qrLink.store_id || offerRevision?.store_id,
     null,
     now,
     userAgent,
     ipHash,
     referrer,
     JSON.stringify({ query: req.query || {}, body: req.body || {} }),
-    qrLink.tenant_id,
+    qrLink.tenant_id || offerRevision?.tenant_id,
     qrLink.screen_group_id,
     qrLink.content_id,
-    qrLink.offer_id || null,
-    qrLink.offer_revision_id || null,
+    cleanId(qrLink.offer_id || offerRevision?.offer_id) || null,
+    cleanId(qrLink.offer_revision_id || offerRevision?.offer_revision_id) || null,
     visitId,
     cleanString(req.query.near_store_status || "unknown")
   );
   return {
     qr_scan_id: qrScanId,
     qr_link_id: qrLink.qr_link_id,
-    campaign_id: qrLink.campaign_id,
-    store_id: qrLink.store_id,
+    campaign_id: cleanId(qrLink.campaign_id || offerRevision?.campaign_id),
+    store_id: cleanId(qrLink.store_id || offerRevision?.store_id),
     scanned_at: now,
     visit_id: visitId,
     near_store_status: cleanString(req.query.near_store_status || "unknown")
   };
+}
+
+function resolveQrLinkOfferRevision(qrLink) {
+  if (qrLink.offer_revision_id) return getOfferRevision(qrLink.offer_revision_id);
+  if (qrLink.offer_id) return resolveActiveOfferRevision(qrLink.offer_id);
+  return null;
 }
 
 function resolveQrScanForOrder(qrLink, req) {
@@ -3098,6 +3135,7 @@ function publicQrLink(row) {
     campaign_id: cleanId(row.campaign_id),
     offer_id: cleanId(row.offer_id),
     offer_revision_id: cleanId(row.offer_revision_id),
+    revision_binding: row.offer_revision_id ? "pinned" : (row.offer_id ? "current_offer_revision" : ""),
     label: cleanString(row.label),
     destination_type: cleanString(row.destination_type || "external_url"),
     destination_url: cleanString(row.destination_url),
@@ -3132,7 +3170,7 @@ function listCounterOrders(query = {}) {
 }
 
 function createCounterOrder(input) {
-  const now = nowIso();
+  const now = requestNowIso(input);
   const revision = resolveCounterOrderOfferRevision(input);
   validateCounterOrderIssuance(revision, input, now);
   const storeSettings = getStoreSettings(revision.store_id, { withDefaults: true });
@@ -3332,10 +3370,10 @@ function validateCounterOrderIssuance(revision, input, now) {
   if (revision.valid_from && now < revision.valid_from) throw requestError("Offer revision is not valid yet", 409);
   if (revision.valid_until && now > revision.valid_until) throw requestError("Offer revision has expired", 409);
   const storeSettings = getStoreSettings(revision.store_id, { withDefaults: true });
-  if (storeSettings?.order_issue_cutoff_time && isAfterLocalTime(now, storeSettings.timezone, storeSettings.order_issue_cutoff_time)) {
+  if (storeSettings?.order_issue_cutoff_time && isAfterBusinessCutoff(now, storeSettings.timezone, storeSettings.business_day_start_time, storeSettings.order_issue_cutoff_time)) {
     throw requestError("Store order issue cutoff time has passed", 409);
   }
-  if (revision.order_issue_cutoff_time && isAfterLocalTime(now, storeSettings.timezone, revision.order_issue_cutoff_time)) {
+  if (revision.order_issue_cutoff_time && isAfterBusinessCutoff(now, storeSettings.timezone, storeSettings.business_day_start_time, revision.order_issue_cutoff_time)) {
     throw requestError("Offer order issue cutoff time has passed", 409);
   }
   const activeStatuses = ["issued", "redeemed"];
@@ -4110,10 +4148,14 @@ function businessDateFor(isoValue, timezone = DEFAULT_TIMEZONE, businessDayStart
   return businessDate.toISOString().slice(0, 10);
 }
 
-function isAfterLocalTime(isoValue, timezone, cutoffTime) {
-  const cutoffMinutes = minutesForTime(cutoffTime);
+function isAfterBusinessCutoff(isoValue, timezone, businessDayStartTime, cutoffTime) {
+  const startMinutes = minutesForTime(businessDayStartTime);
+  let cutoffMinutes = minutesForTime(cutoffTime);
+  if (cutoffMinutes < startMinutes) cutoffMinutes += 1440;
   const parts = localDateTimeParts(isoValue, timezone);
-  return (parts.hour * 60 + parts.minute) > cutoffMinutes;
+  let localMinutes = parts.hour * 60 + parts.minute;
+  if (localMinutes < startMinutes) localMinutes += 1440;
+  return localMinutes > cutoffMinutes;
 }
 
 function minutesForTime(value) {
@@ -5071,6 +5113,15 @@ function normalizedLimit(value, fallback, min, max) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function requestNowIso(input = {}) {
+  const candidate = cleanString(input.test_now || input.testNow || process.env.MISELL_CLOUD_TEST_NOW);
+  if (process.env.NODE_ENV === "test" && candidate) {
+    const date = new Date(candidate);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  return nowIso();
 }
 
 function compactTimestamp(date = new Date()) {

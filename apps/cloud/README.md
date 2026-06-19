@@ -183,13 +183,13 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 
 Cloud is the source of truth for store settings, offer definitions, QR links, counter orders, and device event idempotency. Terminals should treat local state as execution/cache state and backfill events with stable `event_id` values.
 
-Store settings are scoped per store and currently include timezone, business day start time, order issue cutoff time, pickup window, currency, and tax included flag. This allows stores with different closing and cutoff times to share the same Cloud schema.
+Store settings are scoped per store and currently include timezone, business day start time, order issue cutoff time, pickup window, currency, and tax included flag. This allows stores with different closing and cutoff times to share the same Cloud schema. Cutoff checks use the store's business-day timeline from `business_day_start_time`, so an after-midnight cutoff such as `02:00` applies to the previous business day.
 
 Offers use immutable revisions. `offers.current_offer_revision_id` points at the active revision, and each `offer_revision` snapshots item names, quantities, prices, tax flags, and order limits. Changing an active offer should create a new revision instead of mutating the published revision.
 
-QR links can resolve to public QR pages or issue counter orders for an active offer revision. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
+QR links can resolve to public QR pages or issue counter orders. Counter-order QR links track `offers.current_offer_revision_id` by default, so publishing a new active revision keeps existing displayed QR codes usable. Supplying `offer_revision_id` or `pin_offer_revision` creates an explicitly pinned QR link. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
 
-Device playlogs now require `event_id`. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
+Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
 
 ## API
 
