@@ -93,6 +93,10 @@ Create a manual SQLite backup:
 scripts/backup-sqlite.sh
 ```
 
+The backup script uses SQLite `.backup`, runs `PRAGMA integrity_check` against
+the copied database by default, compresses the result when `gzip` is available,
+and writes a sidecar `.manifest.json` with size and SHA-256 metadata.
+
 Install a macOS LaunchAgent for daily backups:
 
 ```bash
@@ -101,6 +105,28 @@ scripts/setup-macos-backup-launchagent.sh --apply
 ```
 
 Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days.
+
+For product operation, keep a second copy outside the VPS or Mac mini. The
+script can upload each backup and manifest to S3-compatible storage when the
+AWS CLI is installed and these values are set in `~/.config/misell-cloud/env`:
+
+```bash
+MISELL_CLOUD_BACKUP_S3_URI=s3://example-bucket/misell-cloud
+MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL=https://s3.example.com
+MISELL_CLOUD_BACKUP_S3_SSE=AES256
+AWS_ACCESS_KEY_ID=replace-with-access-key
+AWS_SECRET_ACCESS_KEY=replace-with-secret-key
+AWS_DEFAULT_REGION=ap-northeast-1
+```
+
+`MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL` is optional for AWS S3 and required for
+many S3-compatible providers. Use a bucket policy or access key that can write
+only to the backup prefix. Confirm restore readiness periodically by downloading
+a backup, decompressing it if needed, and running:
+
+```bash
+sqlite3 restored-misell-cloud.sqlite 'PRAGMA integrity_check;'
+```
 
 ## Register a Device
 
