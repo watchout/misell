@@ -9,6 +9,7 @@ CONTENT_RESULT_URL="${MISELL_CONTENT_RESULT_URL:-}"
 DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
 DATA_DIR="${MISELL_DATA_DIR:-${APP_DIR}/data}"
 PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${DATA_DIR}/playlist.json}"
+ASSETS_DIR="${MISELL_ASSETS_DIR:-${APP_DIR}/assets}"
 LOCK_FILE="${MISELL_CONTENT_SYNC_LOCK_FILE:-${HOME}/.local/share/misell-player/content-sync.lock}"
 APPLY=1
 PREVIOUS_PLAYLIST_VERSION=""
@@ -52,6 +53,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
   DATA_DIR="${MISELL_DATA_DIR:-${DATA_DIR}}"
   PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${PLAYLIST_PATH}}"
+  ASSETS_DIR="${MISELL_ASSETS_DIR:-${ASSETS_DIR}}"
 fi
 
 derive_content_urls() {
@@ -183,7 +185,24 @@ sync_assets_from_policy() {
   if [[ "${APPLY}" != "1" ]]; then
     args+=(--dry-run)
   fi
-  "${APP_DIR}/scripts/sync-assets.sh" "${args[@]}"
+  if [[ "${#args[@]}" -gt 0 ]]; then
+    "${APP_DIR}/scripts/sync-assets.sh" "${args[@]}"
+  else
+    "${APP_DIR}/scripts/sync-assets.sh"
+  fi
+}
+
+verify_assets_from_policy() {
+  if [[ "${MISELL_VERIFY_CONTENT_ASSETS:-1}" == "0" ]]; then
+    echo "Content asset verification skipped by MISELL_VERIFY_CONTENT_ASSETS=0."
+    return 0
+  fi
+  if [[ ! -f "${APP_DIR}/scripts/verify-content-assets.js" ]]; then
+    echo "verify-content-assets.js is not installed." >&2
+    return 1
+  fi
+  POLICY_JSON="${policy}" ASSETS_DIR="${ASSETS_DIR}" \
+    node "${APP_DIR}/scripts/verify-content-assets.js"
 }
 
 derive_content_urls
@@ -239,6 +258,14 @@ if [[ "${SOURCE}" == "content_manifest" ]]; then
   if ! sync_assets_from_policy; then
     post_result "failed" "asset sync failed before content apply"
     exit 1
+  fi
+  if [[ "${APPLY}" == "1" || "${MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN:-0}" == "1" ]]; then
+    if ! verify_assets_from_policy; then
+      post_result "failed" "asset verification failed before content apply"
+      exit 1
+    fi
+  else
+    echo "Dry-run: asset verification will run after assets are downloaded during apply."
   fi
 fi
 

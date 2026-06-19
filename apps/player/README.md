@@ -334,7 +334,17 @@ Dry-run:
 scripts/sync-content.sh --dry-run
 ```
 
-The script backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud.
+The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud. If a downloaded asset does not match the manifest sha256, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
+
+Dry-run lists the asset work without requiring new files to already exist locally. Set `MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=1` only when you explicitly want dry-run to fail on missing or mismatched local assets.
+
+Asset verification is enabled by default:
+
+```bash
+MISELL_VERIFY_CONTENT_ASSETS=1
+MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=0
+MISELL_ASSET_QUARANTINE_DIR=/path/to/quarantine
+```
 
 ## Local State SQLite
 
