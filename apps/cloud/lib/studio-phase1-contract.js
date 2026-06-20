@@ -2,6 +2,14 @@
 
 const crypto = require("crypto");
 
+// Canonical domain vocabulary is defined by #152 and docs/91 in PR #150:
+// Tenant -> Store -> ScreenGroup -> Device.
+// In this PR, site_id and display_wall_id are compatibility aliases only:
+// - site_id aliases store_id
+// - display_wall_id aliases screen_group_id
+// - screen_id represents a ScreenSlot scoped under ScreenGroup
+// Keep these aliases at the boundary and prefer canonical IDs in new specs/APIs.
+
 const ROLES = Object.freeze({
   MISELL_OWNER: "misell_owner",
   MISELL_OPERATOR: "misell_operator",
@@ -210,15 +218,21 @@ function mapLegacyScreenGroupToDisplayWall(screenGroup, devices) {
 
   orderedDevices.sort((left, right) => SCREEN_POSITIONS.indexOf(left.position) - SCREEN_POSITIONS.indexOf(right.position));
 
+  const storeId = cleanId(group.store_id || group.site_id);
+
   return {
     tenant_id: cleanId(group.tenant_id),
-    site_id: cleanId(group.store_id || group.site_id),
-    display_wall_id: groupId,
+    store_id: storeId,
+    site_id: storeId,
     screen_group_id: groupId,
-    screens: orderedDevices.map((entry, index) => ({
-      screen_id: cleanId(entry.device.screen_id || `${groupId}-${entry.position}`),
-      display_wall_id: groupId,
+    display_wall_id: groupId,
+    screen_slots: orderedDevices.map((entry, index) => ({
+      screen_slot_id: cleanId(entry.device.screen_slot_id || entry.device.screen_id || `${groupId}-${entry.position}`),
+      screen_id: cleanId(entry.device.screen_id || entry.device.screen_slot_id || `${groupId}-${entry.position}`),
+      store_id: storeId,
+      site_id: storeId,
       screen_group_id: groupId,
+      display_wall_id: groupId,
       device_id: cleanId(entry.device.device_id),
       position: entry.position,
       display_order: index + 1
@@ -246,18 +260,24 @@ function buildManifestContentHash(manifest) {
 
 function buildManifestContract(input) {
   const manifest = input || {};
+  const storeId = cleanId(manifest.store_id || manifest.site_id);
+  const screenGroupId = cleanId(manifest.screen_group_id || manifest.display_wall_id);
+  const screenSlotId = cleanId(manifest.screen_slot_id || manifest.screen_id);
   return {
     tenant_id: cleanId(manifest.tenant_id),
-    site_id: cleanId(manifest.site_id || manifest.store_id),
-    display_wall_id: cleanId(manifest.display_wall_id || manifest.screen_group_id),
-    screen_id: cleanId(manifest.screen_id),
+    store_id: storeId,
+    site_id: storeId,
+    screen_group_id: screenGroupId,
+    display_wall_id: screenGroupId,
+    screen_slot_id: screenSlotId,
+    screen_id: screenSlotId,
     manifest_schema_version: Number(manifest.manifest_schema_version || 1),
     manifest_version: Number(manifest.manifest_version || 1),
     content_hash: cleanString(manifest.content_hash) || buildManifestContentHash({
       tenant_id: manifest.tenant_id,
-      site_id: manifest.site_id || manifest.store_id,
-      display_wall_id: manifest.display_wall_id || manifest.screen_group_id,
-      screen_id: manifest.screen_id,
+      store_id: manifest.store_id || manifest.site_id,
+      screen_group_id: manifest.screen_group_id || manifest.display_wall_id,
+      screen_slot_id: manifest.screen_slot_id || manifest.screen_id,
       playlist: manifest.playlist || null,
       assets: manifest.assets || []
     })
@@ -267,7 +287,9 @@ function buildManifestContract(input) {
 function evaluatePublishApproval({
   content_type: contentType,
   tenant_id: tenantId,
+  store_id: storeId,
   site_id: siteId,
+  screen_group_id: screenGroupId,
   display_wall_id: displayWallId,
   subject_type: subjectType,
   subject_id: subjectId,
@@ -282,8 +304,15 @@ function evaluatePublishApproval({
   if (!match) return blocked("approval_missing");
   if (cleanString(match.content_type) && cleanString(match.content_type) !== type) return blocked("approval_content_type_mismatch");
   if (tenantId && cleanString(match.tenant_id) !== cleanString(tenantId)) return blocked("approval_tenant_mismatch");
-  if (siteId && cleanString(match.site_id) !== cleanString(siteId)) return blocked("approval_site_mismatch");
-  if (displayWallId && cleanString(match.display_wall_id) !== cleanString(displayWallId)) return blocked("approval_display_wall_mismatch");
+
+  const requestedStoreId = cleanString(storeId || siteId);
+  const approvalStoreId = cleanString(match.store_id || match.site_id);
+  if (requestedStoreId && approvalStoreId !== requestedStoreId) return blocked("approval_store_mismatch");
+
+  const requestedScreenGroupId = cleanString(screenGroupId || displayWallId);
+  const approvalScreenGroupId = cleanString(match.screen_group_id || match.display_wall_id);
+  if (requestedScreenGroupId && approvalScreenGroupId !== requestedScreenGroupId) return blocked("approval_screen_group_mismatch");
+
   if (subjectHash && cleanString(match.subject_hash) !== cleanString(subjectHash)) return blocked("approval_hash_mismatch");
   if (contentHash && cleanString(match.content_hash) !== cleanString(contentHash)) return blocked("approval_content_hash_mismatch");
 
