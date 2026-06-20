@@ -38,22 +38,44 @@ authenticated membership/session, never from request body/query authority.
 
 ## Canonical Domain Model
 
+The canonical vocabulary decision is recorded in #152 and `docs/91_CANONICAL_DOMAIN_VOCABULARY_ADR.md`.
+
+Canonical model:
+
 ```text
-tenant -> site -> display_wall -> screen -> device binding
+Tenant -> Store -> ScreenGroup -> Device
 ```
+
+Canonical IDs:
+
+```text
+tenant_id
+store_id
+screen_group_id
+device_id
+```
+
+`site`, `display_wall`, and `screen` are not long-term canonical scope terms.
+They may be used in this PR only as compatibility aliases or supporting concepts.
 
 Storage mapping:
 
 - `tenant` -> `tenants`
-- `site` -> `stores`
-- `display_wall` -> `screen_groups`
-- `screen` -> new `screens` table
+- `store` -> `stores`
+- `screen_group` -> `screen_groups`
+- `screen_slot` -> new `screens` table, if kept, represents ScreenSlot scoped under ScreenGroup
 - physical player -> existing `devices`
-- binding -> new `screen_device_bindings`
+- binding -> new `screen_device_bindings`, representing DeviceBinding under ScreenSlot
+
+Compatibility mapping for this PR:
+
+- `site_id` must be treated as an alias for `store_id`
+- `display_wall_id` must be treated as an alias for `screen_group_id`
+- `screen_id` must be treated as `screen_slot_id` or a physical output slot scoped under `screen_group_id`
 
 Migration is additive only. Existing `stores`, `screen_groups`, and `devices`
 remain valid. A legacy 3-device screen group fixture must map deterministically
-to left/center/right screens; if order cannot be inferred, migration must fail
+to left/center/right ScreenSlots; if order cannot be inferred, migration must fail
 instead of guessing.
 
 ## Manifest And Approval Decisions
@@ -68,8 +90,8 @@ Do not create a parallel manifest system. Extend:
 Add:
 
 - `publish_history`
-- manifest scope fields: `tenant_id`, `site_id`, `display_wall_id`, optional
-  `screen_id`
+- manifest scope fields should use canonical `tenant_id`, `store_id`, `screen_group_id`, and optional `screen_slot_id`
+- existing PR-local fields `site_id`, `display_wall_id`, and `screen_id` are compatibility aliases only if present
 - `manifest_schema_version`
 - monotonic `manifest_version`
 - `content_hash`
@@ -103,7 +125,7 @@ Required before merge:
 - RBAC matrix is deny-by-default with explicit allow rows
 - legacy aliases normalize at boundary only
 - publish guard binds approval to immutable content identity: content type,
-  manifest/content hash, tenant/site/display-wall scope, approval status,
+  manifest/content hash, tenant/store/screen-group scope, approval status,
   expiration, and revocation
 - emergency publish requires `misell_owner` or `misell_operator`, audit reason,
   actor id, and timestamp
