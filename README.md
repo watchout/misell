@@ -169,6 +169,7 @@ npm audit --audit-level=moderate
 - docs/77_POC_PARTNER_PRICING_AND_BUYOUT_STRATEGY.md
 - docs/78_FINAL_30DAY_IMPACT_OFFER_AND_PROPOSAL_STRATEGY.md
 - docs/90_AI_CAMPAIGN_STUDIO_RETENTION_LOOP_SPEC.md
+- docs/91_CANONICAL_DOMAIN_VOCABULARY_ADR.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
