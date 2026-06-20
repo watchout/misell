@@ -200,6 +200,22 @@ QR links can resolve to public QR pages or issue counter orders. Counter-order Q
 
 Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
 
+## Reporting Read Model and Monthly Snapshots
+
+Cloud can aggregate the existing heartbeat, playlog, QR scan, counter-order, and error-log tables into a store/day reporting read model.
+
+- `POST /api/admin/reports/read-model/rebuild` materializes `report_daily_store_metrics` for a requested month or date range.
+- `GET /api/admin/reports/summary` returns the same summary shape from live event tables.
+- `GET /api/admin/reports/daily-metrics` returns persisted read-model rows.
+- `POST /api/admin/reports/monthly-snapshots` rebuilds the read model for a full month and stores an immutable monthly report payload in `report_snapshots`.
+- `GET /api/admin/reports/monthly-snapshots` and `GET /api/admin/reports/monthly-snapshots/:snapshot_id` retrieve saved report snapshots.
+
+Report periods are local business days. Bucketing uses each store's `timezone` and `business_day_start_time`, so after-midnight activity can still count toward the previous business day. Monthly snapshots are keyed by report type, period, tenant, store, campaign, and content scope to avoid accidental duplicate monthly reports.
+
+`metrics_sha256` is calculated from a stable normalized report payload with generation timestamps removed. Replacing a monthly snapshot with the same underlying data keeps the same metrics hash while still updating `generated_at` in the saved payload.
+
+These endpoints are currently operator-admin APIs behind the existing Cloud admin auth. Customer/advertiser-scoped report access is intentionally out of scope for this PR and should be added with the RBAC/self-service work before exposing reports outside operators.
+
 ## API
 
 - `GET /api/health`
@@ -230,6 +246,12 @@ Device playlogs should send stable `event_id` values. Legacy payloads without `e
 - `GET /api/admin/counter-orders` with Basic auth
 - `POST /api/admin/counter-orders` with Basic auth
 - `PATCH /api/admin/counter-orders/:counter_order_id/status` with Basic auth
+- `GET /api/admin/reports/summary` with Basic auth
+- `GET /api/admin/reports/daily-metrics` with Basic auth
+- `POST /api/admin/reports/read-model/rebuild` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots` with Basic auth
+- `POST /api/admin/reports/monthly-snapshots` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots/:snapshot_id` with Basic auth
 - `GET /q/:qr_token`
 - `POST /q/:qr_token/orders`
 - `GET /order/:order_token`

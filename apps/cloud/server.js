@@ -42,6 +42,7 @@ const ITEM_STATUS = new Set(["active", "archived"]);
 const OFFER_STATUS = new Set(["draft", "active", "retired", "archived"]);
 const OFFER_REVISION_STATUS = new Set(["draft", "active", "retired"]);
 const COUNTER_ORDER_STATUS = new Set(["issued", "redeemed", "expired", "cancelled"]);
+const REPORT_SNAPSHOT_STATUS = new Set(["draft", "published", "archived"]);
 const QR_DESTINATION_TYPES = new Set([
   "external_url",
   "coupon",
@@ -79,6 +80,12 @@ const CLOUD_ASSET_MIME_BY_EXTENSION = new Map([
   [".mp4", new Set(["video/mp4"])],
   [".webm", new Set(["video/webm", "video/x-matroska"])]
 ]);
+const REPORT_HEARTBEAT_INTERVAL_MINUTES = normalizedLimit(
+  process.env.REPORT_HEARTBEAT_INTERVAL_MINUTES || process.env.MISELL_REPORT_HEARTBEAT_INTERVAL_MINUTES,
+  5,
+  1,
+  60
+);
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(CLOUD_ASSETS_DIR, { recursive: true });
@@ -421,6 +428,65 @@ app.patch("/api/admin/counter-orders/:counter_order_id/status", requireAdminAuth
   } catch (error) {
     next(error);
   }
+});
+
+app.get("/api/admin/reports/summary", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeReportCriteria(req.query || {});
+    res.json({ ok: true, report: buildReportSummary(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/daily-metrics", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeReportCriteria(req.query || {});
+    res.json({ ok: true, metrics: listReportDailyStoreMetrics(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/reports/read-model/rebuild", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeReportCriteria(req.body || {});
+    const result = rebuildReportDailyStoreMetrics(criteria);
+    res.status(201).json({
+      ok: true,
+      rebuilt: result.rows.length,
+      report: buildReportSummary(criteria, { dailyRows: result.rows, generatedAt: result.generated_at })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/monthly-snapshots", requireAdminAuth, (req, res, next) => {
+  try {
+    const filters = normalizeReportSnapshotListFilters(req.query || {});
+    res.json({ ok: true, report_snapshots: listReportSnapshots(filters) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/reports/monthly-snapshots", requireAdminAuth, (req, res, next) => {
+  try {
+    const snapshot = createMonthlyReportSnapshot(req.body || {});
+    res.status(201).json({ ok: true, report_snapshot: snapshot });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/monthly-snapshots/:snapshot_id", requireAdminAuth, (req, res) => {
+  const snapshot = getReportSnapshot(cleanId(req.params.snapshot_id));
+  if (!snapshot) {
+    res.status(404).json({ error: "Report snapshot not found" });
+    return;
+  }
+  res.json({ ok: true, report_snapshot: snapshot });
 });
 
 app.get("/api/admin/device-log-bundles", requireAdminAuth, (req, res) => {
@@ -1040,7 +1106,7 @@ app.post("/api/device/heartbeat", requireDeviceAuth, (req, res, next) => {
   try {
     const payload = req.body || {};
     assertPayloadDeviceMatches(req.device, payload);
-    const receivedAt = nowIso();
+    const receivedAt = requestNowIso(payload);
     const normalized = normalizeHeartbeatPayload(req.device, payload, receivedAt);
 
     const result = db.prepare(`
@@ -2230,6 +2296,80 @@ function schemaMigrations() {
           CREATE INDEX IF NOT EXISTS idx_device_commands_status ON device_commands(status, ttl_expires_at);
         `);
       }
+    },
+    {
+      version: 4,
+      name: "reporting_read_model_monthly_snapshots",
+      up() {
+        addColumnIfMissing("report_snapshots", "tenant_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "store_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "screen_group_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "content_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "report_type", "TEXT");
+        addColumnIfMissing("report_snapshots", "status", "TEXT NOT NULL DEFAULT 'draft'");
+        addColumnIfMissing("report_snapshots", "title", "TEXT");
+        addColumnIfMissing("report_snapshots", "summary_json", "TEXT");
+        addColumnIfMissing("report_snapshots", "generated_at", "TEXT");
+        addColumnIfMissing("report_snapshots", "published_at", "TEXT");
+        addColumnIfMissing("report_snapshots", "snapshot_key", "TEXT");
+        addColumnIfMissing("report_snapshots", "metrics_sha256", "TEXT");
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS report_daily_store_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric_key TEXT NOT NULL UNIQUE,
+            metric_date TEXT NOT NULL,
+            period_start TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            campaign_id TEXT,
+            content_id TEXT,
+            device_count INTEGER NOT NULL DEFAULT 0,
+            active_device_count INTEGER NOT NULL DEFAULT 0,
+            heartbeat_count INTEGER NOT NULL DEFAULT 0,
+            expected_heartbeat_count INTEGER NOT NULL DEFAULT 0,
+            uptime_sample_rate REAL NOT NULL DEFAULT 0,
+            play_event_count INTEGER NOT NULL DEFAULT 0,
+            play_started_count INTEGER NOT NULL DEFAULT 0,
+            play_completed_count INTEGER NOT NULL DEFAULT 0,
+            play_failed_count INTEGER NOT NULL DEFAULT 0,
+            play_duration_seconds INTEGER NOT NULL DEFAULT 0,
+            qr_scan_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_issued_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_redeemed_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_cancelled_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_expired_count INTEGER NOT NULL DEFAULT 0,
+            counter_order_total_amount INTEGER NOT NULL DEFAULT 0,
+            counter_order_redeemed_amount INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            generated_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source_from TEXT NOT NULL,
+            source_to TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_report_daily_metrics_period
+            ON report_daily_store_metrics(period_start, period_end, metric_date, tenant_id, store_id);
+          CREATE INDEX IF NOT EXISTS idx_report_daily_metrics_scope
+            ON report_daily_store_metrics(tenant_id, store_id, campaign_id, content_id, metric_date);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_report_snapshots_snapshot_key
+            ON report_snapshots(snapshot_key)
+            WHERE snapshot_key IS NOT NULL AND snapshot_key != '';
+          CREATE INDEX IF NOT EXISTS idx_report_snapshots_scope
+            ON report_snapshots(report_type, period_start, period_end, tenant_id, store_id, campaign_id, content_id, status);
+        `);
+
+        db.prepare(`
+          UPDATE report_snapshots
+          SET
+            report_type = COALESCE(NULLIF(report_type, ''), snapshot_type, 'monthly_summary'),
+            status = COALESCE(NULLIF(status, ''), 'draft'),
+            summary_json = COALESCE(NULLIF(summary_json, ''), metrics_json),
+            generated_at = COALESCE(NULLIF(generated_at, ''), created_at)
+        `).run();
+      }
     }
   ];
 }
@@ -3050,7 +3190,7 @@ function assertQrLinkUsable(qrLink) {
 }
 
 function recordQrScan(qrLink, req) {
-  const now = nowIso();
+  const now = requestNowIso({ ...(req.query || {}), ...(req.body || {}) });
   const qrScanId = nextEntityId("qrs", qrLink.qr_link_id);
   const userAgent = cleanString(req.get("user-agent")).slice(0, 500);
   const referrer = cleanString(req.get("referer") || req.get("referrer")).slice(0, 500);
@@ -3343,6 +3483,1049 @@ function publicCounterOrder(row) {
     created_at: cleanString(item.created_at)
   }));
   return order;
+}
+
+function normalizeReportCriteria(input = {}) {
+  const month = cleanMonthKey(input.month || input.period_month || input.periodMonth);
+  let from = cleanDateKey(input.from || input.period_start || input.start_date || input.startDate);
+  let to = cleanDateKey(input.to || input.period_end || input.end_date || input.endDate);
+
+  if (month && (!from || !to)) {
+    const bounds = monthBounds(month);
+    from = from || bounds.from;
+    to = to || bounds.to;
+  }
+
+  if (!from && !to) {
+    const bounds = monthBounds(nowIso().slice(0, 7));
+    from = bounds.from;
+    to = bounds.to;
+  } else if (!from) {
+    from = to;
+  } else if (!to) {
+    to = from;
+  }
+
+  if (!from || !to) throw requestError("from/to or month is required", 400);
+  if (to < from) throw requestError("to must be on or after from", 400);
+  const toExclusive = addDaysToDateKey(to, 1);
+  const days = dateKeysBetween(from, toExclusive);
+  if (days.length > 370) throw requestError("report period must be 370 days or less", 400);
+
+  return {
+    from,
+    to,
+    to_exclusive: toExclusive,
+    month: month || (from.slice(0, 7) === to.slice(0, 7) ? from.slice(0, 7) : ""),
+    days,
+    tenant_id: cleanId(input.tenant_id || input.tenantId),
+    store_id: cleanId(input.store_id || input.storeId || input.site_id || input.siteId),
+    campaign_id: cleanId(input.campaign_id || input.campaignId),
+    content_id: cleanId(input.content_id || input.contentId),
+    heartbeat_interval_minutes: REPORT_HEARTBEAT_INTERVAL_MINUTES
+  };
+}
+
+function normalizeReportSnapshotListFilters(input = {}) {
+  return {
+    month: cleanMonthKey(input.month || input.period_month || input.periodMonth),
+    tenant_id: cleanId(input.tenant_id || input.tenantId),
+    store_id: cleanId(input.store_id || input.storeId || input.site_id || input.siteId),
+    campaign_id: cleanId(input.campaign_id || input.campaignId),
+    content_id: cleanId(input.content_id || input.contentId),
+    status: cleanString(input.status),
+    report_type: cleanString(input.report_type || input.reportType || "monthly_summary"),
+    limit: Math.max(1, Math.min(asInteger(input.limit) || 50, 200))
+  };
+}
+
+function buildReportSummary(criteria, options = {}) {
+  const generatedAt = cleanString(options.generatedAt) || nowIso();
+  const rows = (options.dailyRows || aggregateReportDailyStoreMetrics(criteria).rows).map(publicReportDailyStoreMetric);
+  const daily = summarizeReportRowsByDate(criteria, rows);
+  const totals = summarizeReportMetricRows(rows);
+  return {
+    report_type: "summary",
+    generated_at: generatedAt,
+    source: options.dailyRows ? "report_daily_store_metrics" : "live_events",
+    period: {
+      from: criteria.from,
+      to: criteria.to,
+      to_exclusive: criteria.to_exclusive,
+      days: criteria.days.length
+    },
+    filters: reportCriteriaFilters(criteria),
+    totals,
+    daily,
+    content: buildReportContentBreakdown(criteria),
+    qr_links: buildReportQrBreakdown(criteria),
+    counter_orders: buildReportOrderBreakdown(criteria)
+  };
+}
+
+function rebuildReportDailyStoreMetrics(criteria) {
+  const result = aggregateReportDailyStoreMetrics(criteria);
+  const persistRows = db.transaction((rows) => {
+    db.prepare(`
+      DELETE FROM report_daily_store_metrics
+      WHERE period_start = ?
+        AND period_end = ?
+        AND campaign_id = ?
+        AND content_id = ?
+        AND (? = '' OR tenant_id = ?)
+        AND (? = '' OR store_id = ?)
+    `).run(
+      criteria.from,
+      criteria.to,
+      criteria.campaign_id,
+      criteria.content_id,
+      criteria.tenant_id,
+      criteria.tenant_id,
+      criteria.store_id,
+      criteria.store_id
+    );
+
+    const insert = db.prepare(`
+      INSERT INTO report_daily_store_metrics (
+        metric_key, metric_date, period_start, period_end, timezone,
+        tenant_id, store_id, campaign_id, content_id, device_count,
+        active_device_count, heartbeat_count, expected_heartbeat_count,
+        uptime_sample_rate, play_event_count, play_started_count,
+        play_completed_count, play_failed_count, play_duration_seconds,
+        qr_scan_count, counter_orders_issued_count, counter_orders_redeemed_count,
+        counter_orders_cancelled_count, counter_orders_expired_count,
+        counter_order_total_amount, counter_order_redeemed_amount, error_count,
+        generated_at, updated_at, source_from, source_to
+      ) VALUES (
+        @metric_key, @metric_date, @period_start, @period_end, @timezone,
+        @tenant_id, @store_id, @campaign_id, @content_id, @device_count,
+        @active_device_count, @heartbeat_count, @expected_heartbeat_count,
+        @uptime_sample_rate, @play_event_count, @play_started_count,
+        @play_completed_count, @play_failed_count, @play_duration_seconds,
+        @qr_scan_count, @counter_orders_issued_count, @counter_orders_redeemed_count,
+        @counter_orders_cancelled_count, @counter_orders_expired_count,
+        @counter_order_total_amount, @counter_order_redeemed_amount, @error_count,
+        @generated_at, @updated_at, @source_from, @source_to
+      )
+    `);
+    for (const row of rows.map(publicReportDailyStoreMetric)) {
+      insert.run(row);
+    }
+  });
+  persistRows(result.rows);
+  return result;
+}
+
+function listReportDailyStoreMetrics(criteria) {
+  return db.prepare(`
+    SELECT * FROM report_daily_store_metrics
+    WHERE period_start = ?
+      AND period_end = ?
+      AND campaign_id = ?
+      AND content_id = ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+    ORDER BY metric_date ASC, store_id ASC
+  `).all(
+    criteria.from,
+    criteria.to,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id
+  ).map(publicReportDailyStoreMetric);
+}
+
+function aggregateReportDailyStoreMetrics(criteria) {
+  const generatedAt = nowIso();
+  const settingsCache = new Map();
+  const rowsByKey = new Map();
+  for (const store of listReportStores(criteria)) {
+    for (const metricDate of criteria.days) {
+      const row = createReportDailyMetricRow(criteria, store, metricDate, settingsCache, generatedAt);
+      rowsByKey.set(row.metric_key, row);
+    }
+  }
+
+  for (const count of listReportDeviceCounts(criteria)) {
+    for (const metricDate of criteria.days) {
+      const row = getOrCreateReportDailyMetricRow(criteria, {
+        tenant_id: count.tenant_id,
+        store_id: count.store_id
+      }, metricDate, rowsByKey, settingsCache, generatedAt);
+      row.device_count = asInteger(count.device_count) || 0;
+    }
+  }
+
+  addHeartbeatMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addPlaylogMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addErrorMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+
+  const rows = Array.from(rowsByKey.values())
+    .sort((a, b) => `${a.metric_date}:${a.store_id}`.localeCompare(`${b.metric_date}:${b.store_id}`))
+    .map((row) => finalizeReportDailyMetricRow(row, criteria));
+  return { generated_at: generatedAt, rows };
+}
+
+function listReportStores(criteria) {
+  return db.prepare(`
+    SELECT tenant_id, store_id, name AS store_name
+    FROM stores
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+    ORDER BY tenant_id, store_id
+  `).all(criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id).map((row) => ({
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    store_name: cleanString(row.store_name)
+  }));
+}
+
+function listReportDeviceCounts(criteria) {
+  return db.prepare(`
+    SELECT tenant_id, store_id, COUNT(*) AS device_count
+    FROM devices
+    WHERE status NOT IN ('retired', 'lost')
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+    GROUP BY tenant_id, store_id
+  `).all(criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id);
+}
+
+function createReportDailyMetricRow(criteria, store, metricDate, settingsCache, generatedAt) {
+  const settings = cachedReportStoreSettings(store.store_id, store.tenant_id, settingsCache);
+  return {
+    metric_key: reportDailyMetricKey(criteria, metricDate, store.tenant_id, store.store_id),
+    metric_date: metricDate,
+    period_start: criteria.from,
+    period_end: criteria.to,
+    timezone: settings.timezone,
+    tenant_id: cleanId(store.tenant_id),
+    store_id: cleanId(store.store_id),
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id,
+    device_count: 0,
+    active_device_count: 0,
+    heartbeat_count: 0,
+    expected_heartbeat_count: 0,
+    uptime_sample_rate: 0,
+    play_event_count: 0,
+    play_started_count: 0,
+    play_completed_count: 0,
+    play_failed_count: 0,
+    play_duration_seconds: 0,
+    qr_scan_count: 0,
+    counter_orders_issued_count: 0,
+    counter_orders_redeemed_count: 0,
+    counter_orders_cancelled_count: 0,
+    counter_orders_expired_count: 0,
+    counter_order_total_amount: 0,
+    counter_order_redeemed_amount: 0,
+    error_count: 0,
+    generated_at: generatedAt,
+    updated_at: generatedAt,
+    source_from: criteria.from,
+    source_to: criteria.to,
+    _active_devices: new Set()
+  };
+}
+
+function getOrCreateReportDailyMetricRow(criteria, store, metricDate, rowsByKey, settingsCache, generatedAt) {
+  const tenantId = cleanId(store.tenant_id);
+  const storeId = cleanId(store.store_id);
+  const key = reportDailyMetricKey(criteria, metricDate, tenantId, storeId);
+  let row = rowsByKey.get(key);
+  if (!row) {
+    row = createReportDailyMetricRow(criteria, { tenant_id: tenantId, store_id: storeId }, metricDate, settingsCache, generatedAt);
+    rowsByKey.set(key, row);
+  }
+  return row;
+}
+
+function addHeartbeatMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, device_id, received_at
+    FROM heartbeats
+    WHERE received_at >= ?
+      AND received_at < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+  `).all(range.from, range.to, criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id);
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.received_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.heartbeat_count += 1;
+    if (item.device_id) row._active_devices.add(item.device_id);
+  }
+}
+
+function addPlaylogMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      tenant_id, store_id, device_id, campaign_id, content_id,
+      event_type, result, duration,
+      COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) AS event_at
+    FROM playlogs
+    WHERE COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) >= ?
+      AND COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.play_event_count += 1;
+    if (isReportPlayStarted(item)) row.play_started_count += 1;
+    if (isReportPlayCompleted(item)) row.play_completed_count += 1;
+    if (isReportPlayFailed(item)) row.play_failed_count += 1;
+    row.play_duration_seconds += Math.max(0, asInteger(item.duration) || 0);
+  }
+}
+
+function addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, campaign_id, content_id, scanned_at
+    FROM qr_scans
+    WHERE scanned_at >= ?
+      AND scanned_at < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.scanned_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.qr_scan_count += 1;
+  }
+}
+
+function addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, campaign_id, content_id, business_date, status, total_amount
+    FROM counter_orders
+    WHERE business_date >= ?
+      AND business_date <= ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    criteria.from,
+    criteria.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  for (const item of rows) {
+    if (!reportDateInRange(item.business_date, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, item.business_date, rowsByKey, settingsCache, generatedAt);
+    const amount = Math.max(0, asInteger(item.total_amount) || 0);
+    row.counter_orders_issued_count += 1;
+    row.counter_order_total_amount += amount;
+    if (item.status === "redeemed") {
+      row.counter_orders_redeemed_count += 1;
+      row.counter_order_redeemed_amount += amount;
+    } else if (item.status === "cancelled") {
+      row.counter_orders_cancelled_count += 1;
+    } else if (item.status === "expired") {
+      row.counter_orders_expired_count += 1;
+    }
+  }
+}
+
+function addErrorMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      tenant_id, store_id,
+      COALESCE(NULLIF(occurred_at, ''), received_at) AS event_at
+    FROM error_logs
+    WHERE COALESCE(NULLIF(occurred_at, ''), received_at) >= ?
+      AND COALESCE(NULLIF(occurred_at, ''), received_at) < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+  `).all(range.from, range.to, criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id);
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.error_count += 1;
+  }
+}
+
+function finalizeReportDailyMetricRow(row, criteria) {
+  row.active_device_count = row._active_devices?.size || row.active_device_count || 0;
+  row.expected_heartbeat_count = Math.max(
+    0,
+    Math.round((row.device_count || 0) * (24 * 60 / criteria.heartbeat_interval_minutes))
+  );
+  row.uptime_sample_rate = row.expected_heartbeat_count > 0
+    ? Math.min(1, row.heartbeat_count / row.expected_heartbeat_count)
+    : 0;
+  delete row._active_devices;
+  return row;
+}
+
+function publicReportDailyStoreMetric(row) {
+  return {
+    metric_key: cleanString(row.metric_key),
+    metric_date: cleanDateKey(row.metric_date),
+    period_start: cleanDateKey(row.period_start),
+    period_end: cleanDateKey(row.period_end),
+    timezone: cleanString(row.timezone) || DEFAULT_TIMEZONE,
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    campaign_id: cleanId(row.campaign_id),
+    content_id: cleanId(row.content_id),
+    device_count: asInteger(row.device_count) || 0,
+    active_device_count: asInteger(row.active_device_count) || 0,
+    heartbeat_count: asInteger(row.heartbeat_count) || 0,
+    expected_heartbeat_count: asInteger(row.expected_heartbeat_count) || 0,
+    uptime_sample_rate: Number(row.uptime_sample_rate || 0),
+    play_event_count: asInteger(row.play_event_count) || 0,
+    play_started_count: asInteger(row.play_started_count) || 0,
+    play_completed_count: asInteger(row.play_completed_count) || 0,
+    play_failed_count: asInteger(row.play_failed_count) || 0,
+    play_duration_seconds: asInteger(row.play_duration_seconds) || 0,
+    qr_scan_count: asInteger(row.qr_scan_count) || 0,
+    counter_orders_issued_count: asInteger(row.counter_orders_issued_count) || 0,
+    counter_orders_redeemed_count: asInteger(row.counter_orders_redeemed_count) || 0,
+    counter_orders_cancelled_count: asInteger(row.counter_orders_cancelled_count) || 0,
+    counter_orders_expired_count: asInteger(row.counter_orders_expired_count) || 0,
+    counter_order_total_amount: asInteger(row.counter_order_total_amount) || 0,
+    counter_order_redeemed_amount: asInteger(row.counter_order_redeemed_amount) || 0,
+    error_count: asInteger(row.error_count) || 0,
+    generated_at: cleanString(row.generated_at),
+    updated_at: cleanString(row.updated_at),
+    source_from: cleanDateKey(row.source_from),
+    source_to: cleanDateKey(row.source_to)
+  };
+}
+
+function summarizeReportRowsByDate(criteria, rows) {
+  const byDate = new Map(criteria.days.map((date) => [date, emptyReportMetricSummary(date)]));
+  for (const row of rows) {
+    const target = byDate.get(row.metric_date) || emptyReportMetricSummary(row.metric_date);
+    addReportMetricToSummary(target, row);
+    byDate.set(row.metric_date, target);
+  }
+  return Array.from(byDate.values()).map(finalizeReportMetricSummary);
+}
+
+function summarizeReportMetricRows(rows) {
+  const summary = emptyReportMetricSummary("");
+  const deviceCountByDate = new Map();
+  for (const row of rows) {
+    addReportMetricToSummary(summary, row);
+    deviceCountByDate.set(row.metric_date, (deviceCountByDate.get(row.metric_date) || 0) + row.device_count);
+  }
+  summary.device_count = Math.max(0, ...deviceCountByDate.values());
+  return finalizeReportMetricSummary(summary);
+}
+
+function emptyReportMetricSummary(metricDate) {
+  return {
+    date: metricDate,
+    device_count: 0,
+    active_device_count: 0,
+    heartbeat_count: 0,
+    expected_heartbeat_count: 0,
+    uptime_sample_rate: 0,
+    play_event_count: 0,
+    play_started_count: 0,
+    play_completed_count: 0,
+    play_failed_count: 0,
+    play_duration_seconds: 0,
+    qr_scan_count: 0,
+    qr_response_rate: 0,
+    counter_orders_issued_count: 0,
+    counter_orders_redeemed_count: 0,
+    counter_orders_cancelled_count: 0,
+    counter_orders_expired_count: 0,
+    counter_order_total_amount: 0,
+    counter_order_redeemed_amount: 0,
+    error_count: 0
+  };
+}
+
+function addReportMetricToSummary(summary, row) {
+  summary.device_count += row.device_count;
+  summary.active_device_count += row.active_device_count;
+  summary.heartbeat_count += row.heartbeat_count;
+  summary.expected_heartbeat_count += row.expected_heartbeat_count;
+  summary.play_event_count += row.play_event_count;
+  summary.play_started_count += row.play_started_count;
+  summary.play_completed_count += row.play_completed_count;
+  summary.play_failed_count += row.play_failed_count;
+  summary.play_duration_seconds += row.play_duration_seconds;
+  summary.qr_scan_count += row.qr_scan_count;
+  summary.counter_orders_issued_count += row.counter_orders_issued_count;
+  summary.counter_orders_redeemed_count += row.counter_orders_redeemed_count;
+  summary.counter_orders_cancelled_count += row.counter_orders_cancelled_count;
+  summary.counter_orders_expired_count += row.counter_orders_expired_count;
+  summary.counter_order_total_amount += row.counter_order_total_amount;
+  summary.counter_order_redeemed_amount += row.counter_order_redeemed_amount;
+  summary.error_count += row.error_count;
+}
+
+function finalizeReportMetricSummary(summary) {
+  summary.uptime_sample_rate = summary.expected_heartbeat_count > 0
+    ? Math.min(1, summary.heartbeat_count / summary.expected_heartbeat_count)
+    : 0;
+  summary.qr_response_rate = summary.play_started_count > 0
+    ? summary.qr_scan_count / summary.play_started_count
+    : 0;
+  if (!summary.date) delete summary.date;
+  return summary;
+}
+
+function buildReportContentBreakdown(criteria) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      store_id, campaign_id, content_id, playlist_version, playlist_item_id,
+      asset_id, layout, event_type, result, duration,
+      COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) AS event_at
+    FROM playlogs
+    WHERE COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) >= ?
+      AND COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  const settingsCache = new Map();
+  const groups = new Map();
+  for (const row of rows) {
+    const metricDate = reportBusinessDateFor(row.store_id, "", row.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const key = [
+      row.store_id,
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanString(row.playlist_version),
+      cleanString(row.playlist_item_id),
+      cleanString(row.asset_id),
+      cleanString(row.layout)
+    ].join("|");
+    const target = groups.get(key) || {
+      store_id: cleanId(row.store_id),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      playlist_version: cleanString(row.playlist_version),
+      playlist_item_id: cleanString(row.playlist_item_id),
+      asset_id: cleanString(row.asset_id),
+      layout: cleanString(row.layout),
+      play_event_count: 0,
+      play_started_count: 0,
+      play_completed_count: 0,
+      play_failed_count: 0,
+      play_duration_seconds: 0
+    };
+    target.play_event_count += 1;
+    if (isReportPlayStarted(row)) target.play_started_count += 1;
+    if (isReportPlayCompleted(row)) target.play_completed_count += 1;
+    if (isReportPlayFailed(row)) target.play_failed_count += 1;
+    target.play_duration_seconds += Math.max(0, asInteger(row.duration) || 0);
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.play_event_count - a.play_event_count)
+    .slice(0, 50);
+}
+
+function buildReportQrBreakdown(criteria) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      qs.store_id, qs.campaign_id, qs.content_id, qs.offer_id,
+      qs.offer_revision_id, qs.qr_link_id, qs.scanned_at,
+      ql.label, ql.destination_type
+    FROM qr_scans qs
+    LEFT JOIN qr_links ql ON ql.qr_link_id = qs.qr_link_id
+    WHERE qs.scanned_at >= ?
+      AND qs.scanned_at < ?
+      AND (? = '' OR qs.tenant_id = ?)
+      AND (? = '' OR qs.store_id = ?)
+      AND (? = '' OR qs.campaign_id = ?)
+      AND (? = '' OR qs.content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  const settingsCache = new Map();
+  const groups = new Map();
+  for (const row of rows) {
+    const metricDate = reportBusinessDateFor(row.store_id, "", row.scanned_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const key = [
+      cleanId(row.store_id),
+      cleanId(row.qr_link_id),
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanId(row.offer_revision_id)
+    ].join("|");
+    const target = groups.get(key) || {
+      store_id: cleanId(row.store_id),
+      qr_link_id: cleanId(row.qr_link_id),
+      label: cleanString(row.label),
+      destination_type: cleanString(row.destination_type),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      offer_id: cleanId(row.offer_id),
+      offer_revision_id: cleanId(row.offer_revision_id),
+      qr_scan_count: 0
+    };
+    target.qr_scan_count += 1;
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.qr_scan_count - a.qr_scan_count)
+    .slice(0, 50);
+}
+
+function buildReportOrderBreakdown(criteria) {
+  const rows = db.prepare(`
+    SELECT
+      store_id, campaign_id, content_id, offer_id, offer_revision_id,
+      status, business_date, total_amount
+    FROM counter_orders
+    WHERE business_date >= ?
+      AND business_date <= ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    criteria.from,
+    criteria.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  const groups = new Map();
+  for (const row of rows) {
+    const key = [
+      cleanId(row.store_id),
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanId(row.offer_revision_id)
+    ].join("|");
+    const target = groups.get(key) || {
+      store_id: cleanId(row.store_id),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      offer_id: cleanId(row.offer_id),
+      offer_revision_id: cleanId(row.offer_revision_id),
+      issued_count: 0,
+      redeemed_count: 0,
+      cancelled_count: 0,
+      expired_count: 0,
+      total_amount: 0,
+      redeemed_amount: 0
+    };
+    const amount = Math.max(0, asInteger(row.total_amount) || 0);
+    target.issued_count += 1;
+    target.total_amount += amount;
+    if (row.status === "redeemed") {
+      target.redeemed_count += 1;
+      target.redeemed_amount += amount;
+    } else if (row.status === "cancelled") {
+      target.cancelled_count += 1;
+    } else if (row.status === "expired") {
+      target.expired_count += 1;
+    }
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.issued_count - a.issued_count)
+    .slice(0, 50);
+}
+
+function createMonthlyReportSnapshot(input = {}) {
+  const criteria = normalizeReportCriteria(input);
+  if (!criteria.month || criteria.from !== monthBounds(criteria.month).from || criteria.to !== monthBounds(criteria.month).to) {
+    throw requestError("monthly snapshot requires a full month; pass month as YYYY-MM", 400);
+  }
+
+  const status = cleanString(input.status || "draft");
+  if (!REPORT_SNAPSHOT_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(REPORT_SNAPSHOT_STATUS).join(", ")}`, 400);
+  }
+  const snapshotKey = reportSnapshotKey(criteria, "monthly_summary");
+  const existing = db.prepare("SELECT * FROM report_snapshots WHERE snapshot_key = ?").get(snapshotKey);
+  if (existing && !normalizeBooleanFlag(input.replace || input.overwrite)) {
+    throw requestError("Monthly report snapshot already exists for this scope", 409);
+  }
+
+  const rebuilt = rebuildReportDailyStoreMetrics(criteria);
+  const report = buildReportSummary(criteria, { dailyRows: rebuilt.rows, generatedAt: rebuilt.generated_at });
+  const summaryJson = JSON.stringify(report);
+  const metricsSha256 = reportMetricsSha256(report);
+  const now = nowIso();
+  const title = cleanString(input.title || `Misell monthly report ${criteria.month}`).slice(0, 160);
+  const notes = cleanString(input.notes).slice(0, 1000);
+  const createdBy = cleanString(input.created_by || input.createdBy || "admin").slice(0, 120);
+
+  const saveSnapshot = db.transaction(() => {
+    if (existing) {
+      db.prepare(`
+        UPDATE report_snapshots SET
+          campaign_id = ?,
+          content_id = ?,
+          period_start = ?,
+          period_end = ?,
+          snapshot_type = 'monthly_summary',
+          metrics_json = ?,
+          notes = ?,
+          created_by = ?,
+          tenant_id = ?,
+          store_id = ?,
+          screen_group_id = '',
+          report_type = 'monthly_summary',
+          status = ?,
+          title = ?,
+          summary_json = ?,
+          generated_at = ?,
+          published_at = ?,
+          metrics_sha256 = ?
+        WHERE snapshot_id = ?
+      `).run(
+        criteria.campaign_id || null,
+        criteria.content_id || null,
+        criteria.from,
+        criteria.to,
+        summaryJson,
+        notes,
+        createdBy,
+        criteria.tenant_id || null,
+        criteria.store_id || null,
+        status,
+        title,
+        summaryJson,
+        rebuilt.generated_at,
+        status === "published" ? now : null,
+        metricsSha256,
+        existing.snapshot_id
+      );
+      recordAuditLog("admin", createdBy, "report_snapshot.replace", "report_snapshot", existing.snapshot_id, existing, getReportSnapshot(existing.snapshot_id), { snapshot_key: snapshotKey }, now);
+      return existing.snapshot_id;
+    }
+
+    const snapshotId = nextEntityId("rpts", `${criteria.month}-${criteria.store_id || criteria.tenant_id || "all"}`);
+    db.prepare(`
+      INSERT INTO report_snapshots (
+        snapshot_id, campaign_id, advertiser_id, period_start, period_end,
+        snapshot_type, metrics_json, notes, created_by, created_at,
+        tenant_id, store_id, screen_group_id, content_id, report_type, status, title,
+        summary_json, generated_at, published_at, snapshot_key, metrics_sha256
+      ) VALUES (?, ?, NULL, ?, ?, 'monthly_summary', ?, ?, ?, ?, ?, ?, '', ?, 'monthly_summary', ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      snapshotId,
+      criteria.campaign_id || null,
+      criteria.from,
+      criteria.to,
+      summaryJson,
+      notes,
+      createdBy,
+      now,
+      criteria.tenant_id || null,
+      criteria.store_id || null,
+      criteria.content_id || null,
+      status,
+      title,
+      summaryJson,
+      rebuilt.generated_at,
+      status === "published" ? now : null,
+      snapshotKey,
+      metricsSha256
+    );
+    recordAuditLog("admin", createdBy, "report_snapshot.create", "report_snapshot", snapshotId, null, getReportSnapshot(snapshotId), { snapshot_key: snapshotKey }, now);
+    return snapshotId;
+  });
+
+  return getReportSnapshot(saveSnapshot());
+}
+
+function listReportSnapshots(filters = {}) {
+  const params = [
+    filters.report_type,
+    filters.report_type,
+    filters.tenant_id,
+    filters.tenant_id,
+    filters.store_id,
+    filters.store_id,
+    filters.campaign_id,
+    filters.campaign_id,
+    filters.content_id,
+    filters.content_id,
+    filters.status,
+    filters.status,
+    filters.limit
+  ];
+  const monthWhere = filters.month ? "AND period_start = ? AND period_end = ?" : "";
+  if (filters.month) {
+    const bounds = monthBounds(filters.month);
+    params.splice(params.length - 1, 0, bounds.from, bounds.to);
+  }
+  return db.prepare(`
+    SELECT * FROM report_snapshots
+    WHERE (? = '' OR COALESCE(report_type, snapshot_type) = ?)
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+      AND (? = '' OR status = ?)
+      ${monthWhere}
+    ORDER BY period_start DESC, created_at DESC, id DESC
+    LIMIT ?
+  `).all(...params).map(publicReportSnapshot);
+}
+
+function getReportSnapshot(snapshotId) {
+  const row = db.prepare("SELECT * FROM report_snapshots WHERE snapshot_id = ?").get(cleanId(snapshotId));
+  return row ? publicReportSnapshot(row, { includeSummary: true }) : null;
+}
+
+function publicReportSnapshot(row, options = {}) {
+  const summary = parseJson(row.summary_json || row.metrics_json || "{}", {});
+  const snapshot = {
+    snapshot_id: cleanId(row.snapshot_id),
+    snapshot_key: cleanString(row.snapshot_key),
+    report_type: cleanString(row.report_type || row.snapshot_type || "monthly_summary"),
+    snapshot_type: cleanString(row.snapshot_type || row.report_type || "monthly_summary"),
+    status: cleanString(row.status || "draft"),
+    title: cleanString(row.title),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_id: cleanId(row.campaign_id),
+    content_id: cleanId(row.content_id),
+    advertiser_id: cleanId(row.advertiser_id),
+    period_start: cleanDateKey(row.period_start),
+    period_end: cleanDateKey(row.period_end),
+    metrics_sha256: cleanString(row.metrics_sha256),
+    notes: cleanString(row.notes),
+    created_by: cleanString(row.created_by),
+    generated_at: cleanString(row.generated_at),
+    published_at: cleanString(row.published_at),
+    created_at: cleanString(row.created_at)
+  };
+  if (options.includeSummary) {
+    snapshot.summary = summary;
+  } else {
+    snapshot.totals = summary?.totals || {};
+  }
+  return snapshot;
+}
+
+function reportMetricsSha256(report) {
+  return crypto.createHash("sha256")
+    .update(JSON.stringify(stableReportPayloadForHash(report)))
+    .digest("hex");
+}
+
+function stableReportPayloadForHash(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableReportPayloadForHash);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const result = {};
+  for (const key of Object.keys(value).sort()) {
+    if (key === "generated_at") continue;
+    result[key] = stableReportPayloadForHash(value[key]);
+  }
+  return result;
+}
+
+function reportCriteriaFilters(criteria) {
+  return {
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id
+  };
+}
+
+function cachedReportStoreSettings(storeId, tenantId, settingsCache) {
+  const normalizedStoreId = cleanId(storeId);
+  if (settingsCache.has(normalizedStoreId)) return settingsCache.get(normalizedStoreId);
+  const settings = getStoreSettings(normalizedStoreId, { withDefaults: true }) || {
+    tenant_id: cleanId(tenantId),
+    store_id: normalizedStoreId,
+    timezone: DEFAULT_TIMEZONE,
+    business_day_start_time: "00:00"
+  };
+  settingsCache.set(normalizedStoreId, settings);
+  return settings;
+}
+
+function reportBusinessDateFor(storeId, tenantId, isoValue, settingsCache) {
+  const settings = cachedReportStoreSettings(storeId, tenantId, settingsCache);
+  return businessDateFor(isoValue, settings.timezone, settings.business_day_start_time);
+}
+
+function reportBroadIsoRange(criteria) {
+  return {
+    from: `${addDaysToDateKey(criteria.from, -2)}T00:00:00.000Z`,
+    to: `${addDaysToDateKey(criteria.to_exclusive, 2)}T00:00:00.000Z`
+  };
+}
+
+function reportDateInRange(dateKey, criteria) {
+  return Boolean(dateKey && dateKey >= criteria.from && dateKey < criteria.to_exclusive);
+}
+
+function reportDailyMetricKey(criteria, metricDate, tenantId, storeId) {
+  const hash = crypto.createHash("sha256").update(JSON.stringify({
+    metric_date: metricDate,
+    period_start: criteria.from,
+    period_end: criteria.to,
+    tenant_id: cleanId(tenantId),
+    store_id: cleanId(storeId),
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id
+  })).digest("hex").slice(0, 40);
+  return `rdm-${hash}`;
+}
+
+function reportSnapshotKey(criteria, reportType) {
+  const hash = crypto.createHash("sha256").update(JSON.stringify({
+    report_type: reportType,
+    period_start: criteria.from,
+    period_end: criteria.to,
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id
+  })).digest("hex").slice(0, 40);
+  return `rps-${hash}`;
+}
+
+function isReportPlayStarted(row) {
+  const eventType = cleanString(row.event_type).toLowerCase();
+  const result = cleanString(row.result).toLowerCase();
+  if (!eventType && !result) return true;
+  return eventType.includes("started") || result === "started" || result === "playback" || result === "played";
+}
+
+function isReportPlayCompleted(row) {
+  const eventType = cleanString(row.event_type).toLowerCase();
+  const result = cleanString(row.result).toLowerCase();
+  return eventType.includes("completed") || eventType.includes("ended") || ["completed", "success", "ended", "done"].includes(result);
+}
+
+function isReportPlayFailed(row) {
+  const eventType = cleanString(row.event_type).toLowerCase();
+  const result = cleanString(row.result).toLowerCase();
+  return eventType.includes("failed") || eventType.includes("error") || ["failed", "error"].includes(result);
+}
+
+function cleanDateKey(value) {
+  const text = cleanString(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "";
+  const date = new Date(`${text}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text ? "" : text;
+}
+
+function cleanMonthKey(value) {
+  const text = cleanString(value).slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(text)) return "";
+  const date = new Date(`${text}-01T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 7) !== text ? "" : text;
+}
+
+function monthBounds(monthKey) {
+  const month = cleanMonthKey(monthKey);
+  if (!month) throw requestError("month must be YYYY-MM", 400);
+  const from = `${month}-01`;
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const next = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+  const to = new Date(next.getTime() - 86400000).toISOString().slice(0, 10);
+  return { from, to, to_exclusive: next.toISOString().slice(0, 10) };
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const date = new Date(`${cleanDateKey(dateKey)}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function dateKeysBetween(fromDate, toExclusiveDate) {
+  const dates = [];
+  let current = cleanDateKey(fromDate);
+  const end = cleanDateKey(toExclusiveDate);
+  while (current && end && current < end) {
+    dates.push(current);
+    current = addDaysToDateKey(current, 1);
+  }
+  return dates;
 }
 
 function resolveCounterOrderOfferRevision(input) {

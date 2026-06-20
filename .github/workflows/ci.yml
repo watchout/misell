@@ -65,6 +65,9 @@ jobs:
       - name: Smoke SQLite backup
         run: npm run smoke:backup
 
+      - name: Smoke reporting read model
+        run: npm run smoke:reporting
+
       - name: Audit dependencies
         run: npm audit --audit-level=moderate
 
