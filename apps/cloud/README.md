@@ -93,6 +93,15 @@ Create a manual SQLite backup:
 scripts/backup-sqlite.sh
 ```
 
+The backup job uses SQLite's online backup API through `better-sqlite3`, so it does not depend on an external `sqlite3` binary. Each run writes a timestamped backup and a JSON manifest with `integrity_check`, raw SQLite hash, final artifact hash, size, compression flag, and retention metadata.
+
+Useful options:
+
+```bash
+scripts/backup-sqlite.sh --backup-dir /secure/backups --retention-days 30
+scripts/backup-sqlite.sh --backup-dir /secure/backups --no-gzip --json
+```
+
 Install a macOS LaunchAgent for daily backups:
 
 ```bash
@@ -100,7 +109,7 @@ scripts/setup-macos-backup-launchagent.sh
 scripts/setup-macos-backup-launchagent.sh --apply
 ```
 
-Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days.
+Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days. Local verified backups are the MVP baseline; commercial deployments should still copy encrypted backups to separate storage and run scheduled restore drills.
 
 ## Register a Device
 
