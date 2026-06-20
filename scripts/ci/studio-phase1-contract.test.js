@@ -61,12 +61,12 @@ test("tenant isolation covers read, write, publish, approval, device, and report
   }
 });
 
-test("legacy three-device screen group maps deterministically to display wall screens", () => {
+test("legacy three-device screen group maps deterministically to canonical ScreenSlots", () => {
   const mapped = mapLegacyScreenGroupToDisplayWall(
     {
       tenant_id: "tenant-a",
       store_id: "store-a",
-      screen_group_id: "wall-a"
+      screen_group_id: "sg-a"
     },
     [
       { device_id: "device-center", display_order: 2 },
@@ -75,26 +75,28 @@ test("legacy three-device screen group maps deterministically to display wall sc
     ]
   );
 
-  assert.equal(mapped.display_wall_id, "wall-a");
-  assert.deepEqual(mapped.screens.map((screen) => screen.position), ["left", "center", "right"]);
-  assert.deepEqual(mapped.screens.map((screen) => screen.device_id), ["device-left", "device-center", "device-right"]);
+  assert.equal(mapped.store_id, "store-a");
+  assert.equal(mapped.screen_group_id, "sg-a");
+  assert.equal(mapped.display_wall_id, "sg-a");
+  assert.deepEqual(mapped.screen_slots.map((slot) => slot.position), ["left", "center", "right"]);
+  assert.deepEqual(mapped.screen_slots.map((slot) => slot.device_id), ["device-left", "device-center", "device-right"]);
 });
 
 test("legacy migration fixture refuses to guess missing screen order", () => {
   assert.throws(
     () => mapLegacyScreenGroupToDisplayWall(
-      { tenant_id: "tenant-a", store_id: "store-a", screen_group_id: "wall-a" },
+      { tenant_id: "tenant-a", store_id: "store-a", screen_group_id: "sg-a" },
       [{ device_id: "a" }, { device_id: "b" }, { device_id: "c" }]
     ),
     /explicit fixture metadata/
   );
 });
 
-test("manifest contract includes scope, version, and stable content hash", () => {
+test("manifest contract includes canonical scope, alias scope, version, and stable content hash", () => {
   const manifest = buildManifestContract({
     tenant_id: "tenant-a",
-    site_id: "store-a",
-    display_wall_id: "wall-a",
+    store_id: "store-a",
+    screen_group_id: "sg-a",
     manifest_schema_version: 1,
     manifest_version: 12,
     playlist: [{ id: "item-a", asset_id: "asset-a" }],
@@ -102,17 +104,19 @@ test("manifest contract includes scope, version, and stable content hash", () =>
   });
 
   assert.equal(manifest.tenant_id, "tenant-a");
+  assert.equal(manifest.store_id, "store-a");
   assert.equal(manifest.site_id, "store-a");
-  assert.equal(manifest.display_wall_id, "wall-a");
+  assert.equal(manifest.screen_group_id, "sg-a");
+  assert.equal(manifest.display_wall_id, "sg-a");
   assert.equal(manifest.manifest_version, 12);
   assert.match(manifest.content_hash, /^[a-f0-9]{64}$/);
 });
 
-test("ad/media approval guard fails closed", () => {
+test("ad/media approval guard fails closed with canonical Store/ScreenGroup scope", () => {
   const subject = {
     tenant_id: "tenant-a",
-    site_id: "site-a",
-    display_wall_id: "wall-a",
+    store_id: "store-a",
+    screen_group_id: "sg-a",
     subject_type: "asset",
     subject_id: "asset-a",
     subject_hash: "hash-a",
@@ -161,6 +165,24 @@ test("ad/media approval guard fails closed", () => {
     now: new Date("2026-06-16T00:00:00.000Z"),
     approvals: [{ ...subject, content_type: "ad", approval_status: "approved", expires_at: "2026-06-15T00:00:00.000Z" }]
   }).reason, "approval_expired");
+
+  assert.equal(evaluatePublishApproval({
+    content_type: "ad",
+    ...subject,
+    approvals: [{ ...subject, content_type: "ad", approval_status: "approved" }]
+  }).allowed, true);
+});
+
+test("ad/media approval guard accepts PR-local site/display_wall aliases at boundary", () => {
+  const subject = {
+    tenant_id: "tenant-a",
+    site_id: "store-a",
+    display_wall_id: "sg-a",
+    subject_type: "asset",
+    subject_id: "asset-a",
+    subject_hash: "hash-a",
+    content_hash: "content-hash-a"
+  };
 
   assert.equal(evaluatePublishApproval({
     content_type: "ad",
