@@ -62,6 +62,9 @@ jobs:
       - name: Check JavaScript syntax
         run: npm run check
 
+      - name: Smoke SQLite backup
+        run: npm run smoke:backup
+
       - name: Audit dependencies
         run: npm audit --audit-level=moderate
 

@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check public/admin.js",
+    "check": "node --check server.js && node --check public/admin.js && node --check scripts/backup-sqlite.mjs && node --check scripts/smoke-backup.mjs",
     "smoke:mvp-foundation": "node scripts/smoke-mvp-foundation.mjs",
     "smoke:mvp-audit-fixes": "node scripts/smoke-mvp-audit-fixes.mjs",
+    "smoke:backup": "node scripts/smoke-backup.mjs",
     "backup": "scripts/backup-sqlite.sh"
   },
   "dependencies": {
