@@ -33,6 +33,9 @@ jobs:
       - name: Validate playlist
         run: npm run validate:playlist
 
+      - name: Smoke content apply hardening
+        run: npm run smoke:content-apply
+
       - name: Audit dependencies
         run: npm audit --audit-level=moderate
 
