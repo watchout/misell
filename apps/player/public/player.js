@@ -346,10 +346,16 @@ function connectEvents() {
 }
 
 function logPlayback(item, result) {
+  const timestamp = new Date().toISOString();
+  const playbackId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const assetPaths = item.layout === "wide"
     ? [item.wide].filter(Boolean)
     : [item.left, item.center, item.right].filter(Boolean);
   const payload = {
+    event_id: `play-${playbackId}`,
+    event_type: "playback",
+    timestamp,
+    playback_id: playbackId,
     playlist_version: PLAYER.playlist.playlist_version || PLAYER.playlist.version || "",
     playlist_item_id: item.item_id || item.id,
     item_id: item.item_id || item.id,

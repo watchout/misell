@@ -9,8 +9,10 @@ CONTENT_RESULT_URL="${MISELL_CONTENT_RESULT_URL:-}"
 DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
 DATA_DIR="${MISELL_DATA_DIR:-${APP_DIR}/data}"
 PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${DATA_DIR}/playlist.json}"
+ASSETS_DIR="${MISELL_ASSETS_DIR:-${APP_DIR}/assets}"
 LOCK_FILE="${MISELL_CONTENT_SYNC_LOCK_FILE:-${HOME}/.local/share/misell-player/content-sync.lock}"
 APPLY=1
+PREVIOUS_PLAYLIST_VERSION=""
 
 usage() {
   cat <<'EOF'
@@ -51,6 +53,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
   DATA_DIR="${MISELL_DATA_DIR:-${DATA_DIR}}"
   PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${PLAYLIST_PATH}}"
+  ASSETS_DIR="${MISELL_ASSETS_DIR:-${ASSETS_DIR}}"
 fi
 
 derive_content_urls() {
@@ -114,9 +117,45 @@ json_payload() {
   '
 }
 
+playlist_version_for_file() {
+  local playlist_path="$1"
+  if [[ ! -f "${playlist_path}" ]]; then
+    return 0
+  fi
+  PLAYLIST_PATH_FOR_VERSION="${playlist_path}" node -e '
+    const fs = require("fs");
+    try {
+      const playlist = JSON.parse(fs.readFileSync(process.env.PLAYLIST_PATH_FOR_VERSION, "utf8"));
+      process.stdout.write(String(playlist.playlist_version || playlist.version || ""));
+    } catch {
+      process.stdout.write("");
+    }
+  '
+}
+
+record_local_content_state() {
+  local status="$1"
+  local message="${2:-}"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  POLICY_JSON="${policy:-}" node "${APP_DIR}/scripts/local-state.js" record-content \
+    --status "${status}" \
+    --message "${message}" \
+    --content-id "${CONTENT_ID:-}" \
+    --playlist-version "${PLAYLIST_VERSION:-}" \
+    --source "${SOURCE:-}" \
+    --previous-playlist-version "${PREVIOUS_PLAYLIST_VERSION:-}" \
+    --playlist-path "${PLAYLIST_PATH}" >/dev/null || {
+      echo "Could not record local content state: ${status}" >&2
+      return 0
+    }
+}
+
 post_result() {
   local status="$1"
   local message="${2:-}"
+  record_local_content_state "${status}" "${message}"
   if [[ -z "${CONTENT_RESULT_URL}" || "${APPLY}" != "1" ]]; then
     return 0
   fi
@@ -146,7 +185,24 @@ sync_assets_from_policy() {
   if [[ "${APPLY}" != "1" ]]; then
     args+=(--dry-run)
   fi
-  "${APP_DIR}/scripts/sync-assets.sh" "${args[@]}"
+  if [[ "${#args[@]}" -gt 0 ]]; then
+    "${APP_DIR}/scripts/sync-assets.sh" "${args[@]}"
+  else
+    "${APP_DIR}/scripts/sync-assets.sh"
+  fi
+}
+
+verify_assets_from_policy() {
+  if [[ "${MISELL_VERIFY_CONTENT_ASSETS:-1}" == "0" ]]; then
+    echo "Content asset verification skipped by MISELL_VERIFY_CONTENT_ASSETS=0."
+    return 0
+  fi
+  if [[ ! -f "${APP_DIR}/scripts/verify-content-assets.js" ]]; then
+    echo "verify-content-assets.js is not installed." >&2
+    return 1
+  fi
+  POLICY_JSON="${policy}" ASSETS_DIR="${ASSETS_DIR}" \
+    node "${APP_DIR}/scripts/verify-content-assets.js"
 }
 
 derive_content_urls
@@ -203,6 +259,14 @@ if [[ "${SOURCE}" == "content_manifest" ]]; then
     post_result "failed" "asset sync failed before content apply"
     exit 1
   fi
+  if [[ "${APPLY}" == "1" || "${MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN:-0}" == "1" ]]; then
+    if ! verify_assets_from_policy; then
+      post_result "failed" "asset verification failed before content apply"
+      exit 1
+    fi
+  else
+    echo "Dry-run: asset verification will run after assets are downloaded during apply."
+  fi
 fi
 
 if [[ "${REQUIRED}" != "1" ]]; then
@@ -215,14 +279,15 @@ if [[ "${APPLY}" != "1" ]]; then
   exit 0
 fi
 
-post_result "updating" "content sync started"
-"${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
-
 previous_playlist="$(mktemp)"
 if [[ -f "${PLAYLIST_PATH}" ]]; then
+  PREVIOUS_PLAYLIST_VERSION="$(playlist_version_for_file "${PLAYLIST_PATH}")"
   cp "${PLAYLIST_PATH}" "${previous_playlist}"
 fi
 temp_playlist="$(mktemp)"
+
+post_result "updating" "content sync started"
+"${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
 
 if ! write_playlist_from_policy "${temp_playlist}"; then
   post_result "failed" "could not write playlist from content policy"

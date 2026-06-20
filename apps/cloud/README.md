@@ -93,6 +93,15 @@ Create a manual SQLite backup:
 scripts/backup-sqlite.sh
 ```
 
+The backup job uses SQLite's online backup API through `better-sqlite3`, so it does not depend on an external `sqlite3` binary. Each run writes a timestamped backup and a JSON manifest with `integrity_check`, raw SQLite hash, final artifact hash, size, compression flag, and retention metadata.
+
+Useful options:
+
+```bash
+scripts/backup-sqlite.sh --backup-dir /secure/backups --retention-days 30
+scripts/backup-sqlite.sh --backup-dir /secure/backups --no-gzip --json
+```
+
 Install a macOS LaunchAgent for daily backups:
 
 ```bash
@@ -100,7 +109,7 @@ scripts/setup-macos-backup-launchagent.sh
 scripts/setup-macos-backup-launchagent.sh --apply
 ```
 
-Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days.
+Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days. Local verified backups are the MVP baseline; commercial deployments should still copy encrypted backups to separate storage and run scheduled restore drills.
 
 ## Register a Device
 
@@ -179,6 +188,34 @@ scripts/collect-device-evidence.sh --upload --label incident --reason "kiosk did
 
 When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derives `MISELL_LOGS_URL` as `/api/device/logs`.
 
+## Store Commerce and QR Foundation
+
+Cloud is the source of truth for store settings, offer definitions, QR links, counter orders, and device event idempotency. Terminals should treat local state as execution/cache state and backfill events with stable `event_id` values.
+
+Store settings are scoped per store and currently include timezone, business day start time, order issue cutoff time, pickup window, currency, and tax included flag. This allows stores with different closing and cutoff times to share the same Cloud schema. Cutoff checks use the store's business-day timeline from `business_day_start_time`, so an after-midnight cutoff such as `02:00` applies to the previous business day.
+
+Offers use immutable revisions. `offers.current_offer_revision_id` points at the active revision, and each `offer_revision` snapshots item names, quantities, prices, tax flags, and order limits. Changing an active offer should create a new revision instead of mutating the published revision.
+
+QR links can resolve to public QR pages or issue counter orders. Counter-order QR links track `offers.current_offer_revision_id` by default, so publishing a new active revision keeps existing displayed QR codes usable. Supplying `offer_revision_id` or `pin_offer_revision` creates an explicitly pinned QR link. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
+
+Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
+
+## Reporting Read Model and Monthly Snapshots
+
+Cloud can aggregate the existing heartbeat, playlog, QR scan, counter-order, and error-log tables into a store/day reporting read model.
+
+- `POST /api/admin/reports/read-model/rebuild` materializes `report_daily_store_metrics` for a requested month or date range.
+- `GET /api/admin/reports/summary` returns the same summary shape from live event tables.
+- `GET /api/admin/reports/daily-metrics` returns persisted read-model rows.
+- `POST /api/admin/reports/monthly-snapshots` rebuilds the read model for a full month and stores an immutable monthly report payload in `report_snapshots`.
+- `GET /api/admin/reports/monthly-snapshots` and `GET /api/admin/reports/monthly-snapshots/:snapshot_id` retrieve saved report snapshots.
+
+Report periods are local business days. Bucketing uses each store's `timezone` and `business_day_start_time`, so after-midnight activity can still count toward the previous business day. Monthly snapshots are keyed by report type, period, tenant, store, campaign, and content scope to avoid accidental duplicate monthly reports.
+
+`metrics_sha256` is calculated from a stable normalized report payload with generation timestamps removed. Replacing a monthly snapshot with the same underlying data keeps the same metrics hash while still updating `generated_at` in the saved payload.
+
+These endpoints are currently operator-admin APIs behind the existing Cloud admin auth. Customer/advertiser-scoped report access is intentionally out of scope for this PR and should be added with the RBAC/self-service work before exposing reports outside operators.
+
 ## API
 
 - `GET /api/health`
@@ -193,6 +230,31 @@ When `MISELL_HEARTBEAT_URL` ends with `/api/device/heartbeat`, the script derive
 - `GET /api/admin/content-manifests` with Basic auth
 - `POST /api/admin/content-manifests` with Basic auth
 - `PATCH /api/admin/content-manifests/:content_id` with Basic auth
+- `GET /api/admin/store-settings` with Basic auth
+- `GET /api/admin/stores/:store_id/settings` with Basic auth
+- `PUT /api/admin/stores/:store_id/settings` with Basic auth
+- `PATCH /api/admin/stores/:store_id/settings` with Basic auth
+- `GET /api/admin/items` with Basic auth
+- `POST /api/admin/items` with Basic auth
+- `PATCH /api/admin/items/:item_id` with Basic auth
+- `GET /api/admin/offers` with Basic auth
+- `POST /api/admin/offers` with Basic auth
+- `GET /api/admin/offers/:offer_id` with Basic auth
+- `POST /api/admin/offers/:offer_id/revisions` with Basic auth
+- `GET /api/admin/qr-links` with Basic auth
+- `POST /api/admin/qr-links` with Basic auth
+- `GET /api/admin/counter-orders` with Basic auth
+- `POST /api/admin/counter-orders` with Basic auth
+- `PATCH /api/admin/counter-orders/:counter_order_id/status` with Basic auth
+- `GET /api/admin/reports/summary` with Basic auth
+- `GET /api/admin/reports/daily-metrics` with Basic auth
+- `POST /api/admin/reports/read-model/rebuild` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots` with Basic auth
+- `POST /api/admin/reports/monthly-snapshots` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots/:snapshot_id` with Basic auth
+- `GET /q/:qr_token`
+- `POST /q/:qr_token/orders`
+- `GET /order/:order_token`
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth

@@ -52,15 +52,15 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
   const Database = require(path.join(repoRoot, "apps/cloud/node_modules/better-sqlite3"));
   const db = new Database(dbPath, { readonly: true });
   try {
-    for (const table of ["screens", "screen_device_bindings", "content_approvals", "publish_history"]) {
+    for (const table of ["screen_slots", "screen_device_bindings", "content_approvals", "publish_history"]) {
       const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
       if (!row) throw new Error(`Expected Studio Phase 1 table '${table}' to exist`);
     }
     assertColumns(db, "content_manifests", [
       "tenant_id",
-      "site_id",
-      "display_wall_id",
-      "screen_id",
+      "store_id",
+      "screen_group_id",
+      "screen_slot_id",
       "manifest_schema_version",
       "manifest_version",
       "content_hash",
@@ -69,8 +69,9 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
     assertColumns(db, "content_approvals", [
       "approval_id",
       "tenant_id",
-      "site_id",
-      "display_wall_id",
+      "store_id",
+      "screen_group_id",
+      "screen_slot_id",
       "content_type",
       "subject_type",
       "subject_id",

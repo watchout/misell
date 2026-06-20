@@ -25,12 +25,14 @@ const REQUIRED_STUDIO_CONTRACT_MARKERS = [
   "function evaluateEmergencyPublish"
 ];
 const REQUIRED_STUDIO_SCHEMA_MARKERS = [
-  "CREATE TABLE IF NOT EXISTS screens",
+  "CREATE TABLE IF NOT EXISTS screen_slots",
   "CREATE TABLE IF NOT EXISTS screen_device_bindings",
   "CREATE TABLE IF NOT EXISTS content_approvals",
   "CREATE TABLE IF NOT EXISTS publish_history",
   "addColumnIfMissing(\"content_manifests\", \"tenant_id\"",
-  "addColumnIfMissing(\"content_manifests\", \"display_wall_id\"",
+  "addColumnIfMissing(\"content_manifests\", \"store_id\"",
+  "addColumnIfMissing(\"content_manifests\", \"screen_group_id\"",
+  "addColumnIfMissing(\"content_manifests\", \"screen_slot_id\"",
   "addColumnIfMissing(\"content_manifests\", \"manifest_schema_version\"",
   "addColumnIfMissing(\"content_manifests\", \"manifest_version\"",
   "addColumnIfMissing(\"content_manifests\", \"content_hash\""

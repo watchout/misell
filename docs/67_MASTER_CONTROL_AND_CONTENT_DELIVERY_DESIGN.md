@@ -324,6 +324,7 @@ Rasenの「商談、納品、改善」をMisellに落とすと、初回デモか
 | `playlog` | どのitemがいつ何秒流れたか | 実装済み |
 | `error_log` | 端末/表示/同期エラー | 実装済み |
 | `admin_log` | 素材、playlist、QR、設定変更 | Player local一部実装済み |
+| `local_state.sqlite` | 未送信playlog、content適用履歴、asset状態 | 実装済み |
 | `qr_catalog` | campaign_id、qr_id、LP、PNG | Player local実装済み |
 | `qr_scan` | QR読み取り、時刻、媒体、user agent概要 | 後続 |
 | `content_result` | playlist適用成功/失敗 | 一部実装済み |
@@ -500,6 +501,18 @@ apps/player/scripts/sync-assets.sh
 6. `apps/player/assets/images` または `apps/player/assets/videos` へatomic moveする。
 7. `POST /api/device/asset-result` へ結果を送る。
 8. 全必須素材がreadyになった後に `sync-content.sh` がplaylistを適用する。
+
+## 端末local_state.sqlite
+
+端末は `MISELL_DATA_DIR/local_state.sqlite` を持つ。JSON/JSONLは人が読む証跡として残し、SQLiteは再送・差分適用・復旧判断に使う実行状態とする。
+
+保持する状態:
+
+- `outbound_events`: Cloud未送信または再送待ちのplaylog。`event_id` で冪等化する。
+- `applied_content`: content manifest / playlist適用履歴。rollbackや障害調査で直前状態を確認する。
+- `local_asset_states`: assetごとのdownload/hash検証/ready/failed状態。
+
+`scripts/emit-heartbeat.sh` はheartbeat成功後に `scripts/sync-playlogs.js` をbest-effortで実行し、`/api/device/playlog` へ未送信playlogをbackfillする。
 
 重要な順序:
 

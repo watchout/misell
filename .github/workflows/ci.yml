@@ -83,6 +83,9 @@ jobs:
       - name: Validate player playlist build artifact
         run: npm --prefix apps/player run validate:playlist
 
+      - name: Smoke content apply hardening
+        run: npm --prefix apps/player run smoke:content-apply
+
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
@@ -132,6 +135,12 @@ jobs:
 
       - name: Run SQLite schema dry-run
         run: node scripts/ci/db-migration-dry-run.js
+
+      - name: Smoke SQLite backup
+        run: npm --prefix apps/cloud run smoke:backup
+
+      - name: Smoke reporting read model
+        run: npm --prefix apps/cloud run smoke:reporting
 
   dependency-audit:
     name: Dependency Audit
