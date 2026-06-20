@@ -87,6 +87,7 @@ npm audit --audit-level=moderate
 
 ## ドキュメント
 
+- docs/README.md
 - docs/00_PROJECT_OVERVIEW.md
 - docs/01_STRATEGY_BUYOUT_2027.md
 - docs/02_PRODUCT_BRAND.md
