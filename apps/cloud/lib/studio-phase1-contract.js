@@ -219,6 +219,17 @@ function mapLegacyScreenGroupToDisplayWall(screenGroup, devices) {
   orderedDevices.sort((left, right) => SCREEN_POSITIONS.indexOf(left.position) - SCREEN_POSITIONS.indexOf(right.position));
 
   const storeId = cleanId(group.store_id || group.site_id);
+  const screenSlots = orderedDevices.map((entry, index) => ({
+    screen_slot_id: cleanId(entry.device.screen_slot_id || entry.device.screen_id || `${groupId}-${entry.position}`),
+    screen_id: cleanId(entry.device.screen_id || entry.device.screen_slot_id || `${groupId}-${entry.position}`),
+    store_id: storeId,
+    site_id: storeId,
+    screen_group_id: groupId,
+    display_wall_id: groupId,
+    device_id: cleanId(entry.device.device_id),
+    position: entry.position,
+    display_order: index + 1
+  }));
 
   return {
     tenant_id: cleanId(group.tenant_id),
@@ -226,17 +237,8 @@ function mapLegacyScreenGroupToDisplayWall(screenGroup, devices) {
     site_id: storeId,
     screen_group_id: groupId,
     display_wall_id: groupId,
-    screen_slots: orderedDevices.map((entry, index) => ({
-      screen_slot_id: cleanId(entry.device.screen_slot_id || entry.device.screen_id || `${groupId}-${entry.position}`),
-      screen_id: cleanId(entry.device.screen_id || entry.device.screen_slot_id || `${groupId}-${entry.position}`),
-      store_id: storeId,
-      site_id: storeId,
-      screen_group_id: groupId,
-      display_wall_id: groupId,
-      device_id: cleanId(entry.device.device_id),
-      position: entry.position,
-      display_order: index + 1
-    }))
+    screen_slots: screenSlots,
+    screens: screenSlots
   };
 }
 
