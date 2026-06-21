@@ -101,6 +101,7 @@ Useful options:
 scripts/backup-sqlite.sh --backup-dir /secure/backups --retention-days 30
 scripts/backup-sqlite.sh --backup-dir /secure/backups --no-gzip --json
 scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-endpoint-url https://s3.example.com
+scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-timeout-ms 300000
 ```
 
 Install a macOS LaunchAgent for daily backups:
@@ -120,13 +121,15 @@ AWS CLI is installed and these values are set in `~/.config/misell-cloud/env`:
 MISELL_CLOUD_BACKUP_S3_URI=s3://example-bucket/misell-cloud
 MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL=https://s3.example.com
 MISELL_CLOUD_BACKUP_S3_SSE=AES256
+MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS=300000
 AWS_ACCESS_KEY_ID=replace-with-access-key
 AWS_SECRET_ACCESS_KEY=replace-with-secret-key
 AWS_DEFAULT_REGION=ap-northeast-1
 ```
 
 `MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL` is optional for AWS S3 and required for
-many S3-compatible providers. Use a bucket policy or access key that can write
+many S3-compatible providers. `MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS` defaults to
+300000 ms per artifact upload. Use a bucket policy or access key that can write
 only to the backup prefix. Confirm restore readiness periodically by downloading
 a backup, decompressing it if needed, and running:
 

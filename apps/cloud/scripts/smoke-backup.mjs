@@ -72,6 +72,7 @@ async function main() {
 
     await runS3CliBackupSmoke(tmpDir, dbPath);
     await runS3EnvFileBackupSmoke(tmpDir, dbPath);
+    await runS3TimeoutSmoke(tmpDir, dbPath);
 
     console.log(JSON.stringify({
       ok: true,
@@ -82,7 +83,8 @@ async function main() {
       retention_purge: true,
       backup_dir_hardened: true,
       s3_upload: true,
-      s3_env_file: true
+      s3_env_file: true,
+      s3_timeout: true
     }, null, 2));
   } finally {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
@@ -148,11 +150,36 @@ async function runS3EnvFileBackupSmoke(tmpDir, dbPath) {
   });
 }
 
+async function runS3TimeoutSmoke(tmpDir, dbPath) {
+  const backupDir = path.join(tmpDir, "s3-timeout-backups");
+  const fakeAws = await createFakeAwsCli(tmpDir, "fake-aws-timeout");
+  const startedAt = Date.now();
+  const result = await runBackup(dbPath, backupDir, {
+    args: [
+      "--s3-uri", "s3://misell-timeout/backups",
+      "--s3-timeout-ms", "1000",
+      "--aws-cli", fakeAws.bin
+    ],
+    env: {
+      MISELL_FAKE_AWS_LOG: fakeAws.log,
+      MISELL_FAKE_AWS_SLEEP_MS: "5000"
+    }
+  });
+  const elapsedMs = Date.now() - startedAt;
+  if (result.status === 0) throw new Error("s3 timeout backup unexpectedly succeeded");
+  if (elapsedMs > 4500) throw new Error(`s3 timeout took too long: ${elapsedMs}ms`);
+  if (!result.stderr.includes("timed out after 1000ms")) {
+    throw new Error(`s3 timeout message missing:\n${result.stdout}\n${result.stderr}`);
+  }
+}
+
 async function createFakeAwsCli(tmpDir, label) {
   const bin = path.join(tmpDir, `${label}.mjs`);
   const log = path.join(tmpDir, `${label}.jsonl`);
   await fsp.writeFile(bin, `#!/usr/bin/env node
 import fs from "fs";
+const sleepMs = Number(process.env.MISELL_FAKE_AWS_SLEEP_MS || 0);
+if (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs));
 fs.appendFileSync(process.env.MISELL_FAKE_AWS_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
 `, { mode: 0o700 });
   await fsp.chmod(bin, 0o700);
