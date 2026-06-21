@@ -200,6 +200,10 @@ async function main() {
 
     await runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir);
     await runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir);
+    await runEncryptedBackupSmoke(tmpDir, dbPath, assetsDir);
+    await runEncryptedS3BackupSmoke(tmpDir, dbPath);
+    await runEncryptionRequiredSmoke(tmpDir, dbPath);
+    await runAgeFailureCleanupSmoke(tmpDir, dbPath);
     await runS3CliBackupSmoke(tmpDir, dbPath);
     await runS3EnvFileBackupSmoke(tmpDir, dbPath);
     await runS3TimeoutSmoke(tmpDir, dbPath);
@@ -214,6 +218,11 @@ async function main() {
       backup_dir_hardened: true,
       restore_drill: true,
       restore_drill_asset_containment: true,
+      encrypted_backup: true,
+      encrypted_restore_drill: true,
+      encrypted_s3_upload: true,
+      encryption_required_guard: true,
+      encryption_cleanup: true,
       s3_upload: true,
       s3_env_file: true,
       s3_timeout: true
@@ -331,6 +340,171 @@ async function runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir) {
   }
 }
 
+async function runEncryptedBackupSmoke(tmpDir, dbPath, assetsDir) {
+  const backupDir = path.join(tmpDir, "encrypted-backups");
+  const fakeAge = await createFakeAgeCli(tmpDir, "fake-age-encrypted");
+  const result = await runBackup(dbPath, backupDir, {
+    args: [
+      "--encryption", "age",
+      "--require-encryption",
+      "--age-recipients", "age1misellpublicrecipientexample",
+      "--age-cli", fakeAge.bin
+    ],
+    env: {
+      MISELL_FAKE_AGE_LOG: fakeAge.log
+    }
+  });
+  if (result.status !== 0) throw new Error(`encrypted backup failed:\n${result.stdout}\n${result.stderr}`);
+  const backupPath = parseOutputPath(result.stdout, "backup");
+  const manifestPath = parseOutputPath(result.stdout, "manifest");
+  if (!backupPath.endsWith(".sqlite.gz.age")) throw new Error(`encrypted backup path was not .age: ${result.stdout}`);
+  if (await exists(backupPath.slice(0, -4))) throw new Error(`plaintext backup artifact was not removed: ${backupPath}`);
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  assertEncryptedManifest(manifest);
+  if (JSON.stringify(manifest).includes("AGE-SECRET-KEY")) throw new Error(`manifest leaked identity material: ${JSON.stringify(manifest)}`);
+  if (JSON.stringify(manifest).includes(fakeAge.identity)) throw new Error(`manifest leaked identity path: ${JSON.stringify(manifest)}`);
+  const encryptedBytes = await fsp.readFile(backupPath);
+  if (!encryptedBytes.subarray(0, 9).equals(Buffer.from("FAKEAGE1\n"))) {
+    throw new Error("encrypted artifact was not produced by fake age");
+  }
+
+  const drillResult = await runCommand(process.execPath, [
+    path.join(appDir, "scripts", "restore-drill.mjs"),
+    "--backup", backupPath,
+    "--manifest", manifestPath,
+    "--assets-dir", assetsDir,
+    "--evidence-dir", path.join(tmpDir, "restore-drill-encrypted"),
+    "--age-cli", fakeAge.bin,
+    "--age-identity-file", fakeAge.identity,
+    "--operator", "smoke",
+    "--context", "smoke-encrypted-backup",
+    "--json"
+  ], {
+    cwd: appDir,
+    env: {
+      ...process.env,
+      MISELL_FAKE_AGE_LOG: fakeAge.log
+    }
+  });
+  if (drillResult.status !== 0) {
+    throw new Error(`encrypted restore drill failed:\n${drillResult.stdout}\n${drillResult.stderr}`);
+  }
+  const evidence = JSON.parse(drillResult.stdout);
+  if (!evidence.ok || evidence.encryption?.encrypted !== true || evidence.encryption?.decrypted !== true) {
+    throw new Error(`encrypted restore drill evidence was not ok: ${drillResult.stdout}`);
+  }
+  if (evidence.plaintext_artifact_sha256 !== manifest.plaintext_artifact_sha256) {
+    throw new Error(`encrypted restore drill plaintext hash mismatch: ${drillResult.stdout}`);
+  }
+  if (JSON.stringify(evidence).includes(fakeAge.identity) || JSON.stringify(evidence).includes("AGE-SECRET-KEY")) {
+    throw new Error(`restore drill evidence leaked identity material: ${drillResult.stdout}`);
+  }
+}
+
+async function runEncryptedS3BackupSmoke(tmpDir, dbPath) {
+  const backupDir = path.join(tmpDir, "encrypted-s3-backups");
+  const fakeAge = await createFakeAgeCli(tmpDir, "fake-age-s3");
+  const fakeAws = await createFakeAwsCli(tmpDir, "fake-aws-encrypted");
+  const result = await runBackup(dbPath, backupDir, {
+    args: [
+      "--encryption", "age",
+      "--require-encryption",
+      "--age-recipients", "age1misellpublicrecipientexample",
+      "--age-cli", fakeAge.bin,
+      "--s3-uri", "s3://misell-encrypted/backups",
+      "--aws-cli", fakeAws.bin
+    ],
+    env: {
+      MISELL_FAKE_AGE_LOG: fakeAge.log,
+      MISELL_FAKE_AWS_LOG: fakeAws.log
+    }
+  });
+  if (result.status !== 0) throw new Error(`encrypted s3 backup failed:\n${result.stdout}\n${result.stderr}`);
+  const backupPath = parseOutputPath(result.stdout, "backup");
+  const manifestPath = parseOutputPath(result.stdout, "manifest");
+  if (!backupPath.endsWith(".age")) throw new Error(`encrypted s3 backup was not .age: ${result.stdout}`);
+  assertS3BackupResult(result.stdout, fakeAws.log, {
+    prefix: "s3://misell-encrypted/backups"
+  });
+  const calls = (await readJsonl(fakeAws.log)).flat();
+  if (!calls.some((arg) => String(arg).endsWith(".sqlite.gz.age"))) {
+    throw new Error(`encrypted artifact was not uploaded: ${JSON.stringify(calls)}`);
+  }
+  if (!calls.some((arg) => String(arg).endsWith(".sqlite.gz.age.manifest.json"))) {
+    throw new Error(`encrypted manifest was not uploaded: ${JSON.stringify(calls)}`);
+  }
+  if (calls.some((arg) => String(arg).endsWith(".sqlite.gz") && !String(arg).endsWith(".sqlite.gz.age"))) {
+    throw new Error(`plaintext artifact was uploaded: ${JSON.stringify(calls)}`);
+  }
+  if (calls.some((arg) => String(arg).endsWith(".sqlite.gz.manifest.json"))) {
+    throw new Error(`plaintext manifest was uploaded: ${JSON.stringify(calls)}`);
+  }
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  assertEncryptedManifest(manifest);
+}
+
+async function runEncryptionRequiredSmoke(tmpDir, dbPath) {
+  const backupDir = path.join(tmpDir, "encryption-required-backups");
+  const result = await runBackup(dbPath, backupDir, {
+    args: ["--require-encryption"]
+  });
+  if (result.status === 0) throw new Error("required encryption backup unexpectedly succeeded");
+  if (!result.stderr.includes("requires MISELL_CLOUD_BACKUP_ENCRYPTION=age")) {
+    throw new Error(`required encryption error missing:\n${result.stdout}\n${result.stderr}`);
+  }
+  const files = await fsp.readdir(backupDir).catch(() => []);
+  if (files.length !== 0) throw new Error(`required encryption failure wrote files: ${JSON.stringify(files)}`);
+}
+
+async function runAgeFailureCleanupSmoke(tmpDir, dbPath) {
+  const backupDir = path.join(tmpDir, "age-failure-backups");
+  const fakeAge = await createFakeAgeCli(tmpDir, "fake-age-failure");
+  const fakeAws = await createFakeAwsCli(tmpDir, "fake-aws-age-failure");
+  const result = await runBackup(dbPath, backupDir, {
+    args: [
+      "--encryption", "age",
+      "--require-encryption",
+      "--age-recipients", "age1misellpublicrecipientexample",
+      "--age-cli", fakeAge.bin,
+      "--s3-uri", "s3://misell-age-failure/backups",
+      "--aws-cli", fakeAws.bin
+    ],
+    env: {
+      MISELL_FAKE_AGE_LOG: fakeAge.log,
+      MISELL_FAKE_AWS_LOG: fakeAws.log,
+      MISELL_FAKE_AGE_FAIL: "1"
+    }
+  });
+  if (result.status === 0) throw new Error("age failure backup unexpectedly succeeded");
+  const files = await fsp.readdir(backupDir).catch(() => []);
+  if (files.some((file) => file.endsWith(".sqlite") || file.endsWith(".sqlite.gz") || file.includes(".tmp-"))) {
+    throw new Error(`age failure left plaintext/temp artifacts: ${JSON.stringify(files)}`);
+  }
+  if (await exists(fakeAws.log)) {
+    const calls = await readJsonl(fakeAws.log);
+    if (calls.length > 0) throw new Error(`age failure still uploaded to s3: ${JSON.stringify(calls)}`);
+  }
+}
+
+function assertEncryptedManifest(manifest) {
+  if (manifest.encrypted !== true) throw new Error(`manifest encrypted flag missing: ${JSON.stringify(manifest)}`);
+  if (manifest.encryption_mode !== "age") throw new Error(`manifest encryption mode missing: ${JSON.stringify(manifest)}`);
+  if (!manifest.backup_file.endsWith(".age")) throw new Error(`manifest backup_file was not .age: ${JSON.stringify(manifest)}`);
+  if (!manifest.plaintext_artifact_sha256 || !manifest.plaintext_artifact_size) {
+    throw new Error(`manifest plaintext artifact metadata missing: ${JSON.stringify(manifest)}`);
+  }
+  if (!manifest.encryption || manifest.encryption.mode !== "age") {
+    throw new Error(`manifest encryption metadata missing: ${JSON.stringify(manifest)}`);
+  }
+  if (manifest.encryption.age_recipient_count !== 1) {
+    throw new Error(`manifest recipient count mismatch: ${JSON.stringify(manifest)}`);
+  }
+  const fingerprints = manifest.encryption.age_recipient_fingerprints || [];
+  if (fingerprints.length !== 1 || !/^[a-f0-9]{64}$/.test(fingerprints[0])) {
+    throw new Error(`manifest recipient fingerprint invalid: ${JSON.stringify(manifest)}`);
+  }
+}
+
 async function runBackup(dbPath, backupDir, options = {}) {
   return runCommand(path.join(appDir, "scripts", "backup-sqlite.sh"), [
     "--backup-dir", backupDir,
@@ -426,6 +600,52 @@ fs.appendFileSync(process.env.MISELL_FAKE_AWS_LOG, JSON.stringify(process.argv.s
   return { bin, log };
 }
 
+async function createFakeAgeCli(tmpDir, label) {
+  const bin = path.join(tmpDir, `${label}.mjs`);
+  const log = path.join(tmpDir, `${label}.jsonl`);
+  const identity = path.join(tmpDir, `${label}.identity`);
+  await fsp.writeFile(identity, "AGE-SECRET-KEY-FAKE-SMOKE\n", { mode: 0o600 });
+  await fsp.writeFile(bin, `#!/usr/bin/env node
+import fs from "fs";
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.MISELL_FAKE_AGE_LOG, JSON.stringify(args) + "\\n");
+if (process.env.MISELL_FAKE_AGE_FAIL === "1") {
+  console.error("fake age failure");
+  process.exit(2);
+}
+const outputIndex = args.findIndex((arg) => arg === "-o" || arg === "--output");
+const outputPath = outputIndex >= 0 ? args[outputIndex + 1] : "";
+const inputPath = args[args.length - 1];
+const decrypt = args.includes("-d") || args.includes("--decrypt");
+if (!outputPath || !inputPath) {
+  console.error("missing input or output");
+  process.exit(2);
+}
+const magic = Buffer.from("FAKEAGE1\\n");
+if (decrypt) {
+  if (!args.includes("-i") && !args.includes("--identity")) {
+    console.error("missing identity");
+    process.exit(2);
+  }
+  const encrypted = fs.readFileSync(inputPath);
+  if (!encrypted.subarray(0, magic.length).equals(magic)) {
+    console.error("invalid fake age payload");
+    process.exit(2);
+  }
+  fs.writeFileSync(outputPath, encrypted.subarray(magic.length), { mode: 0o600 });
+} else {
+  if (!args.includes("-r") && !args.includes("--recipient")) {
+    console.error("missing recipient");
+    process.exit(2);
+  }
+  const plaintext = fs.readFileSync(inputPath);
+  fs.writeFileSync(outputPath, Buffer.concat([magic, plaintext]), { mode: 0o600 });
+}
+`, { mode: 0o700 });
+  await fsp.chmod(bin, 0o700);
+  return { bin, log, identity };
+}
+
 async function assertS3BackupResult(stdout, logPath, expected) {
   const s3Backup = parseOutputPath(stdout, "s3_backup");
   const s3Manifest = parseOutputPath(stdout, "s3_manifest");
@@ -433,11 +653,7 @@ async function assertS3BackupResult(stdout, logPath, expected) {
   if (!s3Backup.startsWith(`${expected.prefix}/misell-cloud-`)) throw new Error(`unexpected s3 backup path: ${s3Backup}`);
   if (s3Manifest !== `${s3Backup}.manifest.json`) throw new Error(`unexpected s3 manifest path: ${s3Manifest}`);
 
-  const calls = (await fsp.readFile(logPath, "utf8"))
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
+  const calls = await readJsonl(logPath);
   if (calls.length !== 2) throw new Error(`expected 2 aws uploads, got ${calls.length}: ${JSON.stringify(calls)}`);
   for (const call of calls) {
     if (expected.endpoint && !call.includes(expected.endpoint)) throw new Error(`missing endpoint arg: ${JSON.stringify(call)}`);
@@ -453,13 +669,31 @@ async function assertS3BackupResult(stdout, logPath, expected) {
   }
 }
 
+async function readJsonl(filePath) {
+  return (await fsp.readFile(filePath, "utf8"))
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+async function exists(filePath) {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function createOldBackupFixtures(backupDir) {
   await fsp.mkdir(backupDir, { recursive: true, mode: 0o755 });
   await fsp.chmod(backupDir, 0o755);
   const oldTime = new Date("2000-01-01T00:00:00.000Z");
   for (const filename of [
     "misell-cloud-20000101-000000.sqlite.gz",
-    "misell-cloud-20000101-000000-000.sqlite.gz"
+    "misell-cloud-20000101-000000-000.sqlite.gz",
+    "misell-cloud-20000101-000000-001.sqlite.gz.age"
   ]) {
     const oldBackup = path.join(backupDir, filename);
     const oldManifest = `${oldBackup}.manifest.json`;

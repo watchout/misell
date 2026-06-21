@@ -5,6 +5,7 @@ import fs from "fs";
 import fsp from "fs/promises";
 import os from "os";
 import path from "path";
+import { spawn } from "child_process";
 import { pipeline } from "stream/promises";
 import { fileURLToPath } from "url";
 import zlib from "zlib";
@@ -37,6 +38,8 @@ const evidenceRetentionDays = boundedInteger(
 );
 const operator = cleanString(args.operator || process.env.MISELL_RESTORE_DRILL_OPERATOR) || "operator";
 const context = cleanString(args.context || process.env.MISELL_RESTORE_DRILL_CONTEXT) || "manual";
+const ageIdentityFile = cleanString(args.age_identity_file || args.age_identity || process.env.MISELL_RESTORE_DRILL_AGE_IDENTITY_FILE);
+const ageCli = cleanString(args.age_cli || process.env.MISELL_RESTORE_DRILL_AGE_CLI || process.env.MISELL_CLOUD_BACKUP_AGE_CLI) || "age";
 const jsonOutput = Boolean(args.json);
 
 main().catch((error) => {
@@ -87,6 +90,8 @@ async function main() {
     const manifest = await readManifest(manifestPath, warnings);
     evidence.manifest = manifest ? {
       compressed: Boolean(manifest.compressed),
+      encrypted: Boolean(manifest.encrypted),
+      encryption_mode: cleanString(manifest.encryption_mode),
       artifact_sha256: cleanString(manifest.artifact_sha256),
       sqlite_sha256: cleanString(manifest.sqlite_sha256),
       integrity_check: cleanString(manifest.integrity_check),
@@ -94,7 +99,7 @@ async function main() {
     } : null;
     verifyManifest(manifest, evidence, failures);
 
-    await restoreSqliteArtifact(backupPath, restoredDbPath);
+    await restoreSqliteArtifact(backupPath, restoredDbPath, manifest, tempDir, evidence, failures);
     evidence.sqlite_sha256 = await sha256File(restoredDbPath);
     if (manifest?.sqlite_sha256 && evidence.sqlite_sha256 !== manifest.sqlite_sha256) {
       failures.push("restored sqlite sha256 does not match manifest sqlite_sha256");
@@ -152,17 +157,63 @@ function verifyManifest(manifest, evidence, failures) {
   }
 }
 
-async function restoreSqliteArtifact(sourcePath, targetPath) {
-  if (sourcePath.endsWith(".gz")) {
+async function restoreSqliteArtifact(sourcePath, targetPath, manifest, tempDir, evidence, failures) {
+  const encrypted = Boolean(manifest?.encrypted) || sourcePath.endsWith(".age");
+  let artifactPath = sourcePath;
+  let compressed = Boolean(manifest?.compressed) || sourcePath.endsWith(".gz") || sourcePath.endsWith(".gz.age");
+
+  evidence.encryption = {
+    encrypted,
+    encryption_mode: encrypted ? cleanString(manifest?.encryption_mode || manifest?.encryption?.mode || "age") : "none"
+  };
+
+  if (encrypted) {
+    if (evidence.encryption.encryption_mode !== "age") {
+      throw new Error(`unsupported backup encryption mode: ${evidence.encryption.encryption_mode}`);
+    }
+    if (!ageIdentityFile) {
+      throw new Error("encrypted backup requires --age-identity-file");
+    }
+    if (!fs.existsSync(ageIdentityFile)) {
+      throw new Error("age identity file not found");
+    }
+    artifactPath = path.join(tempDir, "decrypted-artifact");
+    await decryptArtifactWithAge(sourcePath, artifactPath);
+    await fsp.chmod(artifactPath, 0o600).catch(() => {});
+    evidence.encryption.decrypted = true;
+    if (manifest?.encryption?.age_recipient_fingerprints) {
+      evidence.encryption.age_recipient_fingerprints = manifest.encryption.age_recipient_fingerprints;
+    }
+    evidence.plaintext_artifact_sha256 = await sha256File(artifactPath);
+    evidence.plaintext_artifact_size = (await fsp.stat(artifactPath)).size;
+    if (manifest?.plaintext_artifact_sha256 && evidence.plaintext_artifact_sha256 !== manifest.plaintext_artifact_sha256) {
+      failures.push("decrypted artifact sha256 does not match manifest plaintext_artifact_sha256");
+    }
+    if (manifest?.plaintext_artifact_size && evidence.plaintext_artifact_size !== manifest.plaintext_artifact_size) {
+      failures.push("decrypted artifact size does not match manifest plaintext_artifact_size");
+    }
+    if (!manifest && sourcePath.endsWith(".gz.age")) compressed = true;
+  }
+
+  if (compressed) {
     await pipeline(
-      fs.createReadStream(sourcePath),
+      fs.createReadStream(artifactPath),
       zlib.createGunzip(),
       fs.createWriteStream(targetPath, { mode: 0o600 })
     );
     return;
   }
-  await fsp.copyFile(sourcePath, targetPath);
+  await fsp.copyFile(artifactPath, targetPath);
   await fsp.chmod(targetPath, 0o600).catch(() => {});
+}
+
+async function decryptArtifactWithAge(sourcePath, targetPath) {
+  await runCommand(ageCli, [
+    "-d",
+    "-i", ageIdentityFile,
+    "-o", targetPath,
+    sourcePath
+  ], { label: "age decryption", includeStderr: false });
 }
 
 function checkSqliteIntegrity(db, failures) {
@@ -393,6 +444,41 @@ function parseJson(value) {
   }
 }
 
+function runCommand(command, commandArgs, options = {}) {
+  return new Promise((resolve, reject) => {
+    const label = cleanString(options.label) || command;
+    let settled = false;
+    let stderr = "";
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+    const child = spawn(command, commandArgs, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    child.stdout.resume();
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      finish(new Error(`failed to run ${command}: ${error.message}`));
+    });
+    child.on("close", (status) => {
+      if (status === 0) {
+        finish();
+        return;
+      }
+      const detail = options.includeStderr === false || !stderr.trim() ? "" : `: ${stderr.trim()}`;
+      finish(new Error(`${label} failed with status ${status}${detail}`));
+    });
+  });
+}
+
 async function writeJsonAtomic(filePath, value, mode) {
   const tempPath = `${filePath}.tmp-${process.pid}`;
   await fsp.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode });
@@ -470,10 +556,12 @@ function usage() {
   scripts/restore-drill.mjs --backup PATH [--manifest PATH] [--assets-dir DIR]
                             [--evidence-dir DIR] [--operator NAME]
                             [--context TEXT] [--evidence-retention-days DAYS]
+                            [--age-identity-file PATH] [--age-cli age]
                             [--json]
 
 Verifies a backup artifact without mutating the live DB and writes restore drill
 evidence JSON. If --assets-dir is provided, cloud asset files are checked for
-presence, size, and sha256 against the restored DB catalog.
+presence, size, and sha256 against the restored DB catalog. Encrypted age
+artifacts require an explicit identity file for decrypt-then-verify drills.
 `);
 }

@@ -145,6 +145,7 @@ Useful options:
 ```bash
 scripts/backup-sqlite.sh --backup-dir /secure/backups --retention-days 30
 scripts/backup-sqlite.sh --backup-dir /secure/backups --no-gzip --json
+scripts/backup-sqlite.sh --encryption age --age-recipients age1examplepublicrecipient --require-encryption
 scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-endpoint-url https://s3.example.com
 scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-timeout-ms 300000
 ```
@@ -156,7 +157,41 @@ scripts/setup-macos-backup-launchagent.sh
 scripts/setup-macos-backup-launchagent.sh --apply
 ```
 
-Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days. Local verified backups are the MVP baseline; commercial deployments should still copy encrypted backups to separate storage and run scheduled restore drills.
+Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days. Local verified backups are the MVP baseline; commercial deployments should copy encrypted backups to separate storage and run scheduled restore drills.
+
+For paid/product offsite backups, enable client-side encryption before the
+backup leaves the host. The approved mode is `age` public-key encryption:
+
+```bash
+MISELL_CLOUD_BACKUP_ENCRYPTION=age
+MISELL_CLOUD_BACKUP_REQUIRE_ENCRYPTION=1
+MISELL_CLOUD_BACKUP_AGE_RECIPIENTS=age1examplepublicrecipient
+MISELL_CLOUD_BACKUP_AGE_CLI=age
+```
+
+When encryption is enabled, the job writes a `.sqlite(.gz).age` artifact and a
+manifest. The plaintext `.sqlite` or `.sqlite.gz` artifact is removed after
+encryption succeeds or fails. The manifest records only encryption metadata,
+recipient fingerprints, and artifact hashes; it must not contain private keys,
+identity file paths, passphrases, or decrypted file paths.
+
+The Cloud backup host should store only public recipient strings. Private age
+identity keys are ops/security custody material and must not be stored on the
+Cloud host, in Git, in Cloud DB dumps, in backup archives, in manifests, or in
+restore drill evidence. Losing the private identity key can make encrypted
+backups unrecoverable. Restore/decrypt remains an ops-only process; do not add
+customer/admin self-service backup download, decrypt, delete, or restore flows.
+
+For key rotation, configure both old and new recipients during an overlap
+period:
+
+```bash
+MISELL_CLOUD_BACKUP_AGE_RECIPIENTS=age1oldrecipient,age1newrecipient
+```
+
+Create a new encrypted backup, run a restore drill with the new identity, then
+retire the old recipient only after the new backup set is proven restorable and
+retention requirements for old encrypted backups are understood.
 
 For product operation, keep a second copy outside the VPS or Mac mini. The
 script can upload each backup and manifest to S3-compatible storage when the
@@ -175,7 +210,10 @@ AWS_DEFAULT_REGION=ap-northeast-1
 `MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL` is optional for AWS S3 and required for
 many S3-compatible providers. `MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS` defaults to
 300000 ms per artifact upload. Use a bucket policy or access key that can write
-only to the backup prefix.
+only to the backup prefix. S3 server-side encryption can remain enabled as
+defense-in-depth, but it is not a substitute for client-side `age` encryption.
+When backup encryption is enabled, S3 upload sends the encrypted `.age` artifact
+and its manifest, not the plaintext SQLite/gzip artifact.
 
 Run a restore drill without mutating the live DB:
 
@@ -188,12 +226,27 @@ scripts/restore-drill.sh \
   --context monthly-drill
 ```
 
-The drill decompresses or copies the artifact into a temporary SQLite file,
-opens it read-only, runs `PRAGMA integrity_check`, verifies the backup manifest
-hashes, checks `cloud_assets` and `content_manifest_assets` consistency, checks
-asset file presence/size/sha256 when `--assets-dir` is supplied, and validates
-report snapshot JSON/hash evidence plus daily metrics key uniqueness. It writes
-an auditable JSON result under `MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_DIR`,
+For encrypted backups, supply the identity file explicitly from an ops-controlled
+location:
+
+```bash
+scripts/restore-drill.sh \
+  --backup /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.age \
+  --manifest /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.age.manifest.json \
+  --age-identity-file /secure/offhost/age-identity.txt \
+  --assets-dir /path/to/cloud/assets \
+  --operator ops \
+  --context encrypted-monthly-drill
+```
+
+The drill decrypts encrypted artifacts only when an identity file is explicitly
+provided, then decompresses or copies the artifact into a temporary SQLite file.
+It opens the restored SQLite file read-only, runs `PRAGMA integrity_check`,
+verifies the backup manifest hashes, checks `cloud_assets` and
+`content_manifest_assets` consistency, checks asset file presence/size/sha256
+when `--assets-dir` is supplied, and validates report snapshot JSON/hash evidence
+plus daily metrics key uniqueness. It writes an auditable JSON result under
+`MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_DIR`,
 defaulting to `~/.local/share/misell-cloud/restore-drills`, with file mode 0600.
 Old restore drill evidence files are retained for
 `MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_RETENTION_DAYS`, defaulting to 400 days.
