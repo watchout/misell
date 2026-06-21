@@ -142,6 +142,9 @@ jobs:
       - name: Smoke reporting read model
         run: npm --prefix apps/cloud run smoke:reporting
 
+      - name: Smoke device command queue
+        run: npm --prefix apps/cloud run smoke:device-commands
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest

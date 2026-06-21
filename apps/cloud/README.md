@@ -54,6 +54,33 @@ curl -u admin:change-me \
   http://localhost:3200/api/admin/alert-notifications/test
 ```
 
+## Device Commands
+
+Remote device operations use a pull-based command queue. Cloud stores an
+allowlisted command, and the device polls, claims, executes, and posts a bounded
+result. Cloud never opens inbound SSH to the terminal for these MVP commands.
+
+Command issuance is fail-closed unless the admin process has an explicit role:
+
+```bash
+MISELL_CLOUD_ADMIN_ROLE=device_ops
+```
+
+Allowed roles are `misell_owner`, `misell_operator`, and `device_ops`. The MVP
+command allowlist is:
+
+- `reload_player_content`
+- `sync_content_now`
+- `collect_logs`
+- `restart_player`
+- `restart_kiosk`
+
+`restart_device`, arbitrary shell commands, script paths, command arguments, and
+maintenance tunnels are intentionally not part of this runtime API. Command
+params accept only bounded metadata (`reason`, `label`) and are not expanded
+into shell commands. Device results reject raw `stdout`/`stderr` and store only a
+bounded summary.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:

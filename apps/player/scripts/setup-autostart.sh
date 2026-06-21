@@ -15,6 +15,7 @@ INSTALL_KIOSK="${INSTALL_KIOSK:-1}"
 INSTALL_HEARTBEAT="${INSTALL_HEARTBEAT:-0}"
 INSTALL_UPDATE="${INSTALL_UPDATE:-0}"
 INSTALL_CONTENT_SYNC="${INSTALL_CONTENT_SYNC:-0}"
+INSTALL_COMMAND_RUNNER="${INSTALL_COMMAND_RUNNER:-0}"
 INSTALL_LOG_ROTATE="${INSTALL_LOG_ROTATE:-1}"
 
 mkdir -p "${SYSTEMD_USER_DIR}"
@@ -70,6 +71,7 @@ ensure_env_setting "MISELL_CONTENT_BACKUP_DIR" "${MISELL_CONTENT_BACKUP_DIR}"
 ensure_env_setting "MISELL_PLAYLIST_PATH" "${MISELL_DATA_DIR}/playlist.json"
 ensure_env_setting "MISELL_DEVICE_CONFIG_PATH" "${MISELL_DATA_DIR}/config.json"
 ensure_env_setting "MISELL_LOCAL_STATE_DB_PATH" "${MISELL_DATA_DIR}/local_state.sqlite"
+ensure_env_setting "MISELL_COMMAND_RUNNER_ENABLED" "${MISELL_COMMAND_RUNNER_ENABLED:-0}"
 
 sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-player.service" \
   > "${SYSTEMD_USER_DIR}/misell-player.service"
@@ -98,6 +100,13 @@ if [[ "${INSTALL_CONTENT_SYNC}" == "1" ]]; then
     > "${SYSTEMD_USER_DIR}/misell-content-sync.service"
   sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-content-sync.timer" \
     > "${SYSTEMD_USER_DIR}/misell-content-sync.timer"
+fi
+
+if [[ "${INSTALL_COMMAND_RUNNER}" == "1" ]]; then
+  sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-command-runner.service" \
+    > "${SYSTEMD_USER_DIR}/misell-command-runner.service"
+  sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-command-runner.timer" \
+    > "${SYSTEMD_USER_DIR}/misell-command-runner.timer"
 fi
 
 if [[ "${INSTALL_LOG_ROTATE}" == "1" ]]; then
@@ -129,6 +138,10 @@ if [[ "${INSTALL_CONTENT_SYNC}" == "1" ]]; then
   systemctl --user enable --now misell-content-sync.timer
 fi
 
+if [[ "${INSTALL_COMMAND_RUNNER}" == "1" ]]; then
+  systemctl --user enable --now misell-command-runner.timer
+fi
+
 if [[ "${INSTALL_LOG_ROTATE}" == "1" ]]; then
   systemctl --user enable --now misell-log-rotate.timer
 fi
@@ -139,5 +152,6 @@ echo "Kiosk status:  systemctl --user status misell-kiosk.service"
 echo "Heartbeat timer: systemctl --user status misell-heartbeat.timer"
 echo "Update timer: systemctl --user status misell-update.timer"
 echo "Content sync timer: systemctl --user status misell-content-sync.timer"
+echo "Command runner timer: systemctl --user status misell-command-runner.timer"
 echo "Log rotate timer: systemctl --user status misell-log-rotate.timer"
 echo "For boot without manual login, consider: sudo loginctl enable-linger ${USER}"

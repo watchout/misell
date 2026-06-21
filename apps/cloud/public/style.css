@@ -159,11 +159,18 @@ td small {
   margin-top: 3px;
 }
 
-.device-action {
+.device-action,
+.command-action {
   display: grid;
   gap: 6px;
   grid-template-columns: minmax(92px, 120px) minmax(140px, 1fr) auto;
   min-width: 360px;
+}
+
+.command-action {
+  border-top: 1px solid #e5e9ee;
+  margin-top: 8px;
+  padding-top: 8px;
 }
 
 .update-action {
@@ -181,11 +188,13 @@ td small {
 }
 
 .device-action button,
+.command-action button,
 .update-action button,
 .token-action button {
   min-height: 34px;
 }
 
+.command-action small,
 .token-action input,
 .token-action small {
   grid-column: 1 / -1;
@@ -211,19 +220,25 @@ td small {
 
 .update-status-pending,
 .update-status-checking,
-.update-status-updating {
+.update-status-updating,
+.update-status-queued,
+.update-status-claimed,
+.update-status-running {
   background: #fff1cc;
   border-color: #f0ce6a;
   color: #805600;
 }
 
-.update-status-success {
+.update-status-success,
+.update-status-succeeded {
   background: #dff5e7;
   border-color: #a8dbc0;
   color: #176b3a;
 }
 
-.update-status-failed {
+.update-status-failed,
+.update-status-cancelled,
+.update-status-expired {
   background: #ffe1df;
   border-color: #f0b8b3;
   color: #a83228;
