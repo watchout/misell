@@ -15,6 +15,8 @@ const multer = require("multer");
 const { nanoid } = require("nanoid");
 const QRCode = require("qrcode");
 
+const { PLAYLOG_ENDPOINT, openLocalState } = require("./lib/local-state");
+
 const app = express();
 const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -30,6 +32,7 @@ const CONTENT_BACKUP_DIR = runtimePath("MISELL_CONTENT_BACKUP_DIR", path.join(DA
 const PLAYLIST_PATH = runtimePath("MISELL_PLAYLIST_PATH", path.join(DATA_DIR, "playlist.json"));
 const PLAYLIST_SCHEMA_PATH = runtimePath("MISELL_PLAYLIST_SCHEMA_PATH", path.join(ROOT_DIR, "data", "playlist.schema.json"));
 const DEVICE_CONFIG_PATH = runtimePath("MISELL_DEVICE_CONFIG_PATH", path.join(DATA_DIR, "config.json"));
+const LOCAL_STATE_DB_PATH = runtimePath("MISELL_LOCAL_STATE_DB_PATH", path.join(DATA_DIR, "local_state.sqlite"));
 const PLAYLOG_KEY = "playlog";
 const ADMIN_LOG_KEY = "admin";
 const ERROR_LOG_KEY = "error";
@@ -80,6 +83,8 @@ let deviceIdentity = null;
 let deviceSecrets = null;
 let validatePlaylistDocument = null;
 let lastPlayback = null;
+let localState = null;
+let localStateError = "";
 
 const defaultPlaylist = {
   version: 1,
@@ -117,7 +122,7 @@ const defaultPlaylist = {
   ]
 };
 
-async function ensureRuntimeFiles() {
+async function ensureRuntimeFiles(options = {}) {
   await Promise.all([
     fsp.mkdir(DATA_DIR, { recursive: true }),
     fsp.mkdir(path.dirname(PLAYLIST_PATH), { recursive: true }),
@@ -152,6 +157,19 @@ async function ensureRuntimeFiles() {
     ensureFile(logFilePath(ADMIN_LOG_KEY)),
     ensureFile(logFilePath(ERROR_LOG_KEY))
   ]);
+  if (options.openLocalState !== false) {
+    try {
+      localState = openLocalState(LOCAL_STATE_DB_PATH);
+      localStateError = "";
+    } catch (error) {
+      localState = null;
+      localStateError = "local_state open failed";
+      await appendJsonl(ERROR_LOG_KEY, {
+        action: "local_state.open_failed",
+        message: error.message || localStateError
+      }).catch(() => {});
+    }
+  }
 }
 
 function runtimePath(envName, fallbackPath) {
@@ -371,8 +389,31 @@ async function buildStatusPayload() {
     network_status: "unknown",
     display_status: process.env.DISPLAY ? "display-env-present" : "unknown",
     device_token_configured: Boolean(deviceSecrets?.device_token_configured),
+    local_state: safeLocalStateSummary(),
+    local_state_error: localStateError || null,
     last_error: lastError
   };
+}
+
+function safeLocalStateSummary() {
+  if (localStateError && !localState) {
+    return { ok: false, error: localStateError };
+  }
+  if (!localState) return null;
+  try {
+    localStateError = "";
+    return {
+      ok: true,
+      ...localState.summary({ include_db_path: false })
+    };
+  } catch (error) {
+    localStateError = "local_state summary failed";
+    appendJsonl(ERROR_LOG_KEY, {
+      action: "local_state.summary_failed",
+      message: error.message || localStateError
+    }).catch(() => {});
+    return { ok: false, error: localStateError };
+  }
 }
 
 async function getDiskFreeMb(targetDir) {
@@ -2313,7 +2354,13 @@ app.get("/api/events", (req, res) => {
 app.post("/api/playback-log", async (req, res, next) => {
   try {
     const body = req.body || {};
+    const timestamp = cleanString(body.timestamp || body.occurred_at || body.occurredAt) || new Date().toISOString();
+    const playbackId = cleanString(body.playback_id || body.playbackId) || nanoid(12);
     const entry = {
+      event_id: cleanString(body.event_id || body.eventId) || `play-${playbackId}`,
+      event_type: cleanString(body.event_type || body.eventType || "playback"),
+      timestamp,
+      playback_id: playbackId,
       playlist_version: cleanString(body.playlist_version),
       playlist_item_id: cleanString(body.playlist_item_id || body.itemId),
       itemId: cleanString(body.itemId),
@@ -2326,8 +2373,7 @@ app.post("/api/playback-log", async (req, res, next) => {
       duration: clampInt(body.duration, 0, 0, 300),
       result: cleanString(body.result || "started")
     };
-    rememberPlayback(entry);
-    await appendJsonl(PLAYLOG_KEY, entry);
+    await persistPlaybackLog(entry);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -2337,7 +2383,13 @@ app.post("/api/playback-log", async (req, res, next) => {
 app.post("/api/log/play", async (req, res, next) => {
   try {
     const body = req.body || {};
+    const timestamp = cleanString(body.timestamp || body.occurred_at || body.occurredAt) || new Date().toISOString();
+    const playbackId = cleanString(body.playback_id || body.playbackId) || nanoid(12);
     const entry = {
+      event_id: cleanString(body.event_id || body.eventId) || `play-${playbackId}`,
+      event_type: cleanString(body.event_type || body.eventType || "playback"),
+      timestamp,
+      playback_id: playbackId,
       playlist_version: cleanString(body.playlist_version),
       playlist_item_id: cleanString(body.playlist_item_id || body.item_id || body.itemId),
       itemId: cleanString(body.itemId || body.item_id),
@@ -2350,8 +2402,7 @@ app.post("/api/log/play", async (req, res, next) => {
       duration: clampInt(body.duration, 0, 0, 300),
       result: cleanString(body.result || "started")
     };
-    rememberPlayback(entry);
-    await appendJsonl(PLAYLOG_KEY, entry);
+    await persistPlaybackLog(entry);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -2360,11 +2411,54 @@ app.post("/api/log/play", async (req, res, next) => {
 
 function rememberPlayback(entry) {
   lastPlayback = {
-    timestamp: new Date().toISOString(),
+    timestamp: cleanString(entry.timestamp) || new Date().toISOString(),
     item_id: cleanString(entry.item_id || entry.playlist_item_id || entry.itemId),
     layout: cleanString(entry.layout),
     result: cleanString(entry.result)
   };
+}
+
+async function persistPlaybackLog(entry) {
+  rememberPlayback(entry);
+  let queuedToLocalState = false;
+  let localStateQueueError = "";
+  try {
+    enqueuePlaybackLog(entry);
+    queuedToLocalState = true;
+  } catch (error) {
+    localStateQueueError = error.message || "local state enqueue failed";
+  }
+
+  await appendJsonl(PLAYLOG_KEY, {
+    ...entry,
+    queued_to_local_state: queuedToLocalState,
+    local_state_error: localStateQueueError
+  });
+
+  if (localStateQueueError) {
+    await appendJsonl(ERROR_LOG_KEY, {
+      action: "local_state.enqueue_playlog_failed",
+      event_id: cleanString(entry.event_id),
+      message: localStateQueueError
+    });
+  }
+}
+
+function enqueuePlaybackLog(entry) {
+  if (!localState) throw new Error(localStateError || "local state unavailable");
+  const occurredAt = cleanString(entry.timestamp) || new Date().toISOString();
+  const payload = {
+    ...deviceIdentity,
+    ...entry,
+    occurred_at: occurredAt,
+    timestamp: occurredAt
+  };
+  localState.enqueueOutboundEvent({
+    event_id: entry.event_id,
+    event_type: "playlog",
+    endpoint: PLAYLOG_ENDPOINT,
+    payload
+  });
 }
 
 app.use((req, res) => {
@@ -2387,7 +2481,7 @@ app.use((error, req, res, next) => {
 });
 
 async function runValidatePlaylistCli() {
-  await ensureRuntimeFiles();
+  await ensureRuntimeFiles({ openLocalState: false });
   const playlist = await readPlaylist({ validateSourceExists: true });
   console.log(JSON.stringify(playlistResponse(playlist), null, 2));
 }
