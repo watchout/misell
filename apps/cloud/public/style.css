@@ -194,6 +194,11 @@ td small {
   min-height: 34px;
 }
 
+.command-force-cancel {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
 .command-action small,
 .token-action input,
 .token-action small {
@@ -238,7 +243,9 @@ td small {
 
 .update-status-failed,
 .update-status-cancelled,
-.update-status-expired {
+.update-status-expired,
+.update-status-stale,
+.update-status-force_cancelled {
   background: #ffe1df;
   border-color: #f0b8b3;
   color: #a83228;

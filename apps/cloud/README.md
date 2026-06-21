@@ -81,6 +81,24 @@ params accept only bounded metadata (`reason`, `label`) and are not expanded
 into shell commands. Device results reject raw `stdout`/`stderr` and store only a
 bounded summary.
 
+Command hardening settings:
+
+```bash
+MISELL_DEVICE_COMMAND_CLAIM_LEASE_SECONDS=300
+MISELL_DEVICE_COMMAND_RETENTION_DAYS=90
+```
+
+Claimed commands are not requeued automatically. If a device runner crashes or
+loses network and does not post a result before the claim lease expires, Cloud
+marks the command terminal `stale` and requires an operator to create a fresh
+command. This avoids accidental double execution.
+
+Operators with an allowed issuer role can force-cancel a non-terminal command
+from the Admin UI or API. Force-cancel writes an audit event with the actor,
+reason, previous status, and command scope. Terminal commands are retained for
+the configured retention window and then purged; active `queued` / `claimed`
+work is never purged by retention.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
