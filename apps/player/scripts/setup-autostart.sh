@@ -69,6 +69,7 @@ ensure_env_setting "MISELL_LOG_DIR" "${MISELL_LOG_DIR}"
 ensure_env_setting "MISELL_CONTENT_BACKUP_DIR" "${MISELL_CONTENT_BACKUP_DIR}"
 ensure_env_setting "MISELL_PLAYLIST_PATH" "${MISELL_DATA_DIR}/playlist.json"
 ensure_env_setting "MISELL_DEVICE_CONFIG_PATH" "${MISELL_DATA_DIR}/config.json"
+ensure_env_setting "MISELL_LOCAL_STATE_DB_PATH" "${MISELL_DATA_DIR}/local_state.sqlite"
 
 sed "s#__MISELL_HOME__#${APP_DIR}#g" "${APP_DIR}/systemd/misell-player.service" \
   > "${SYSTEMD_USER_DIR}/misell-player.service"

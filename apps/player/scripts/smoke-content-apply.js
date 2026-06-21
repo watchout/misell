@@ -1,0 +1,273 @@
+#!/usr/bin/env node
+
+const crypto = require("crypto");
+const fs = require("fs/promises");
+const http = require("http");
+const os = require("os");
+const path = require("path");
+const { spawn } = require("child_process");
+
+const appDir = path.resolve(__dirname, "..");
+const token = "token-content-smoke";
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+async function main() {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "misell-player-content-apply."));
+  const dataDir = path.join(tmpDir, "data");
+  const assetsDir = path.join(tmpDir, "assets");
+  const playlistPath = path.join(dataDir, "playlist.json");
+  const localStatePath = path.join(dataDir, "local_state.sqlite");
+  const requests = {
+    assetResults: [],
+    contentResults: []
+  };
+  let policy = null;
+  let assetBytes = new Map();
+
+  try {
+    await fs.mkdir(dataDir, { recursive: true });
+    await writePlaylist(playlistPath, "pl-original", "/demo/wide.html");
+
+    const server = http.createServer(async (req, res) => {
+      if (req.headers.authorization !== `Bearer ${token}`) {
+        res.writeHead(401).end("unauthorized");
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/device/content-policy") {
+        json(res, policy);
+        return;
+      }
+      if (req.method === "GET" && req.url?.startsWith("/api/device/assets/")) {
+        const assetId = decodeURIComponent(req.url.split("/")[4] || "");
+        const bytes = assetBytes.get(assetId);
+        if (!bytes) {
+          res.writeHead(404).end("missing asset");
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/octet-stream" }).end(bytes);
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/device/asset-result") {
+        requests.assetResults.push(await readJson(req));
+        json(res, { ok: true });
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/device/content-result") {
+        requests.contentResults.push(await readJson(req));
+        json(res, { ok: true });
+        return;
+      }
+      res.writeHead(404).end("not found");
+    });
+
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const goodBytes = Buffer.from("good video bytes");
+      policy = buildPolicy({
+        contentId: "content-good",
+        playlistVersion: "pl-good",
+        assetId: "asset-good",
+        targetPath: "/assets/videos/good.mp4",
+        expectedBytes: goodBytes
+      });
+      assetBytes = new Map([["asset-good", goodBytes]]);
+      const success = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath);
+      if (success.status !== 0) {
+        throw new Error(`content sync success case failed:\n${success.stdout}\n${success.stderr}`);
+      }
+      const goodPlaylist = await readPlaylist(playlistPath);
+      if (goodPlaylist.playlist_version !== "pl-good") {
+        throw new Error(`playlist was not applied: ${JSON.stringify(goodPlaylist)}`);
+      }
+      await fs.access(path.join(assetsDir, "videos", "good.mp4"));
+
+      const dryRunBytes = Buffer.from("dry run video bytes");
+      policy = buildPolicy({
+        contentId: "content-dry-run",
+        playlistVersion: "pl-dry-run",
+        assetId: "asset-dry-run",
+        targetPath: "/assets/videos/dry-run.mp4",
+        expectedBytes: dryRunBytes
+      });
+      assetBytes = new Map();
+      const dryRun = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, ["--dry-run"]);
+      if (dryRun.status !== 0) {
+        throw new Error(`content sync dry-run failed:\n${dryRun.stdout}\n${dryRun.stderr}`);
+      }
+      const afterDryRunPlaylist = await readPlaylist(playlistPath);
+      if (afterDryRunPlaylist.playlist_version !== "pl-good") {
+        throw new Error(`dry-run changed playlist: ${JSON.stringify(afterDryRunPlaylist)}`);
+      }
+
+      const expectedBadBytes = Buffer.from("expected video bytes");
+      const tamperedBytes = Buffer.from("tampered video bytes");
+      policy = buildPolicy({
+        contentId: "content-bad",
+        playlistVersion: "pl-bad",
+        assetId: "asset-bad",
+        targetPath: "/assets/videos/bad.mp4",
+        expectedBytes: expectedBadBytes
+      });
+      assetBytes = new Map([["asset-bad", tamperedBytes]]);
+      const failed = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath);
+      if (failed.status === 0) {
+        throw new Error(`content sync unexpectedly succeeded:\n${failed.stdout}\n${failed.stderr}`);
+      }
+      const afterFailurePlaylist = await readPlaylist(playlistPath);
+      if (afterFailurePlaylist.playlist_version !== "pl-good") {
+        throw new Error(`failed content apply changed playlist: ${JSON.stringify(afterFailurePlaylist)}`);
+      }
+      const quarantineDir = path.join(assetsDir, ".quarantine");
+      const quarantineFiles = await fs.readdir(quarantineDir);
+      if (!quarantineFiles.some((file) => file.startsWith("asset-bad."))) {
+        throw new Error(`tampered asset was not quarantined: ${JSON.stringify(quarantineFiles)}`);
+      }
+      if (!requests.assetResults.some((result) => result.asset_id === "asset-bad" && result.status === "failed")) {
+        throw new Error(`asset failure was not reported: ${JSON.stringify(requests.assetResults)}`);
+      }
+      if (!requests.contentResults.some((result) => result.playlist_version === "pl-bad" && result.status === "failed")) {
+        throw new Error(`content failure was not reported: ${JSON.stringify(requests.contentResults)}`);
+      }
+
+      console.log(JSON.stringify({
+        ok: true,
+        content_apply_success: true,
+        dry_run_skips_apply_verification: true,
+        asset_verification_blocks_apply: true,
+        hash_mismatch_quarantine: true
+      }, null, 2));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function buildPolicy({ contentId, playlistVersion, assetId, targetPath, expectedBytes }) {
+  const sha256 = sha256Buffer(expectedBytes);
+  return {
+    ok: true,
+    device_id: "DEV-CONTENT-SMOKE",
+    current: {
+      playlist_version: "pl-current",
+      release_channel: "stable"
+    },
+    content: {
+      required: true,
+      status: "pending",
+      source: "content_manifest",
+      content_id: contentId,
+      playlist_version: playlistVersion,
+      release_channel: "stable",
+      assets: [
+        {
+          asset_id: assetId,
+          target_path: targetPath,
+          download_url: `/api/device/assets/${encodeURIComponent(assetId)}/download`,
+          sha256,
+          size: expectedBytes.length,
+          required: true
+        }
+      ],
+      playlist: {
+        version: 1,
+        playlist_version: playlistVersion,
+        updatedAt: "2026-06-20T00:00:00.000Z",
+        items: [
+          {
+            item_id: `${assetId}-slot`,
+            name: assetId,
+            enabled: true,
+            layout: "wide",
+            duration: 5,
+            wide: targetPath
+          }
+        ]
+      }
+    }
+  };
+}
+
+function runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, args = []) {
+  return runCommand(path.join(appDir, "scripts", "sync-content.sh"), args, {
+    cwd: appDir,
+    env: {
+      ...process.env,
+      MISELL_ENV_FILE: path.join(tmpDir, "missing-env"),
+      MISELL_DATA_DIR: path.dirname(playlistPath),
+      MISELL_PLAYLIST_PATH: playlistPath,
+      MISELL_ASSETS_DIR: assetsDir,
+      MISELL_LOCAL_STATE_DB_PATH: localStatePath,
+      MISELL_CONTENT_URL: `${baseUrl}/api/device/content-policy`,
+      MISELL_CONTENT_RESULT_URL: `${baseUrl}/api/device/content-result`,
+      MISELL_ASSET_RESULT_URL: `${baseUrl}/api/device/asset-result`,
+      MISELL_CLOUD_BASE_URL: baseUrl,
+      MISELL_DEVICE_TOKEN: token
+    }
+  });
+}
+
+function runCommand(command, args, options) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      ...options,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status, signal) => {
+      resolve({ status, signal, stdout, stderr });
+    });
+  });
+}
+
+async function writePlaylist(playlistPath, playlistVersion, wide) {
+  await fs.mkdir(path.dirname(playlistPath), { recursive: true });
+  await fs.writeFile(playlistPath, `${JSON.stringify({
+    version: 1,
+    playlist_version: playlistVersion,
+    updatedAt: "2026-06-20T00:00:00.000Z",
+    items: [
+      {
+        item_id: "original-slot",
+        name: "Original",
+        enabled: true,
+        layout: "wide",
+        duration: 5,
+        wide
+      }
+    ]
+  }, null, 2)}\n`);
+}
+
+async function readPlaylist(playlistPath) {
+  return JSON.parse(await fs.readFile(playlistPath, "utf8"));
+}
+
+async function readJson(req) {
+  let body = "";
+  for await (const chunk of req) body += chunk;
+  return JSON.parse(body || "{}");
+}
+
+function json(res, payload) {
+  res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(payload));
+}
+
+function sha256Buffer(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}

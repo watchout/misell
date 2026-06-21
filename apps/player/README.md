@@ -334,4 +334,59 @@ Dry-run:
 scripts/sync-content.sh --dry-run
 ```
 
-The script backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud.
+The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud. If a downloaded asset does not match the manifest sha256, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
+
+Dry-run lists the asset work without requiring new files to already exist locally. Set `MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=1` only when you explicitly want dry-run to fail on missing or mismatched local assets.
+
+Asset verification is enabled by default:
+
+```bash
+MISELL_VERIFY_CONTENT_ASSETS=1
+MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=0
+MISELL_ASSET_QUARANTINE_DIR=/path/to/quarantine
+```
+
+## Local State SQLite
+
+Player keeps JSON/JSONL files for operator-readable local evidence and also maintains `local_state.sqlite` for resumable device state.
+
+Default path:
+
+```bash
+${MISELL_DATA_DIR}/local_state.sqlite
+```
+
+Override with:
+
+```bash
+MISELL_LOCAL_STATE_DB_PATH=/path/to/local_state.sqlite
+```
+
+The database stores:
+
+- outbound playlog events waiting for Cloud backfill
+- applied content manifest history
+- local asset sync state
+
+Playback logs are still appended to `logs/playlog.jsonl`. New playback events are also queued in SQLite and can be synced to Cloud:
+
+```bash
+npm run playlogs:sync
+```
+
+When `MISELL_HEARTBEAT_URL` points at `/api/device/heartbeat`, `scripts/emit-heartbeat.sh` derives `/api/device/playlog` and runs playlog sync after a successful heartbeat. Set `MISELL_SKIP_PLAYLOG_SYNC=1` to disable that best-effort backfill.
+
+Playlog sync settings:
+
+```bash
+MISELL_PLAYLOG_SYNC_TIMEOUT_MS=15000
+MISELL_PLAYLOG_SENT_RETENTION_DAYS=30
+```
+
+Only playback events created after this local-state deployment are queued in SQLite. Existing `logs/playlog.jsonl` rows are not migrated or backfilled by this PR.
+
+Inspect local state:
+
+```bash
+npm run local-state:summary
+```

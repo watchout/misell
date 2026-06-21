@@ -26,6 +26,15 @@
 - 放映ログ/QRログをクラウドへ送信
 - 稼働状況を確認
 
+## Store Commerce / QRの互換方針
+
+Remote CMSではCloudを店舗設定、offer revision、QR link、counter order、device event idempotencyの正本にする。
+
+- 締め時刻は店舗ごとの `business_day_start_time` を基準にした業務日タイムラインで判定する。日跨ぎ営業では、単純な同日 `HH:mm` 比較を使わない。
+- counter-order QR linkは通常 `offers.current_offer_revision_id` をscan/order時に解決する。既存掲示QRをrevision切替で壊さない。
+- 特定revisionへ固定したい場合のみ、管理側が `offer_revision_id` または `pin_offer_revision` を指定する。
+- device playlogのsenderは安定した `event_id` を送る。rollout中の既存sender互換として、Cloudは `event_id` なしpayloadを受け付け、deterministicな `legacy-*` idを生成する。
+
 ## Remote CMSの基本機能
 
 ### 1. 店舗管理
@@ -283,6 +292,8 @@ item項目：
 ### POST /api/device/playlog
 
 放映ログ送信。
+
+`event_id` 付き送信を標準とする。既存sender互換のため、`event_id` がないpayloadもCloud側で `legacy-*` idを生成して受け付ける。同じ `(tenant_id, device_id, event_id)` は冪等に扱う。
 
 ### POST /api/device/error
 

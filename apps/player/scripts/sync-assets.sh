@@ -9,6 +9,7 @@ ASSET_RESULT_URL="${MISELL_ASSET_RESULT_URL:-}"
 CLOUD_BASE_URL="${MISELL_CLOUD_BASE_URL:-}"
 DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
 ASSETS_DIR="${MISELL_ASSETS_DIR:-${APP_DIR}/assets}"
+ASSET_QUARANTINE_DIR="${MISELL_ASSET_QUARANTINE_DIR:-}"
 LOCK_FILE="${MISELL_ASSET_SYNC_LOCK_FILE:-${HOME}/.local/share/misell-player/asset-sync.lock}"
 APPLY=1
 
@@ -51,7 +52,10 @@ if [[ -f "${ENV_FILE}" ]]; then
   CLOUD_BASE_URL="${MISELL_CLOUD_BASE_URL:-${CLOUD_BASE_URL}}"
   DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
   ASSETS_DIR="${MISELL_ASSETS_DIR:-${ASSETS_DIR}}"
+  ASSET_QUARANTINE_DIR="${MISELL_ASSET_QUARANTINE_DIR:-${ASSET_QUARANTINE_DIR}}"
 fi
+
+ASSET_QUARANTINE_DIR="${ASSET_QUARANTINE_DIR:-${ASSETS_DIR}/.quarantine}"
 
 derive_asset_urls() {
   if [[ "${HEARTBEAT_URL}" == */api/device/heartbeat ]]; then
@@ -137,6 +141,23 @@ sha256_file() {
   '
 }
 
+quarantine_file() {
+  local source_path="$1"
+  local asset_id="$2"
+  local actual_sha="$3"
+  local safe_asset_id="${asset_id//[^a-zA-Z0-9_.:-]/-}"
+  local timestamp
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  safe_asset_id="${safe_asset_id:-asset}"
+  mkdir -p "${ASSET_QUARANTINE_DIR}"
+  local quarantine_path="${ASSET_QUARANTINE_DIR}/${safe_asset_id}.${actual_sha:0:16}.${timestamp}.quarantine"
+  if ! mv "${source_path}" "${quarantine_path}"; then
+    return 1
+  fi
+  chmod 600 "${quarantine_path}" 2>/dev/null || true
+  printf '%s' "${quarantine_path}"
+}
+
 resolve_download_url() {
   local download_url="$1"
   if [[ "${download_url}" == http://* || "${download_url}" == https://* ]]; then
@@ -193,6 +214,7 @@ post_asset_result() {
   local local_path="${5:-}"
   local sha256="${6:-}"
   local size="${7:-0}"
+  record_local_asset_state "${status}" "${message}" "${asset_id}" "${target_path}" "${local_path}" "${sha256}" "${size}"
   if [[ -z "${ASSET_RESULT_URL}" || "${APPLY}" != "1" ]]; then
     return 0
   fi
@@ -205,6 +227,31 @@ post_asset_result() {
     --data-binary "${payload}" \
     "${ASSET_RESULT_URL}" >/dev/null || {
       echo "Could not report asset ${status} to cloud: ${asset_id}" >&2
+      return 0
+    }
+}
+
+record_local_asset_state() {
+  local status="$1"
+  local message="${2:-}"
+  local asset_id="$3"
+  local target_path="$4"
+  local local_path="${5:-}"
+  local sha256="${6:-}"
+  local size="${7:-0}"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  node "${APP_DIR}/scripts/local-state.js" record-asset \
+    --status "${status}" \
+    --message "${message}" \
+    --content-id "${CONTENT_ID:-}" \
+    --asset-id "${asset_id}" \
+    --target-path "${target_path}" \
+    --local-path "${local_path}" \
+    --sha256 "${sha256}" \
+    --size "${size}" >/dev/null || {
+      echo "Could not record local asset state: ${asset_id}" >&2
       return 0
     }
 }
@@ -316,8 +363,13 @@ while IFS=$'\t' read -r asset_id target_path download_url expected_sha expected_
 
   actual_sha="$(sha256_file "${temp_file}")"
   if [[ "${actual_sha}" != "${expected_sha}" ]]; then
-    rm -f "${temp_file}"
-    post_asset_result "failed" "asset sha256 mismatch" "${asset_id}" "${target_path}" "${local_path}" "${actual_sha}" "${expected_size}"
+    quarantine_path=""
+    if quarantine_path="$(quarantine_file "${temp_file}" "${asset_id}" "${actual_sha}")"; then
+      post_asset_result "failed" "asset sha256 mismatch; quarantined" "${asset_id}" "${target_path}" "${quarantine_path}" "${actual_sha}" "${expected_size}"
+    else
+      rm -f "${temp_file}"
+      post_asset_result "failed" "asset sha256 mismatch; quarantine failed" "${asset_id}" "${target_path}" "${local_path}" "${actual_sha}" "${expected_size}"
+    fi
     [[ "${required}" == "1" ]] && failed=1
     continue
   fi
