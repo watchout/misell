@@ -10,7 +10,7 @@
     "validate:playlist": "npm --prefix apps/player run validate:playlist",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.js",
     "test:e2e:headed": "playwright test --config tests/e2e/playwright.config.js --headed",
-    "test:ci": "npm run check:player && npm --prefix apps/player run smoke:content-apply && npm run validate:playlist && npm run check:cloud && npm --prefix apps/cloud run smoke:backup && npm --prefix apps/cloud run smoke:reporting && npm --prefix apps/cloud run smoke:device-commands && npm run check:shell && npm run test:e2e"
+    "test:ci": "npm run check:player && npm --prefix apps/player run smoke:local-state && npm --prefix apps/player run smoke:content-apply && npm run validate:playlist && npm run check:cloud && npm --prefix apps/cloud run smoke:backup && npm --prefix apps/cloud run smoke:reporting && npm --prefix apps/cloud run smoke:device-commands && npm run check:shell && npm run test:e2e"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0"

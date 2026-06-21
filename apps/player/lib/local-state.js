@@ -4,9 +4,19 @@ const path = require("path");
 
 const Database = require("better-sqlite3");
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const PLAYLOG_ENDPOINT = "/api/device/playlog";
+const ERROR_ENDPOINT = "/api/device/error";
+const CONTENT_RESULT_ENDPOINT = "/api/device/content-result";
+const ASSET_RESULT_ENDPOINT = "/api/device/asset-result";
+const OUTBOUND_ENDPOINTS = new Set([
+  PLAYLOG_ENDPOINT,
+  ERROR_ENDPOINT,
+  CONTENT_RESULT_ENDPOINT,
+  ASSET_RESULT_ENDPOINT
+]);
 const EVENT_ID_PATTERN = /^[a-zA-Z0-9_.:-]{1,160}$/;
+const MAX_OUTBOUND_PAYLOAD_BYTES = 16 * 1024;
 
 function openLocalState(dbPath) {
   if (!dbPath) throw new Error("local state dbPath is required");
@@ -87,6 +97,28 @@ function applySchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_local_asset_states_status
       ON local_asset_states(status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS content_apply_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL UNIQUE,
+      content_id TEXT,
+      playlist_version TEXT,
+      source TEXT,
+      status TEXT NOT NULL,
+      previous_playlist_version TEXT,
+      playlist_sha256 TEXT,
+      message TEXT,
+      manifest_json TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_content_apply_jobs_latest
+      ON content_apply_jobs(updated_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_content_apply_jobs_status
+      ON content_apply_jobs(status, updated_at DESC);
   `);
 
   addColumnIfMissing(db, "outbound_events", "claim_token", "TEXT");
@@ -202,15 +234,49 @@ class LocalState {
           message = excluded.message,
           updated_at = excluded.updated_at
       `),
+      applyJobUpsert: db.prepare(`
+        INSERT INTO content_apply_jobs (
+          job_id, content_id, playlist_version, source, status,
+          previous_playlist_version, playlist_sha256, message, manifest_json,
+          started_at, completed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id) DO UPDATE SET
+          content_id = excluded.content_id,
+          playlist_version = excluded.playlist_version,
+          source = excluded.source,
+          status = excluded.status,
+          previous_playlist_version = excluded.previous_playlist_version,
+          playlist_sha256 = excluded.playlist_sha256,
+          message = excluded.message,
+          manifest_json = excluded.manifest_json,
+          started_at = COALESCE(NULLIF(content_apply_jobs.started_at, ''), excluded.started_at),
+          completed_at = excluded.completed_at,
+          updated_at = excluded.updated_at
+      `),
       outboundStatusCounts: db.prepare(`
         SELECT status, COUNT(*) AS count
         FROM outbound_events
         GROUP BY status
       `),
+      outboundStatusCountsByEndpoint: db.prepare(`
+        SELECT endpoint, status, COUNT(*) AS count
+        FROM outbound_events
+        GROUP BY endpoint, status
+      `),
       latestContent: db.prepare(`
         SELECT * FROM applied_content
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
+      `),
+      latestApplyJob: db.prepare(`
+        SELECT * FROM content_apply_jobs
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      `),
+      applyJobStatusCounts: db.prepare(`
+        SELECT status, COUNT(*) AS count
+        FROM content_apply_jobs
+        GROUP BY status
       `),
       assetStatusCounts: db.prepare(`
         SELECT status, COUNT(*) AS count
@@ -227,21 +293,22 @@ class LocalState {
     if (existing) return { inserted: false, event: publicOutboundEvent(existing) };
 
     const eventType = cleanString(input.event_type || input.eventType || payload.event_type || payload.eventType || "playlog");
-    const endpoint = cleanString(input.endpoint || PLAYLOG_ENDPOINT);
+    const endpoint = validateOutboundEndpoint(input.endpoint || payload.endpoint || PLAYLOG_ENDPOINT);
+    const payloadJson = boundedPayloadJson(payload);
     const now = cleanString(input.now) || nowIso();
-    this.statements.insertOutbound.run(eventId, eventType, endpoint, JSON.stringify(payload), now, now);
+    this.statements.insertOutbound.run(eventId, eventType, endpoint, payloadJson, now, now);
     return { inserted: true, event: publicOutboundEvent(this.statements.getOutbound.get(eventId)) };
   }
 
   listPendingOutboundEvents(options = {}) {
-    const endpoint = cleanString(options.endpoint || PLAYLOG_ENDPOINT);
+    const endpoint = validateOutboundEndpoint(options.endpoint || PLAYLOG_ENDPOINT);
     const limit = boundedLimit(options.limit, 100, 1, 500);
     const now = cleanString(options.now) || nowIso();
     return this.statements.listClaimable.all(endpoint, now, limit).map(publicOutboundEvent);
   }
 
   claimPendingOutboundEvents(options = {}) {
-    const endpoint = cleanString(options.endpoint || PLAYLOG_ENDPOINT);
+    const endpoint = validateOutboundEndpoint(options.endpoint || PLAYLOG_ENDPOINT);
     const limit = boundedLimit(options.limit, 100, 1, 500);
     const now = cleanString(options.now) || nowIso();
     const staleSeconds = boundedLimit(options.stale_claim_seconds ?? options.staleClaimSeconds, 600, 30, 86400);
@@ -293,7 +360,7 @@ class LocalState {
   }
 
   purgeSentOutboundEvents(options = {}) {
-    const endpoint = cleanString(options.endpoint || PLAYLOG_ENDPOINT);
+    const endpoint = validateOutboundEndpoint(options.endpoint || PLAYLOG_ENDPOINT);
     const retentionDays = boundedLimit(options.retention_days ?? options.retentionDays, 30, 1, 3650);
     const now = cleanString(options.now) || nowIso();
     const cutoff = new Date(Date.parse(now) - retentionDays * 86400000).toISOString();
@@ -336,10 +403,40 @@ class LocalState {
     );
   }
 
+  recordContentApplyJob(input) {
+    const now = cleanString(input.now) || nowIso();
+    const status = cleanString(input.status || "unknown");
+    const jobId = cleanId(input.job_id || input.jobId || [
+      input.content_id || input.contentId || "content",
+      input.playlist_version || input.playlistVersion || "playlist"
+    ].join(":"));
+    if (!jobId) throw new Error("job_id is required");
+    const completedAt = ["success", "failed", "cancelled", "stale"].includes(status) ? now : "";
+    this.statements.applyJobUpsert.run(
+      jobId,
+      cleanString(input.content_id || input.contentId),
+      cleanString(input.playlist_version || input.playlistVersion),
+      cleanString(input.source),
+      status,
+      cleanString(input.previous_playlist_version || input.previousPlaylistVersion),
+      cleanString(input.playlist_sha256 || input.playlistSha256),
+      cleanString(input.message).slice(0, 1000),
+      jsonOrEmpty(input.manifest),
+      now,
+      completedAt,
+      now,
+      now
+    );
+    return publicContentApplyJob(this.statements.latestApplyJob.get());
+  }
+
   summary(options = {}) {
     const summary = {
       outbound_events: countsByStatus(this.statements.outboundStatusCounts.all()),
+      outbound_events_by_endpoint: countsByEndpointStatus(this.statements.outboundStatusCountsByEndpoint.all()),
       latest_content: publicAppliedContent(this.statements.latestContent.get()),
+      latest_apply_job: publicContentApplyJob(this.statements.latestApplyJob.get()),
+      content_apply_jobs: countsByStatus(this.statements.applyJobStatusCounts.all()),
       assets: countsByStatus(this.statements.assetStatusCounts.all())
     };
     if (options.include_db_path !== false && options.includeDbPath !== false) {
@@ -384,7 +481,26 @@ function publicAppliedContent(row) {
     playlist_sha256: cleanString(row.playlist_sha256),
     previous_playlist_version: cleanString(row.previous_playlist_version),
     message: cleanString(row.message),
+    manifest: parseJson(row.manifest_json, null),
     applied_at: cleanString(row.applied_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function publicContentApplyJob(row) {
+  if (!row) return null;
+  return {
+    job_id: cleanString(row.job_id),
+    content_id: cleanString(row.content_id),
+    playlist_version: cleanString(row.playlist_version),
+    source: cleanString(row.source),
+    status: cleanString(row.status),
+    previous_playlist_version: cleanString(row.previous_playlist_version),
+    playlist_sha256: cleanString(row.playlist_sha256),
+    message: cleanString(row.message),
+    manifest: parseJson(row.manifest_json, null),
+    started_at: cleanString(row.started_at),
+    completed_at: cleanString(row.completed_at),
     updated_at: cleanString(row.updated_at)
   };
 }
@@ -397,9 +513,28 @@ function countsByStatus(rows) {
   return result;
 }
 
+function countsByEndpointStatus(rows) {
+  const result = {};
+  for (const row of rows || []) {
+    const endpoint = cleanString(row.endpoint || "unknown");
+    if (!result[endpoint]) result[endpoint] = {};
+    result[endpoint][cleanString(row.status || "unknown")] = Number(row.count || 0);
+  }
+  return result;
+}
+
 function normalizePayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
   return { ...payload };
+}
+
+function boundedPayloadJson(payload) {
+  const json = JSON.stringify(payload);
+  const bytes = Buffer.byteLength(json, "utf8");
+  if (bytes > MAX_OUTBOUND_PAYLOAD_BYTES) {
+    throw new Error(`outbound payload must be ${MAX_OUTBOUND_PAYLOAD_BYTES} bytes or smaller`);
+  }
+  return json;
 }
 
 function sha256File(filePath) {
@@ -456,12 +591,24 @@ function validateEventId(value) {
   return eventId;
 }
 
+function validateOutboundEndpoint(value) {
+  const endpoint = cleanString(value);
+  if (!OUTBOUND_ENDPOINTS.has(endpoint)) {
+    throw new Error(`endpoint must be one of: ${Array.from(OUTBOUND_ENDPOINTS).join(", ")}`);
+  }
+  return endpoint;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
 
 module.exports = {
+  ASSET_RESULT_ENDPOINT,
+  CONTENT_RESULT_ENDPOINT,
+  ERROR_ENDPOINT,
   EVENT_ID_PATTERN,
+  OUTBOUND_ENDPOINTS,
   PLAYLOG_ENDPOINT,
   openLocalState,
   sha256File

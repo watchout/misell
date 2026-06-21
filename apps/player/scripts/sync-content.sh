@@ -13,6 +13,7 @@ ASSETS_DIR="${MISELL_ASSETS_DIR:-${APP_DIR}/assets}"
 LOCK_FILE="${MISELL_CONTENT_SYNC_LOCK_FILE:-${HOME}/.local/share/misell-player/content-sync.lock}"
 APPLY=1
 PREVIOUS_PLAYLIST_VERSION=""
+CONTENT_APPLY_JOB_ID=""
 
 usage() {
   cat <<'EOF'
@@ -99,12 +100,16 @@ write_playlist_from_policy() {
 json_payload() {
   local status="$1"
   local message="${2:-}"
+  local event_id="${3:-}"
   STATUS="${status}" \
   MESSAGE="${message}" \
+  EVENT_ID="${event_id}" \
   CONTENT_ID="${CONTENT_ID:-}" \
   PLAYLIST_VERSION="${PLAYLIST_VERSION:-}" \
   node -e '
     const payload = {
+      event_id: process.env.EVENT_ID,
+      event_type: "content_result",
       status: process.env.STATUS,
       message: process.env.MESSAGE,
       content_id: process.env.CONTENT_ID,
@@ -114,6 +119,32 @@ json_payload() {
       if (!payload[key]) delete payload[key];
     }
     console.log(JSON.stringify(payload));
+  '
+}
+
+safe_content_event_id() {
+  local status="$1"
+  STATUS="${status}" \
+  CONTENT_ID="${CONTENT_ID:-}" \
+  PLAYLIST_VERSION="${PLAYLIST_VERSION:-}" \
+  node -e '
+    const crypto = require("crypto");
+    const raw = ["content-result", process.env.CONTENT_ID || "unknown", process.env.PLAYLIST_VERSION || "unknown", process.env.STATUS || "unknown"].join(":");
+    const safe = raw.replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 140);
+    const digest = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+    process.stdout.write(`${safe}:${digest}`.slice(0, 160));
+  '
+}
+
+safe_content_job_id() {
+  CONTENT_ID="${CONTENT_ID:-}" \
+  PLAYLIST_VERSION="${PLAYLIST_VERSION:-}" \
+  node -e '
+    const crypto = require("crypto");
+    const raw = ["content-apply", process.env.CONTENT_ID || "unknown", process.env.PLAYLIST_VERSION || "unknown"].join(":");
+    const safe = raw.replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 140);
+    const digest = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+    process.stdout.write(`${safe}:${digest}`.slice(0, 160));
   '
 }
 
@@ -139,6 +170,21 @@ record_local_content_state() {
   if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
     return 0
   fi
+  local job_id="${CONTENT_APPLY_JOB_ID:-}"
+  if [[ -z "${job_id}" ]]; then
+    job_id="$(safe_content_job_id)"
+  fi
+  POLICY_JSON="${policy:-}" node "${APP_DIR}/scripts/local-state.js" record-apply-job \
+    --job-id "${job_id}" \
+    --status "${status}" \
+    --message "${message}" \
+    --content-id "${CONTENT_ID:-}" \
+    --playlist-version "${PLAYLIST_VERSION:-}" \
+    --source "${SOURCE:-}" \
+    --previous-playlist-version "${PREVIOUS_PLAYLIST_VERSION:-}" \
+    --playlist-path "${PLAYLIST_PATH}" >/dev/null || {
+      echo "Could not record local content apply job: ${status}" >&2
+    }
   POLICY_JSON="${policy:-}" node "${APP_DIR}/scripts/local-state.js" record-content \
     --status "${status}" \
     --message "${message}" \
@@ -152,24 +198,76 @@ record_local_content_state() {
     }
 }
 
+queue_local_content_result() {
+  local event_id="$1"
+  local payload="$2"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  PAYLOAD_JSON="${payload}" node "${APP_DIR}/scripts/local-state.js" queue-outbound \
+    --endpoint "/api/device/content-result" \
+    --event-id "${event_id}" \
+    --event-type "content_result" >/dev/null || {
+      echo "Could not queue local content result: ${event_id}" >&2
+      return 0
+    }
+}
+
+mark_local_content_result_sent() {
+  local event_id="$1"
+  local response_status="${2:-201}"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  node "${APP_DIR}/scripts/local-state.js" mark-outbound-sent \
+    --event-id "${event_id}" \
+    --response-status "${response_status}" >/dev/null || true
+}
+
+mark_local_content_result_failed() {
+  local event_id="$1"
+  local message="$2"
+  local response_status="${3:-0}"
+  if [[ "${APPLY}" != "1" || ! -f "${APP_DIR}/scripts/local-state.js" ]]; then
+    return 0
+  fi
+  node "${APP_DIR}/scripts/local-state.js" mark-outbound-failed \
+    --event-id "${event_id}" \
+    --message "${message}" \
+    --response-status "${response_status}" >/dev/null || true
+}
+
 post_result() {
   local status="$1"
   local message="${2:-}"
   record_local_content_state "${status}" "${message}"
-  if [[ -z "${CONTENT_RESULT_URL}" || "${APPLY}" != "1" ]]; then
+  if [[ "${APPLY}" != "1" ]]; then
     return 0
   fi
+  local event_id
   local payload
-  payload="$(json_payload "${status}" "${message}")"
-  curl -fsS --max-time 20 \
+  event_id="$(safe_content_event_id "${status}")"
+  payload="$(json_payload "${status}" "${message}" "${event_id}")"
+  queue_local_content_result "${event_id}" "${payload}"
+  if [[ -z "${CONTENT_RESULT_URL}" ]]; then
+    return 0
+  fi
+  local response_status
+  response_status="$(curl -fsS --max-time 20 \
+    -w "%{http_code}" \
+    -o /dev/null \
     -X POST \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${DEVICE_TOKEN}" \
     --data-binary "${payload}" \
-    "${CONTENT_RESULT_URL}" >/dev/null || {
+    "${CONTENT_RESULT_URL}" || true)"
+  if [[ "${response_status}" =~ ^2[0-9][0-9]$ ]]; then
+    mark_local_content_result_sent "${event_id}" "${response_status}"
+  else
+    mark_local_content_result_failed "${event_id}" "Could not report content ${status} to cloud" "${response_status:-0}"
       echo "Could not report content ${status} to cloud" >&2
       return 0
-    }
+  fi
 }
 
 sync_assets_from_policy() {
@@ -248,6 +346,7 @@ REQUIRED="$(json_content_value required)"
 CONTENT_ID="$(json_content_value content_id)"
 PLAYLIST_VERSION="$(json_content_value playlist_version)"
 SOURCE="$(json_content_value source)"
+CONTENT_APPLY_JOB_ID="$(safe_content_job_id)"
 
 echo "required=${REQUIRED}"
 echo "source=${SOURCE:-<none>}"

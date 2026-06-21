@@ -7,6 +7,8 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
+const { openLocalState } = require("../lib/local-state");
+
 const appDir = path.resolve(__dirname, "..");
 const token = "token-content-smoke";
 
@@ -69,7 +71,7 @@ async function main() {
     const baseUrl = `http://127.0.0.1:${port}`;
 
     try {
-      const goodBytes = Buffer.from("good video bytes");
+      const goodBytes = mp4Bytes("good video bytes");
       policy = buildPolicy({
         contentId: "content-good",
         playlistVersion: "pl-good",
@@ -88,7 +90,7 @@ async function main() {
       }
       await fs.access(path.join(assetsDir, "videos", "good.mp4"));
 
-      const dryRunBytes = Buffer.from("dry run video bytes");
+      const dryRunBytes = mp4Bytes("dry run video bytes");
       policy = buildPolicy({
         contentId: "content-dry-run",
         playlistVersion: "pl-dry-run",
@@ -106,8 +108,8 @@ async function main() {
         throw new Error(`dry-run changed playlist: ${JSON.stringify(afterDryRunPlaylist)}`);
       }
 
-      const expectedBadBytes = Buffer.from("expected video bytes");
-      const tamperedBytes = Buffer.from("tampered video bytes");
+      const expectedBadBytes = mp4Bytes("expected video bytes");
+      const tamperedBytes = mp4Bytes("tampered video bytes");
       policy = buildPolicy({
         contentId: "content-bad",
         playlistVersion: "pl-bad",
@@ -136,12 +138,64 @@ async function main() {
         throw new Error(`content failure was not reported: ${JSON.stringify(requests.contentResults)}`);
       }
 
+      const oldQuarantineFile = path.join(quarantineDir, "old.0000000000000000.20000101T000000Z.quarantine");
+      await fs.writeFile(oldQuarantineFile, "old quarantine");
+      const oldDate = new Date("2000-01-01T00:00:00.000Z");
+      await fs.utimes(oldQuarantineFile, oldDate, oldDate);
+
+      const invalidBytes = Buffer.from("not an mp4 even though the hash matches");
+      policy = buildPolicy({
+        contentId: "content-invalid-media",
+        playlistVersion: "pl-invalid-media",
+        assetId: "asset-invalid-media",
+        targetPath: "/assets/videos/invalid-media.mp4",
+        expectedBytes: invalidBytes
+      });
+      assetBytes = new Map([["asset-invalid-media", invalidBytes]]);
+      const invalid = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, [], {
+        MISELL_ASSET_QUARANTINE_RETENTION_DAYS: "1",
+        MISELL_ASSET_QUARANTINE_MAX_FILES: "20"
+      });
+      if (invalid.status === 0) {
+        throw new Error(`invalid media content sync unexpectedly succeeded:\n${invalid.stdout}\n${invalid.stderr}`);
+      }
+      const afterInvalidPlaylist = await readPlaylist(playlistPath);
+      if (afterInvalidPlaylist.playlist_version !== "pl-good") {
+        throw new Error(`invalid media apply changed playlist: ${JSON.stringify(afterInvalidPlaylist)}`);
+      }
+      const afterInvalidQuarantineFiles = await fs.readdir(quarantineDir);
+      if (afterInvalidQuarantineFiles.includes(path.basename(oldQuarantineFile))) {
+        throw new Error(`old quarantine file was not purged: ${JSON.stringify(afterInvalidQuarantineFiles)}`);
+      }
+      if (!afterInvalidQuarantineFiles.some((file) => file.startsWith("asset-invalid-media."))) {
+        throw new Error(`invalid media asset was not quarantined: ${JSON.stringify(afterInvalidQuarantineFiles)}`);
+      }
+      if (!requests.assetResults.some((result) =>
+        result.asset_id === "asset-invalid-media" &&
+        result.status === "failed" &&
+        String(result.message || "").includes("media validation failed")
+      )) {
+        throw new Error(`invalid media failure was not reported: ${JSON.stringify(requests.assetResults)}`);
+      }
+      if (!requests.contentResults.some((result) => result.playlist_version === "pl-invalid-media" && result.status === "failed")) {
+        throw new Error(`invalid media content failure was not reported: ${JSON.stringify(requests.contentResults)}`);
+      }
+      const state = openLocalState(localStatePath);
+      const summary = state.summary({ include_db_path: false });
+      state.close();
+      if (summary.latest_apply_job?.playlist_version !== "pl-invalid-media" || summary.latest_apply_job?.status !== "failed") {
+        throw new Error(`failed apply job evidence was not recorded: ${JSON.stringify(summary)}`);
+      }
+
       console.log(JSON.stringify({
         ok: true,
         content_apply_success: true,
         dry_run_skips_apply_verification: true,
         asset_verification_blocks_apply: true,
-        hash_mismatch_quarantine: true
+        hash_mismatch_quarantine: true,
+        invalid_media_quarantine: true,
+        quarantine_retention: true,
+        content_apply_job_evidence: true
       }, null, 2));
     } finally {
       await new Promise((resolve) => server.close(resolve));
@@ -196,7 +250,7 @@ function buildPolicy({ contentId, playlistVersion, assetId, targetPath, expected
   };
 }
 
-function runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, args = []) {
+function runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, args = [], envOverrides = {}) {
   return runCommand(path.join(appDir, "scripts", "sync-content.sh"), args, {
     cwd: appDir,
     env: {
@@ -210,7 +264,8 @@ function runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath
       MISELL_CONTENT_RESULT_URL: `${baseUrl}/api/device/content-result`,
       MISELL_ASSET_RESULT_URL: `${baseUrl}/api/device/asset-result`,
       MISELL_CLOUD_BASE_URL: baseUrl,
-      MISELL_DEVICE_TOKEN: token
+      MISELL_DEVICE_TOKEN: token,
+      ...envOverrides
     }
   });
 }
@@ -270,4 +325,12 @@ function json(res, payload) {
 
 function sha256Buffer(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function mp4Bytes(label) {
+  return Buffer.concat([
+    Buffer.from([0, 0, 0, 24]),
+    Buffer.from("ftypmp42"),
+    Buffer.from(label)
+  ]);
 }

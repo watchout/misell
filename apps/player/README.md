@@ -350,17 +350,25 @@ Dry-run:
 scripts/sync-content.sh --dry-run
 ```
 
-The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud. If a downloaded asset does not match the manifest sha256, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
+The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud. If a downloaded asset does not match the manifest sha256, or if media validation rejects the downloaded image/video, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
 
 Dry-run lists the asset work without requiring new files to already exist locally. Set `MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=1` only when you explicitly want dry-run to fail on missing or mismatched local assets.
 
-Asset verification is enabled by default:
+Asset verification, playlist reference checks, media signature validation, and quarantine retention are enabled by default:
 
 ```bash
 MISELL_VERIFY_CONTENT_ASSETS=1
 MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=0
+MISELL_VERIFY_PLAYLIST_ASSET_REFS=1
+MISELL_VALIDATE_MEDIA_ASSETS=1
+MISELL_VALIDATE_MEDIA_WITH_FFPROBE=0
 MISELL_ASSET_QUARANTINE_DIR=/path/to/quarantine
+MISELL_ASSET_QUARANTINE_RETENTION_DAYS=30
+MISELL_ASSET_QUARANTINE_MAX_FILES=200
+MISELL_ASSET_QUARANTINE_MAX_BYTES=524288000
 ```
+
+Media validation uses image/video file signatures by default. Set `MISELL_VALIDATE_MEDIA_WITH_FFPROBE=1` to additionally run `ffprobe` for MP4/M4V/MOV files when `ffprobe` is installed. If `ffprobe` is missing, the signature check still applies.
 
 ## Local State SQLite
 
@@ -380,26 +388,33 @@ MISELL_LOCAL_STATE_DB_PATH=/path/to/local_state.sqlite
 
 The database stores:
 
-- outbound playlog events waiting for Cloud backfill
+- outbound playlog, error, content-result, and asset-result events waiting for Cloud backfill
 - applied content manifest history
+- content apply job state for interrupted or failed applies
 - local asset sync state
 
-Playback logs are still appended to `logs/playlog.jsonl`. New playback events are also queued in SQLite and can be synced to Cloud:
+Playback logs are still appended to `logs/playlog.jsonl`. New playback, error, content-result, and asset-result events are also queued in SQLite and can be synced to Cloud:
 
 ```bash
+npm run local-events:sync
 npm run playlogs:sync
 ```
 
-When `MISELL_HEARTBEAT_URL` points at `/api/device/heartbeat`, `scripts/emit-heartbeat.sh` derives `/api/device/playlog` and runs playlog sync after a successful heartbeat. Set `MISELL_SKIP_PLAYLOG_SYNC=1` to disable that best-effort backfill.
+`npm run playlogs:sync` is kept as a playlog-only compatibility command. New deployments should use `npm run local-events:sync`.
 
-Playlog sync settings:
+When `MISELL_HEARTBEAT_URL` points at `/api/device/heartbeat`, `scripts/emit-heartbeat.sh` derives the Cloud base URL and runs local event sync after a successful heartbeat. Set `MISELL_SKIP_LOCAL_EVENT_SYNC=1` to disable that best-effort backfill. `MISELL_SKIP_PLAYLOG_SYNC=1` is still honored as a compatibility alias.
+
+Local event sync settings:
 
 ```bash
+MISELL_LOCAL_EVENT_SYNC_LIMIT=100
+MISELL_LOCAL_EVENT_SYNC_TIMEOUT_MS=15000
+MISELL_LOCAL_EVENT_SENT_RETENTION_DAYS=30
 MISELL_PLAYLOG_SYNC_TIMEOUT_MS=15000
 MISELL_PLAYLOG_SENT_RETENTION_DAYS=30
 ```
 
-Only playback events created after this local-state deployment are queued in SQLite. Existing `logs/playlog.jsonl` rows are not migrated or backfilled by this PR.
+Only new events created after this local-state deployment are queued in SQLite. Existing `logs/playlog.jsonl` rows and historical JSON/JSONL error or content-result evidence are not migrated or backfilled by this PR.
 
 Inspect local state:
 

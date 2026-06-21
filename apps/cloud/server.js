@@ -1643,20 +1643,41 @@ app.post("/api/device/error", requireDeviceAuth, (req, res, next) => {
     const now = nowIso();
     const severity = cleanString(payload.severity) || "error";
     const message = cleanString(payload.message || payload.error || payload.last_error) || "Device error";
+    const occurredAt = cleanString(payload.occurred_at || payload.timestamp) || now;
+    const resolvedEvent = resolveDeviceErrorEventId(payload, req.device, occurredAt, severity, message);
+    const eventId = resolvedEvent.event_id;
+    const existing = db.prepare(`
+      SELECT id, received_at FROM error_logs
+      WHERE tenant_id = ? AND device_id = ? AND event_id = ?
+    `).get(req.device.tenant_id, req.device.device_id, eventId);
+    if (existing) {
+      res.status(200).json({
+        ok: true,
+        duplicate: true,
+        event_id: eventId,
+        event_id_generated: resolvedEvent.generated,
+        received_at: existing.received_at
+      });
+      return;
+    }
 
     db.prepare(`
       INSERT INTO error_logs (
-        device_id, tenant_id, store_id, received_at, occurred_at, severity, message, path, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        device_id, tenant_id, store_id, screen_group_id, received_at, occurred_at,
+        severity, message, path, event_id, event_type, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.device.device_id,
       req.device.tenant_id,
       req.device.store_id,
+      req.device.screen_group_id,
       now,
-      cleanString(payload.timestamp),
+      occurredAt,
       severity,
       message,
       cleanString(payload.path),
+      eventId,
+      cleanString(payload.event_type || payload.eventType || "device_error"),
       JSON.stringify(payload)
     );
 
@@ -1664,7 +1685,7 @@ app.post("/api/device/error", requireDeviceAuth, (req, res, next) => {
     db.prepare("UPDATE devices SET last_error = ?, status = ?, updated_at = ? WHERE device_id = ?")
       .run(message, severity === "critical" ? "critical" : "degraded", now, req.device.device_id);
 
-    res.status(201).json({ ok: true, received_at: now });
+    res.status(201).json({ ok: true, event_id: eventId, event_id_generated: resolvedEvent.generated, received_at: now });
   } catch (error) {
     next(error);
   }
@@ -3109,6 +3130,23 @@ function resolvePlaylogEventId(payload, device, occurredAt) {
   };
   const digest = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 32);
   return { event_id: `legacy-${digest}`, generated: true };
+}
+
+function resolveDeviceErrorEventId(payload, device, occurredAt, severity, message) {
+  const supplied = cleanId(payload.event_id || payload.eventId);
+  if (supplied) return { event_id: supplied, generated: false };
+
+  const identity = {
+    tenant_id: cleanId(device.tenant_id),
+    device_id: cleanId(device.device_id),
+    occurred_at: cleanString(occurredAt),
+    severity: cleanString(severity),
+    message: cleanString(message),
+    path: cleanString(payload.path),
+    event_type: cleanString(payload.event_type || payload.eventType || "device_error")
+  };
+  const digest = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 32);
+  return { event_id: `legacy-error-${digest}`, generated: true };
 }
 
 function listOffers(limit = 100) {
