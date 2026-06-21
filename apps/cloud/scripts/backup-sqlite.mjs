@@ -28,6 +28,7 @@ const s3EndpointUrl = cleanString(args.s3_endpoint_url || process.env.MISELL_CLO
 const s3StorageClass = cleanString(args.s3_storage_class || process.env.MISELL_CLOUD_BACKUP_S3_STORAGE_CLASS);
 const s3Sse = cleanString(args.s3_sse || process.env.MISELL_CLOUD_BACKUP_S3_SSE);
 const awsCli = cleanString(args.aws_cli || process.env.MISELL_CLOUD_BACKUP_AWS_CLI) || "aws";
+const s3UploadTimeoutMs = boundedInteger(args.s3_timeout_ms || process.env.MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS, 300000, 1000, 3600000);
 const BACKUP_FILE_PATTERN = /^misell-cloud-\d{8}-\d{6}(?:-\d{3})?\.sqlite(?:\.gz)?(?:\.manifest\.json)?$/;
 
 main().catch((error) => {
@@ -174,28 +175,65 @@ async function uploadToS3(filePath, destinationUri) {
   awsArgs.push("s3", "cp", filePath, destinationUri, "--only-show-errors");
   if (s3StorageClass) awsArgs.push("--storage-class", s3StorageClass);
   if (s3Sse) awsArgs.push("--sse", s3Sse);
-  await runCommand(awsCli, awsArgs);
+  await runCommand(awsCli, awsArgs, { timeoutMs: s3UploadTimeoutMs });
 }
 
-function runCommand(command, commandArgs) {
+function runCommand(command, commandArgs, options = {}) {
   return new Promise((resolve, reject) => {
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 0;
+    let settled = false;
+    let timedOut = false;
+    let timeout = null;
+    let forceKillTimeout = null;
+    let stderr = "";
+
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+    };
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
     const child = spawn(command, commandArgs, {
       stdio: ["ignore", "pipe", "pipe"]
     });
-    let stderr = "";
+    if (timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        forceKillTimeout = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, 2000);
+      }, timeoutMs);
+    }
     child.stdout.resume();
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
     child.on("error", (error) => {
-      reject(new Error(`failed to run ${command}: ${error.message}`));
-    });
-    child.on("close", (status) => {
-      if (status === 0) {
-        resolve();
+      if (timedOut) {
+        finish(new Error(`${command} ${commandArgs.join(" ")} timed out after ${timeoutMs}ms`));
         return;
       }
-      reject(new Error(`${command} ${commandArgs.join(" ")} failed with status ${status}: ${stderr.trim()}`));
+      finish(new Error(`failed to run ${command}: ${error.message}`));
+    });
+    child.on("close", (status) => {
+      if (timedOut) {
+        finish(new Error(`${command} ${commandArgs.join(" ")} timed out after ${timeoutMs}ms`));
+        return;
+      }
+      if (status === 0) {
+        finish();
+        return;
+      }
+      finish(new Error(`${command} ${commandArgs.join(" ")} failed with status ${status}: ${stderr.trim()}`));
     });
   });
 }
@@ -285,6 +323,7 @@ function usage() {
   scripts/backup-sqlite.mjs [--db-path PATH] [--backup-dir DIR] [--retention-days DAYS] [--no-gzip] [--json]
                             [--s3-uri s3://bucket/prefix] [--s3-endpoint-url URL]
                             [--s3-storage-class CLASS] [--s3-sse AES256] [--aws-cli aws]
+                            [--s3-timeout-ms 300000]
 
 Creates a timestamped, integrity-checked SQLite backup and a JSON manifest.
 When S3-compatible storage is configured, uploads both artifacts with aws s3 cp.
