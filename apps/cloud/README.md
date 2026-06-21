@@ -146,6 +146,7 @@ Useful options:
 scripts/backup-sqlite.sh --backup-dir /secure/backups --retention-days 30
 scripts/backup-sqlite.sh --backup-dir /secure/backups --no-gzip --json
 scripts/backup-sqlite.sh --encryption age --age-recipients age1examplepublicrecipient --require-encryption
+scripts/backup-sqlite.sh --audit-dir /secure/backup-ops-audit --operator ops --context daily-backup
 scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-endpoint-url https://s3.example.com
 scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-timeout-ms 300000
 ```
@@ -158,6 +159,25 @@ scripts/setup-macos-backup-launchagent.sh --apply
 ```
 
 Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days. Local verified backups are the MVP baseline; commercial deployments should copy encrypted backups to separate storage and run scheduled restore drills.
+
+Backup operations are intentionally CLI / host-ops only for MVP+/paid PoC.
+Do not expose backup list, download, delete, decrypt, restore, or artifact URL
+operations through the Cloud Admin API/UI or any customer/store/admin web role.
+Emergency access should use approved operator access to the host or backup
+storage, not a product web surface. If a future PR adds backup web access, it
+must first add server-side RBAC and DB-backed audit logs for that surface.
+
+Each backup and restore drill writes structured operation evidence to
+`MISELL_CLOUD_BACKUP_OPS_AUDIT_DIR`, defaulting to
+`~/.local/share/misell-cloud/backup-ops-audit`. The audit directory is hardened
+to `0700`, JSONL files are `0600`, and old audit files are retained for
+`MISELL_CLOUD_BACKUP_OPS_AUDIT_RETENTION_DAYS`, defaulting to 400 days. The
+backup job records backup creation, manifest write, offsite upload
+success/failure/skipped, retention purge count, orphan scan results, and backup
+failures. Restore drill records success/failure evidence, manifest presence,
+encryption/decrypt status, warning/failure counts, and evidence file name.
+This is local ops evidence only; no backup audit table is required while backup
+access remains CLI-only.
 
 For paid/product offsite backups, enable client-side encryption before the
 backup leaves the host. The approved mode is `age` public-key encryption:
@@ -210,7 +230,10 @@ AWS_DEFAULT_REGION=ap-northeast-1
 `MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL` is optional for AWS S3 and required for
 many S3-compatible providers. `MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS` defaults to
 300000 ms per artifact upload. Use a bucket policy or access key that can write
-only to the backup prefix. S3 server-side encryption can remain enabled as
+only to the backup prefix. Do not put broad bucket-admin credentials in the app
+or backup job environment. Where practical, use separate read/download
+credentials for approved restore drill / DR operators rather than reusing the
+normal upload credentials. S3 server-side encryption can remain enabled as
 defense-in-depth, but it is not a substitute for client-side `age` encryption.
 When backup encryption is enabled, S3 upload sends the encrypted `.age` artifact
 and its manifest, not the plaintext SQLite/gzip artifact.
@@ -223,7 +246,8 @@ scripts/restore-drill.sh \
   --manifest /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.manifest.json \
   --assets-dir /path/to/cloud/assets \
   --operator ops \
-  --context monthly-drill
+  --context monthly-drill \
+  --require-manifest
 ```
 
 For encrypted backups, supply the identity file explicitly from an ops-controlled
@@ -250,6 +274,15 @@ plus daily metrics key uniqueness. It writes an auditable JSON result under
 defaulting to `~/.local/share/misell-cloud/restore-drills`, with file mode 0600.
 Old restore drill evidence files are retained for
 `MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_RETENTION_DAYS`, defaulting to 400 days.
+
+A backup artifact without a manifest is not valid product/commercial readiness
+evidence. Use `--require-manifest` or `MISELL_RESTORE_DRILL_REQUIRE_MANIFEST=1`
+for product/commercial restore drills so manifest-missing artifacts fail the
+drill. Local/manual drills may inspect such artifacts without this flag, but the
+evidence will show that the manifest was missing. Orphan artifacts,
+manifest-missing artifacts, and orphan manifests are reported by the backup
+operation audit scan and follow the normal backup/audit retention policy; they
+must not be treated as successful backups.
 
 Recommended cadence:
 

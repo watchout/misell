@@ -13,6 +13,12 @@ import zlib from "zlib";
 import Database from "better-sqlite3";
 import dotenv from "dotenv";
 
+import {
+  appendBackupOpsAuditEvent,
+  defaultBackupOpsAuditDir,
+  scanBackupArtifacts
+} from "./backup-ops-audit.mjs";
+
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
 
@@ -33,6 +39,10 @@ const encryptionModeInput = args.encryption || process.env.MISELL_CLOUD_BACKUP_E
 const requireEncryption = truthy(args.require_encryption || process.env.MISELL_CLOUD_BACKUP_REQUIRE_ENCRYPTION);
 const ageRecipientsInput = args.age_recipients || process.env.MISELL_CLOUD_BACKUP_AGE_RECIPIENTS;
 const ageCli = cleanString(args.age_cli || process.env.MISELL_CLOUD_BACKUP_AGE_CLI) || "age";
+const backupOpsAuditDir = path.resolve(args.audit_dir || args.backup_audit_dir || process.env.MISELL_CLOUD_BACKUP_OPS_AUDIT_DIR || defaultBackupOpsAuditDir());
+const backupOpsAuditRetentionDays = boundedInteger(args.audit_retention_days || process.env.MISELL_CLOUD_BACKUP_OPS_AUDIT_RETENTION_DAYS, 400, 30, 3650);
+const operator = cleanString(args.operator || process.env.MISELL_BACKUP_OPERATOR) || "host-ops";
+const context = cleanString(args.context || process.env.MISELL_BACKUP_CONTEXT) || "scheduled";
 const BACKUP_FILE_PATTERN = /^misell-cloud-\d{8}-\d{6}(?:-\d{3})?\.sqlite(?:\.gz)?(?:\.age)?(?:\.manifest\.json)?$/;
 
 main().catch((error) => {
@@ -54,6 +64,8 @@ async function main() {
   await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 });
   await fsp.chmod(backupDir, 0o700).catch(() => {});
   const stamp = timestamp();
+  const operationId = `backup-${stamp}-${crypto.randomBytes(3).toString("hex")}`;
+  const audit = (event) => appendBackupAudit(operationId, event);
   const sqliteTarget = path.join(backupDir, `misell-cloud-${stamp}.sqlite`);
   const tempTarget = `${sqliteTarget}.tmp-${process.pid}`;
   const gzipTempTarget = `${sqliteTarget}.gz.tmp-${process.pid}`;
@@ -104,6 +116,19 @@ async function main() {
 
     const artifactSha256 = await sha256File(backupPath);
     const artifactSize = (await fsp.stat(backupPath)).size;
+    await audit({
+      event_type: "backup.created",
+      status: "success",
+      backup_file: path.basename(backupPath),
+      compressed: gzipEnabled,
+      encrypted: encryption.mode !== "none",
+      encryption_mode: encryption.mode,
+      artifact_size: artifactSize,
+      artifact_sha256: artifactSha256,
+      sqlite_size: sqliteSize,
+      sqlite_sha256: sqliteSha256,
+      integrity_check: integrityCheck
+    });
     const manifestPath = `${backupPath}.manifest.json`;
     const manifest = {
       version: 1,
@@ -127,16 +152,63 @@ async function main() {
       manifest.plaintext_artifact_sha256 = plaintextArtifactSha256;
     }
     await writeJsonAtomic(manifestPath, manifest, 0o600);
+    await audit({
+      event_type: "backup.manifest_written",
+      status: "success",
+      backup_file: path.basename(backupPath),
+      manifest_file: path.basename(manifestPath),
+      artifact_sha256: artifactSha256,
+      integrity_check: integrityCheck
+    });
 
-    const s3Upload = await uploadOffsiteArtifacts(backupPath, manifestPath);
+    let s3Upload = {};
+    try {
+      s3Upload = await uploadOffsiteArtifacts(backupPath, manifestPath);
+      await audit({
+        event_type: "backup.offsite_upload",
+        status: s3Uri ? "success" : "skipped",
+        backup_file: path.basename(backupPath),
+        manifest_file: path.basename(manifestPath),
+        s3_configured: Boolean(s3Uri),
+        s3_backup: s3Upload.s3_backup || "",
+        s3_manifest: s3Upload.s3_manifest || ""
+      });
+    } catch (error) {
+      await audit({
+        event_type: "backup.offsite_upload",
+        status: "failure",
+        backup_file: path.basename(backupPath),
+        manifest_file: path.basename(manifestPath),
+        s3_configured: Boolean(s3Uri),
+        error: sanitizeError(error)
+      }).catch(() => {});
+      throw error;
+    }
     const deleted = await purgeOldBackups(backupDir, retentionDays);
+    await audit({
+      event_type: "backup.retention_purge",
+      status: "success",
+      backup_file: path.basename(backupPath),
+      retention_days: retentionDays,
+      deleted_count: deleted
+    });
+    const orphanScan = await scanBackupArtifacts(backupDir);
+    await audit({
+      event_type: "backup.orphan_scan",
+      status: orphanScan.manifest_missing_count > 0 || orphanScan.orphan_manifest_count > 0 || orphanScan.temp_artifact_count > 0
+        ? "warning"
+        : "success",
+      backup_file: path.basename(backupPath),
+      ...orphanScan
+    });
     const result = {
       ok: true,
       backup: backupPath,
       manifest: manifestPath,
       ...manifest,
       ...s3Upload,
-      deleted
+      deleted,
+      orphan_scan: orphanScan
     };
 
     if (jsonOutput) {
@@ -151,6 +223,11 @@ async function main() {
     if (encryption.mode === "age" && plainBackupPath) {
       await fsp.rm(plainBackupPath, { force: true }).catch(() => {});
     }
+    await audit({
+      event_type: "backup.failed",
+      status: "failure",
+      error: sanitizeError(error)
+    }).catch(() => {});
     throw error;
   }
 }
@@ -255,6 +332,20 @@ async function uploadToS3(filePath, destinationUri) {
   if (s3StorageClass) awsArgs.push("--storage-class", s3StorageClass);
   if (s3Sse) awsArgs.push("--sse", s3Sse);
   await runCommand(awsCli, awsArgs, { timeoutMs: s3UploadTimeoutMs, label: "aws s3 upload" });
+}
+
+async function appendBackupAudit(operationId, event) {
+  return appendBackupOpsAuditEvent({
+    auditDir: backupOpsAuditDir,
+    retentionDays: backupOpsAuditRetentionDays,
+    event: {
+      operation_id: operationId,
+      operation: "backup",
+      operator,
+      context,
+      ...event
+    }
+  });
 }
 
 function runCommand(command, commandArgs, options = {}) {
@@ -393,6 +484,16 @@ function truthy(value) {
   return ["1", "true", "yes", "on"].includes(cleanString(value).toLowerCase());
 }
 
+function sanitizeError(error) {
+  return cleanString(error?.message || error)
+    .replace(new RegExp(escapeRegExp(ageCli), "g"), path.basename(ageCli))
+    .slice(0, 500);
+}
+
+function escapeRegExp(value) {
+  return cleanString(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function boundedInteger(value, fallback, min, max) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number)) return fallback;
@@ -409,6 +510,10 @@ function printLines(result) {
   process.stdout.write(`sqlite_sha256=${result.sqlite_sha256}\n`);
   process.stdout.write(`artifact_sha256=${result.artifact_sha256}\n`);
   process.stdout.write(`integrity_check=${result.integrity_check}\n`);
+  if (result.orphan_scan) {
+    process.stdout.write(`manifest_missing=${result.orphan_scan.manifest_missing_count}\n`);
+    process.stdout.write(`orphan_manifests=${result.orphan_scan.orphan_manifest_count}\n`);
+  }
   process.stdout.write(`deleted=${result.deleted}\n`);
 }
 
@@ -417,6 +522,8 @@ function usage() {
   scripts/backup-sqlite.mjs [--db-path PATH] [--backup-dir DIR] [--retention-days DAYS] [--no-gzip] [--json]
                             [--encryption age] [--age-recipients RECIPIENT[,RECIPIENT]]
                             [--age-cli age] [--require-encryption]
+                            [--audit-dir DIR] [--audit-retention-days DAYS]
+                            [--operator NAME] [--context TEXT]
                             [--s3-uri s3://bucket/prefix] [--s3-endpoint-url URL]
                             [--s3-storage-class CLASS] [--s3-sse AES256] [--aws-cli aws]
                             [--s3-timeout-ms 300000]
@@ -425,5 +532,6 @@ Creates a timestamped, integrity-checked SQLite backup and a JSON manifest.
 When age encryption is configured, writes an encrypted .age artifact and removes
 the plaintext backup artifact after encryption. When S3-compatible storage is
 configured, uploads the final backup artifact and manifest with aws s3 cp.
+Writes CLI-only backup operation evidence to a protected JSONL audit directory.
 `);
 }

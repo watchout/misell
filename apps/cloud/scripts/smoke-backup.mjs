@@ -23,7 +23,15 @@ async function main() {
   const dbPath = path.join(tmpDir, "misell-cloud.sqlite");
   const backupDir = path.join(tmpDir, "backups");
   const assetsDir = path.join(tmpDir, "assets");
+  const auditDir = path.join(tmpDir, "backup-ops-audit");
   try {
+    process.env.MISELL_CLOUD_BACKUP_OPS_AUDIT_DIR = auditDir;
+    process.env.MISELL_CLOUD_BACKUP_OPS_AUDIT_RETENTION_DAYS = "30";
+    process.env.MISELL_BACKUP_OPERATOR = "smoke";
+    process.env.MISELL_BACKUP_CONTEXT = "smoke-backup";
+    process.env.MISELL_RESTORE_DRILL_OPERATOR = "smoke";
+    process.env.MISELL_RESTORE_DRILL_CONTEXT = "smoke-restore";
+
     await fsp.mkdir(assetsDir, { recursive: true });
     const assetBytes = Buffer.from("verified cloud asset");
     const assetPath = path.join(assetsDir, "asset-restore-smoke.mp4");
@@ -162,6 +170,7 @@ async function main() {
     db.close();
 
     await createOldBackupFixtures(backupDir);
+    await createOrphanBackupFixtures(backupDir);
     const result = await runBackup(dbPath, backupDir);
     if (result.status !== 0) {
       throw new Error(`backup command failed:\n${result.stdout}\n${result.stderr}`);
@@ -199,6 +208,7 @@ async function main() {
     }
 
     await runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir);
+    await runRestoreDrillManifestRequiredSmoke(tmpDir, backupPath, assetsDir);
     await runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir);
     await runEncryptedBackupSmoke(tmpDir, dbPath, assetsDir);
     await runEncryptedS3BackupSmoke(tmpDir, dbPath);
@@ -207,6 +217,7 @@ async function main() {
     await runS3CliBackupSmoke(tmpDir, dbPath);
     await runS3EnvFileBackupSmoke(tmpDir, dbPath);
     await runS3TimeoutSmoke(tmpDir, dbPath);
+    await runBackupOpsAuditSmoke(auditDir);
 
     console.log(JSON.stringify({
       ok: true,
@@ -217,7 +228,9 @@ async function main() {
       retention_purge: true,
       backup_dir_hardened: true,
       restore_drill: true,
+      restore_drill_manifest_required: true,
       restore_drill_asset_containment: true,
+      backup_ops_audit: true,
       encrypted_backup: true,
       encrypted_restore_drill: true,
       encrypted_s3_upload: true,
@@ -268,6 +281,33 @@ async function runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir)
   }
   const evidenceMode = (await fsp.stat(evidence.evidence_path)).mode & 0o777;
   if (evidenceMode !== 0o600) throw new Error(`restore drill evidence mode was not 0600: ${evidenceMode.toString(8)}`);
+}
+
+async function runRestoreDrillManifestRequiredSmoke(tmpDir, backupPath, assetsDir) {
+  const evidenceDir = path.join(tmpDir, "restore-drill-missing-manifest");
+  const missingManifest = path.join(tmpDir, "missing-backup.manifest.json");
+  const result = await runCommand(process.execPath, [
+    path.join(appDir, "scripts", "restore-drill.mjs"),
+    "--backup", backupPath,
+    "--manifest", missingManifest,
+    "--assets-dir", assetsDir,
+    "--evidence-dir", evidenceDir,
+    "--operator", "smoke",
+    "--context", "smoke-manifest-required",
+    "--require-manifest",
+    "--json"
+  ], { cwd: appDir });
+  if (result.status === 0) {
+    throw new Error(`restore drill manifest-required smoke unexpectedly succeeded:\n${result.stdout}\n${result.stderr}`);
+  }
+  const evidence = JSON.parse(result.stdout);
+  if (evidence.ok !== false) throw new Error(`manifest-required evidence was not failed: ${result.stdout}`);
+  if (!evidence.failures.some((failure) => failure.includes("manifest is required"))) {
+    throw new Error(`manifest-required failure missing: ${result.stdout}`);
+  }
+  if (!evidence.warnings.some((warning) => warning.includes("manifest was not found"))) {
+    throw new Error(`manifest-required warning missing: ${result.stdout}`);
+  }
 }
 
 async function runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir) {
@@ -338,6 +378,52 @@ async function runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir) {
   if (!evidence.failures.some((failure) => failure.includes("invalid filename"))) {
     throw new Error(`traversal failure summary missing: ${result.stdout}`);
   }
+}
+
+async function runBackupOpsAuditSmoke(auditDir) {
+  const auditDirMode = (await fsp.stat(auditDir)).mode & 0o777;
+  if (auditDirMode !== 0o700) throw new Error(`backup ops audit dir mode was not 0700: ${auditDirMode.toString(8)}`);
+  const files = (await fsp.readdir(auditDir)).filter((file) => file.endsWith(".jsonl"));
+  if (files.length === 0) throw new Error("backup ops audit file was not written");
+  for (const file of files) {
+    const mode = (await fsp.stat(path.join(auditDir, file))).mode & 0o777;
+    if (mode !== 0o600) throw new Error(`backup ops audit file mode was not 0600: ${file} ${mode.toString(8)}`);
+  }
+  const events = [];
+  for (const file of files) {
+    events.push(...await readJsonl(path.join(auditDir, file)));
+  }
+  const hasEvent = (eventType, predicate = () => true) => events.some((event) => event.event_type === eventType && predicate(event));
+  if (!hasEvent("backup.created", (event) => event.status === "success" && event.artifact_sha256)) {
+    throw new Error(`backup.created audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("backup.manifest_written", (event) => event.status === "success" && event.manifest_file)) {
+    throw new Error(`backup.manifest_written audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("backup.offsite_upload", (event) => event.status === "success" && event.s3_configured === true)) {
+    throw new Error(`backup.offsite_upload success audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("backup.offsite_upload", (event) => event.status === "failure" && event.s3_configured === true)) {
+    throw new Error(`backup.offsite_upload failure audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("backup.retention_purge", (event) => event.status === "success" && event.deleted_count >= 2)) {
+    throw new Error(`backup.retention_purge audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("backup.orphan_scan", (event) => event.manifest_missing_count >= 1 && event.orphan_manifest_count >= 1)) {
+    throw new Error(`backup.orphan_scan audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("backup.failed", (event) => event.status === "failure")) {
+    throw new Error(`backup.failed audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("restore_drill.completed", (event) => event.status === "success" && event.manifest_present === true)) {
+    throw new Error(`restore_drill success audit event missing: ${JSON.stringify(events)}`);
+  }
+  if (!hasEvent("restore_drill.completed", (event) => event.status === "failure" && event.manifest_present === false && event.require_manifest === true)) {
+    throw new Error(`restore_drill manifest-missing failure audit event missing: ${JSON.stringify(events)}`);
+  }
+  const serialized = JSON.stringify(events);
+  if (serialized.includes("AGE-SECRET-KEY")) throw new Error("backup ops audit leaked age identity material");
+  if (serialized.includes("outside asset dir secret")) throw new Error("backup ops audit leaked fixture content");
 }
 
 async function runEncryptedBackupSmoke(tmpDir, dbPath, assetsDir) {
@@ -702,6 +788,12 @@ async function createOldBackupFixtures(backupDir) {
     await fsp.utimes(oldBackup, oldTime, oldTime);
     await fsp.utimes(oldManifest, oldTime, oldTime);
   }
+}
+
+async function createOrphanBackupFixtures(backupDir) {
+  await fsp.mkdir(backupDir, { recursive: true, mode: 0o755 });
+  await fsp.writeFile(path.join(backupDir, "misell-cloud-20990101-000000.sqlite.gz"), "manifest-missing");
+  await fsp.writeFile(path.join(backupDir, "misell-cloud-20990101-000001.sqlite.gz.manifest.json"), "{}\n");
 }
 
 function runCommand(command, args, options) {

@@ -13,6 +13,11 @@ import zlib from "zlib";
 import Database from "better-sqlite3";
 import dotenv from "dotenv";
 
+import {
+  appendBackupOpsAuditEvent,
+  defaultBackupOpsAuditDir
+} from "./backup-ops-audit.mjs";
+
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
 
@@ -40,6 +45,9 @@ const operator = cleanString(args.operator || process.env.MISELL_RESTORE_DRILL_O
 const context = cleanString(args.context || process.env.MISELL_RESTORE_DRILL_CONTEXT) || "manual";
 const ageIdentityFile = cleanString(args.age_identity_file || args.age_identity || process.env.MISELL_RESTORE_DRILL_AGE_IDENTITY_FILE);
 const ageCli = cleanString(args.age_cli || process.env.MISELL_RESTORE_DRILL_AGE_CLI || process.env.MISELL_CLOUD_BACKUP_AGE_CLI) || "age";
+const requireManifest = truthy(args.require_manifest || process.env.MISELL_RESTORE_DRILL_REQUIRE_MANIFEST);
+const backupOpsAuditDir = path.resolve(args.audit_dir || args.backup_audit_dir || process.env.MISELL_CLOUD_BACKUP_OPS_AUDIT_DIR || defaultBackupOpsAuditDir());
+const backupOpsAuditRetentionDays = boundedInteger(args.audit_retention_days || process.env.MISELL_CLOUD_BACKUP_OPS_AUDIT_RETENTION_DAYS, 400, 30, 3650);
 const jsonOutput = Boolean(args.json);
 
 main().catch((error) => {
@@ -60,6 +68,7 @@ async function main() {
   await fsp.mkdir(evidenceDir, { recursive: true, mode: 0o700 });
   await fsp.chmod(evidenceDir, 0o700).catch(() => {});
   const drillId = `restore-drill-${timestamp()}-${crypto.randomBytes(3).toString("hex")}`;
+  const audit = (event) => appendRestoreDrillAudit(drillId, event);
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), `${drillId}.`));
   const restoredDbPath = path.join(tempDir, "restored.sqlite");
   const failures = [];
@@ -88,6 +97,9 @@ async function main() {
     evidence.backup_artifact_size = (await fsp.stat(backupPath)).size;
 
     const manifest = await readManifest(manifestPath, warnings);
+    if (!manifest && requireManifest) {
+      failures.push("backup manifest is required but was not found");
+    }
     evidence.manifest = manifest ? {
       compressed: Boolean(manifest.compressed),
       encrypted: Boolean(manifest.encrypted),
@@ -116,6 +128,7 @@ async function main() {
     evidence.completed_at = new Date().toISOString();
     evidence.evidence_path = path.join(evidenceDir, `${drillId}.json`);
     await writeJsonAtomic(evidence.evidence_path, evidence, 0o600);
+    await audit(restoreDrillAuditEvent(evidence));
 
     if (jsonOutput) {
       process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
@@ -129,6 +142,7 @@ async function main() {
     evidence.completed_at = new Date().toISOString();
     evidence.evidence_path = path.join(evidenceDir, `${drillId}.json`);
     await writeJsonAtomic(evidence.evidence_path, evidence, 0o600).catch(() => {});
+    await audit(restoreDrillAuditEvent(evidence, error)).catch(() => {});
     throw error;
   } finally {
     if (restoredDb) restoredDb.close();
@@ -444,6 +458,39 @@ function parseJson(value) {
   }
 }
 
+function restoreDrillAuditEvent(evidence, error = null) {
+  return {
+    event_type: "restore_drill.completed",
+    status: evidence.ok ? "success" : "failure",
+    restore_drill_id: evidence.restore_drill_id,
+    backup_file: evidence.backup_file,
+    manifest_file: evidence.manifest_file,
+    manifest_present: Boolean(evidence.manifest),
+    require_manifest: requireManifest,
+    evidence_file: evidence.evidence_path ? path.basename(evidence.evidence_path) : "",
+    encrypted: Boolean(evidence.encryption?.encrypted),
+    decrypted: Boolean(evidence.encryption?.decrypted),
+    failures_count: evidence.failures.length,
+    warnings_count: evidence.warnings.length,
+    deleted_old_evidence: evidence.deleted_old_evidence || 0,
+    error: error ? sanitizeError(error) : ""
+  };
+}
+
+async function appendRestoreDrillAudit(operationId, event) {
+  return appendBackupOpsAuditEvent({
+    auditDir: backupOpsAuditDir,
+    retentionDays: backupOpsAuditRetentionDays,
+    event: {
+      operation_id: operationId,
+      operation: "restore_drill",
+      operator,
+      context,
+      ...event
+    }
+  });
+}
+
 function runCommand(command, commandArgs, options = {}) {
   return new Promise((resolve, reject) => {
     const label = cleanString(options.label) || command;
@@ -536,6 +583,20 @@ function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function truthy(value) {
+  return ["1", "true", "yes", "on"].includes(cleanString(value).toLowerCase());
+}
+
+function sanitizeError(error) {
+  return cleanString(error?.message || error)
+    .replace(new RegExp(escapeRegExp(ageCli), "g"), path.basename(ageCli))
+    .slice(0, 500);
+}
+
+function escapeRegExp(value) {
+  return cleanString(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function boundedInteger(value, fallback, min, max) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number)) return fallback;
@@ -556,6 +617,8 @@ function usage() {
   scripts/restore-drill.mjs --backup PATH [--manifest PATH] [--assets-dir DIR]
                             [--evidence-dir DIR] [--operator NAME]
                             [--context TEXT] [--evidence-retention-days DAYS]
+                            [--require-manifest] [--audit-dir DIR]
+                            [--audit-retention-days DAYS]
                             [--age-identity-file PATH] [--age-cli age]
                             [--json]
 
@@ -563,5 +626,7 @@ Verifies a backup artifact without mutating the live DB and writes restore drill
 evidence JSON. If --assets-dir is provided, cloud asset files are checked for
 presence, size, and sha256 against the restored DB catalog. Encrypted age
 artifacts require an explicit identity file for decrypt-then-verify drills.
+Use --require-manifest for product/commercial readiness checks where
+manifest-missing artifacts must fail the drill.
 `);
 }
