@@ -5,6 +5,7 @@ import fs from "fs";
 import fsp from "fs/promises";
 import os from "os";
 import path from "path";
+import { spawn } from "child_process";
 import { pipeline } from "stream/promises";
 import { fileURLToPath } from "url";
 import zlib from "zlib";
@@ -22,6 +23,11 @@ const backupDir = path.resolve(args.backup_dir || process.env.MISELL_CLOUD_BACKU
 const retentionDays = boundedInteger(args.retention_days || process.env.MISELL_CLOUD_BACKUP_RETENTION_DAYS, 30, 1, 3650);
 const gzipEnabled = args.gzip === "0" || args.no_gzip || process.env.MISELL_CLOUD_BACKUP_GZIP === "0" ? false : true;
 const jsonOutput = Boolean(args.json);
+const s3Uri = cleanString(args.s3_uri || process.env.MISELL_CLOUD_BACKUP_S3_URI);
+const s3EndpointUrl = cleanString(args.s3_endpoint_url || process.env.MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL);
+const s3StorageClass = cleanString(args.s3_storage_class || process.env.MISELL_CLOUD_BACKUP_S3_STORAGE_CLASS);
+const s3Sse = cleanString(args.s3_sse || process.env.MISELL_CLOUD_BACKUP_S3_SSE);
+const awsCli = cleanString(args.aws_cli || process.env.MISELL_CLOUD_BACKUP_AWS_CLI) || "aws";
 const BACKUP_FILE_PATTERN = /^misell-cloud-\d{8}-\d{6}(?:-\d{3})?\.sqlite(?:\.gz)?(?:\.manifest\.json)?$/;
 
 main().catch((error) => {
@@ -35,6 +41,9 @@ async function main() {
     return;
   }
   if (!fs.existsSync(dbPath)) throw new Error(`DB not found: ${dbPath}`);
+  if (s3Uri && !isValidS3Uri(s3Uri)) {
+    throw new Error("MISELL_CLOUD_BACKUP_S3_URI must start with s3://bucket or s3://bucket/prefix");
+  }
 
   await fsp.mkdir(backupDir, { recursive: true, mode: 0o700 });
   await fsp.chmod(backupDir, 0o700).catch(() => {});
@@ -85,12 +94,14 @@ async function main() {
     };
     await writeJsonAtomic(manifestPath, manifest, 0o600);
 
+    const s3Upload = await uploadOffsiteArtifacts(backupPath, manifestPath);
     const deleted = await purgeOldBackups(backupDir, retentionDays);
     const result = {
       ok: true,
       backup: backupPath,
       manifest: manifestPath,
       ...manifest,
+      ...s3Upload,
       deleted
     };
 
@@ -142,6 +153,51 @@ async function purgeOldBackups(targetDir, days) {
     deleted += 1;
   }
   return deleted;
+}
+
+async function uploadOffsiteArtifacts(backupPath, manifestPath) {
+  if (!s3Uri) return {};
+  const s3Prefix = s3Uri.replace(/\/+$/g, "");
+  const backupUri = `${s3Prefix}/${path.basename(backupPath)}`;
+  const manifestUri = `${s3Prefix}/${path.basename(manifestPath)}`;
+  await uploadToS3(backupPath, backupUri);
+  await uploadToS3(manifestPath, manifestUri);
+  return {
+    s3_backup: backupUri,
+    s3_manifest: manifestUri
+  };
+}
+
+async function uploadToS3(filePath, destinationUri) {
+  const awsArgs = [];
+  if (s3EndpointUrl) awsArgs.push("--endpoint-url", s3EndpointUrl);
+  awsArgs.push("s3", "cp", filePath, destinationUri, "--only-show-errors");
+  if (s3StorageClass) awsArgs.push("--storage-class", s3StorageClass);
+  if (s3Sse) awsArgs.push("--sse", s3Sse);
+  await runCommand(awsCli, awsArgs);
+}
+
+function runCommand(command, commandArgs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, commandArgs, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stderr = "";
+    child.stdout.resume();
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      reject(new Error(`failed to run ${command}: ${error.message}`));
+    });
+    child.on("close", (status) => {
+      if (status === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${command} ${commandArgs.join(" ")} failed with status ${status}: ${stderr.trim()}`));
+    });
+  });
 }
 
 async function writeJsonAtomic(filePath, value, mode) {
@@ -199,6 +255,14 @@ function parseArgs(values) {
   return parsed;
 }
 
+function isValidS3Uri(value) {
+  return /^s3:\/\/[^/]+(?:\/.*)?$/.test(value);
+}
+
+function cleanString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function boundedInteger(value, fallback, min, max) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number)) return fallback;
@@ -208,6 +272,8 @@ function boundedInteger(value, fallback, min, max) {
 function printLines(result) {
   process.stdout.write(`backup=${result.backup}\n`);
   process.stdout.write(`manifest=${result.manifest}\n`);
+  if (result.s3_backup) process.stdout.write(`s3_backup=${result.s3_backup}\n`);
+  if (result.s3_manifest) process.stdout.write(`s3_manifest=${result.s3_manifest}\n`);
   process.stdout.write(`sqlite_sha256=${result.sqlite_sha256}\n`);
   process.stdout.write(`artifact_sha256=${result.artifact_sha256}\n`);
   process.stdout.write(`integrity_check=${result.integrity_check}\n`);
@@ -217,7 +283,10 @@ function printLines(result) {
 function usage() {
   process.stdout.write(`Usage:
   scripts/backup-sqlite.mjs [--db-path PATH] [--backup-dir DIR] [--retention-days DAYS] [--no-gzip] [--json]
+                            [--s3-uri s3://bucket/prefix] [--s3-endpoint-url URL]
+                            [--s3-storage-class CLASS] [--s3-sse AES256] [--aws-cli aws]
 
 Creates a timestamped, integrity-checked SQLite backup and a JSON manifest.
+When S3-compatible storage is configured, uploads both artifacts with aws s3 cp.
 `);
 }

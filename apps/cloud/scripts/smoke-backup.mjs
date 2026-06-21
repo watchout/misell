@@ -70,6 +70,9 @@ async function main() {
       throw new Error(`backup dir mode was not hardened: ${backupDirMode.toString(8)}`);
     }
 
+    await runS3CliBackupSmoke(tmpDir, dbPath);
+    await runS3EnvFileBackupSmoke(tmpDir, dbPath);
+
     console.log(JSON.stringify({
       ok: true,
       backup: path.basename(backupPath),
@@ -77,25 +80,110 @@ async function main() {
       integrity_check: manifest.integrity_check,
       artifact_sha256: manifest.artifact_sha256,
       retention_purge: true,
-      backup_dir_hardened: true
+      backup_dir_hardened: true,
+      s3_upload: true,
+      s3_env_file: true
     }, null, 2));
   } finally {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   }
 }
 
-async function runBackup(dbPath, backupDir) {
+async function runBackup(dbPath, backupDir, options = {}) {
   return runCommand(path.join(appDir, "scripts", "backup-sqlite.sh"), [
     "--backup-dir", backupDir,
-    "--retention-days", "1"
+    "--retention-days", "1",
+    ...(options.args || [])
   ], {
     cwd: appDir,
     env: {
       ...process.env,
+      ...(options.env || {}),
       DB_PATH: dbPath,
-      MISELL_CLOUD_ENV_FILE: path.join(path.dirname(dbPath), "missing-env")
+      MISELL_CLOUD_ENV_FILE: options.envFile || path.join(path.dirname(dbPath), "missing-env")
     }
   });
+}
+
+async function runS3CliBackupSmoke(tmpDir, dbPath) {
+  const backupDir = path.join(tmpDir, "s3-cli-backups");
+  const fakeAws = await createFakeAwsCli(tmpDir, "fake-aws-cli");
+  const result = await runBackup(dbPath, backupDir, {
+    args: [
+      "--s3-uri", "s3://misell-test/backups",
+      "--s3-endpoint-url", "https://s3.example.test",
+      "--s3-storage-class", "STANDARD_IA",
+      "--s3-sse", "AES256",
+      "--aws-cli", fakeAws.bin
+    ],
+    env: {
+      MISELL_FAKE_AWS_LOG: fakeAws.log
+    }
+  });
+  if (result.status !== 0) throw new Error(`s3 cli backup failed:\n${result.stdout}\n${result.stderr}`);
+  assertS3BackupResult(result.stdout, fakeAws.log, {
+    prefix: "s3://misell-test/backups",
+    endpoint: "https://s3.example.test",
+    storageClass: "STANDARD_IA",
+    sse: "AES256"
+  });
+}
+
+async function runS3EnvFileBackupSmoke(tmpDir, dbPath) {
+  const backupDir = path.join(tmpDir, "s3-env-backups");
+  const fakeAws = await createFakeAwsCli(tmpDir, "fake-aws-env");
+  const envFile = path.join(tmpDir, "cloud-env");
+  await fsp.writeFile(envFile, [
+    "MISELL_CLOUD_BACKUP_S3_URI=s3://misell-env/backups",
+    "MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL=https://env-s3.example.test",
+    `MISELL_CLOUD_BACKUP_AWS_CLI=${fakeAws.bin}`,
+    `MISELL_FAKE_AWS_LOG=${fakeAws.log}`,
+    ""
+  ].join("\n"), { mode: 0o600 });
+  const result = await runBackup(dbPath, backupDir, { envFile });
+  if (result.status !== 0) throw new Error(`s3 env backup failed:\n${result.stdout}\n${result.stderr}`);
+  assertS3BackupResult(result.stdout, fakeAws.log, {
+    prefix: "s3://misell-env/backups",
+    endpoint: "https://env-s3.example.test"
+  });
+}
+
+async function createFakeAwsCli(tmpDir, label) {
+  const bin = path.join(tmpDir, `${label}.mjs`);
+  const log = path.join(tmpDir, `${label}.jsonl`);
+  await fsp.writeFile(bin, `#!/usr/bin/env node
+import fs from "fs";
+fs.appendFileSync(process.env.MISELL_FAKE_AWS_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+`, { mode: 0o700 });
+  await fsp.chmod(bin, 0o700);
+  return { bin, log };
+}
+
+async function assertS3BackupResult(stdout, logPath, expected) {
+  const s3Backup = parseOutputPath(stdout, "s3_backup");
+  const s3Manifest = parseOutputPath(stdout, "s3_manifest");
+  if (!s3Backup || !s3Manifest) throw new Error(`s3 output missing paths: ${stdout}`);
+  if (!s3Backup.startsWith(`${expected.prefix}/misell-cloud-`)) throw new Error(`unexpected s3 backup path: ${s3Backup}`);
+  if (s3Manifest !== `${s3Backup}.manifest.json`) throw new Error(`unexpected s3 manifest path: ${s3Manifest}`);
+
+  const calls = (await fsp.readFile(logPath, "utf8"))
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  if (calls.length !== 2) throw new Error(`expected 2 aws uploads, got ${calls.length}: ${JSON.stringify(calls)}`);
+  for (const call of calls) {
+    if (expected.endpoint && !call.includes(expected.endpoint)) throw new Error(`missing endpoint arg: ${JSON.stringify(call)}`);
+    if (!call.includes("s3") || !call.includes("cp") || !call.includes("--only-show-errors")) {
+      throw new Error(`unexpected aws call: ${JSON.stringify(call)}`);
+    }
+    if (expected.storageClass && !call.includes(expected.storageClass)) {
+      throw new Error(`missing storage class arg: ${JSON.stringify(call)}`);
+    }
+    if (expected.sse && !call.includes(expected.sse)) {
+      throw new Error(`missing sse arg: ${JSON.stringify(call)}`);
+    }
+  }
 }
 
 async function createOldBackupFixtures(backupDir) {

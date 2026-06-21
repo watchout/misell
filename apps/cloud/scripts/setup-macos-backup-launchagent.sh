@@ -19,7 +19,8 @@ Usage:
   scripts/setup-macos-backup-launchagent.sh [--apply] [--interval-seconds N] [--retention-days N]
 
 Default is dry-run. This creates a user LaunchAgent that runs
-scripts/backup-sqlite.sh on a fixed interval.
+scripts/backup-sqlite.sh on a fixed interval. Offsite S3-compatible backup
+settings are read by backup-sqlite.sh from the configured env file.
 EOF
 }
 
@@ -58,6 +59,7 @@ echo "interval_seconds=${INTERVAL_SECONDS}"
 echo "retention_days=${RETENTION_DAYS}"
 echo "starter=${STARTER}"
 echo "plist=${PLIST}"
+echo "s3_uri=${MISELL_CLOUD_BACKUP_S3_URI:-<env-file or disabled>}"
 
 if [[ "${APPLY}" != "1" ]]; then
   echo "DRY RUN. Re-run with --apply to write files and restart launch agent."
