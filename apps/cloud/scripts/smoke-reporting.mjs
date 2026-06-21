@@ -249,14 +249,23 @@ async function seedReportData() {
     actor_id: "smoke"
   });
 
-  await request("POST", "/api/device/error", {
+  const errorPayload = {
     device_id: deviceId,
+    event_id: `ERR-REPORT-${runId}`,
+    event_type: "device_error",
     timestamp: "2026-06-10T03:33:00+09:00",
     severity: "error",
     message: "Report smoke error"
-  }, {
+  };
+  const errorFirst = await request("POST", "/api/device/error", errorPayload, {
     authorization: `Bearer ${device.data.device_token}`
   });
+  const errorDuplicate = await request("POST", "/api/device/error", errorPayload, {
+    authorization: `Bearer ${device.data.device_token}`
+  });
+  if (errorFirst.status !== 201 || errorDuplicate.status !== 200 || errorDuplicate.data.duplicate !== true) {
+    throw new Error(`error log idempotency failed: ${JSON.stringify({ first: errorFirst.data, duplicate: errorDuplicate.data })}`);
+  }
 
   return { tenantId, storeId, contentId };
 }

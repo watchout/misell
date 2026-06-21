@@ -10,14 +10,17 @@ const policy = readPolicy();
 const content = policy.content || {};
 const assets = Array.isArray(content.assets) ? content.assets : [];
 const failures = [];
+const requiredTargets = new Set();
 let checked = 0;
 
 for (const asset of assets) {
   const required = asset.required !== false;
   if (!required) continue;
   checked += 1;
+  requiredTargets.add(cleanString(asset.target_path));
   verifyAsset(asset);
 }
+verifyPlaylistReferences();
 
 const result = {
   ok: failures.length === 0,
@@ -74,7 +77,55 @@ function verifyAsset(asset) {
   const actualSha = sha256File(localPath);
   if (actualSha !== expectedSha) {
     fail(assetId, targetPath, "local asset sha256 mismatch");
+    return;
   }
+
+  if (!validateMediaFile(localPath, targetPath)) {
+    fail(assetId, targetPath, "local asset media validation failed");
+  }
+}
+
+function verifyPlaylistReferences() {
+  if (process.env.MISELL_VERIFY_PLAYLIST_ASSET_REFS === "0") return;
+  const refs = collectAssetRefs(content.playlist || {});
+  for (const ref of refs) {
+    if (!requiredTargets.has(ref)) {
+      fail("<playlist>", ref, "playlist asset reference is not present in required content assets");
+    }
+  }
+}
+
+function collectAssetRefs(value, refs = new Set()) {
+  if (typeof value === "string") {
+    if (value.startsWith("/assets/images/") || value.startsWith("/assets/videos/")) refs.add(value);
+    return refs;
+  }
+  if (!value || typeof value !== "object") return refs;
+  if (Array.isArray(value)) {
+    for (const item of value) collectAssetRefs(item, refs);
+    return refs;
+  }
+  for (const item of Object.values(value)) collectAssetRefs(item, refs);
+  return refs;
+}
+
+function validateMediaFile(filePath, targetPath) {
+  if (process.env.MISELL_VALIDATE_MEDIA_ASSETS === "0") return true;
+  const target = cleanString(targetPath).toLowerCase();
+  const buffer = fs.readFileSync(filePath);
+  const hex = (start, end) => buffer.subarray(start, end).toString("hex");
+  const ascii = (start, end) => buffer.subarray(start, end).toString("ascii");
+  if (target.endsWith(".png")) return hex(0, 8) === "89504e470d0a1a0a";
+  if (target.endsWith(".jpg") || target.endsWith(".jpeg")) return hex(0, 3) === "ffd8ff";
+  if (target.endsWith(".gif")) {
+    const signature = ascii(0, 6);
+    return signature === "GIF87a" || signature === "GIF89a";
+  }
+  if (target.endsWith(".webm")) return hex(0, 4) === "1a45dfa3";
+  if (target.endsWith(".mp4") || target.endsWith(".m4v") || target.endsWith(".mov")) {
+    return buffer.length >= 12 && ascii(4, 8) === "ftyp";
+  }
+  return true;
 }
 
 function localPathForTarget(targetPath) {

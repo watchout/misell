@@ -46,8 +46,14 @@ response="$(curl -fsS --max-time 20 \
   "${HEARTBEAT_URL}")"
 echo "${response}"
 
-if [[ "${MISELL_SKIP_PLAYLOG_SYNC:-0}" != "1" && -f "${APP_DIR}/scripts/sync-playlogs.js" ]]; then
-  node "${APP_DIR}/scripts/sync-playlogs.js" --limit "${MISELL_PLAYLOG_SYNC_LIMIT:-100}" >/dev/null || {
-    echo "Could not sync queued playlogs" >&2
-  }
+if [[ "${MISELL_SKIP_LOCAL_EVENT_SYNC:-${MISELL_SKIP_PLAYLOG_SYNC:-0}}" != "1" ]]; then
+  if [[ -f "${APP_DIR}/scripts/sync-local-events.js" ]]; then
+    node "${APP_DIR}/scripts/sync-local-events.js" --limit "${MISELL_LOCAL_EVENT_SYNC_LIMIT:-100}" >/dev/null || {
+      echo "Could not sync queued local events" >&2
+    }
+  elif [[ -f "${APP_DIR}/scripts/sync-playlogs.js" ]]; then
+    node "${APP_DIR}/scripts/sync-playlogs.js" --limit "${MISELL_PLAYLOG_SYNC_LIMIT:-100}" >/dev/null || {
+      echo "Could not sync queued playlogs" >&2
+    }
+  fi
 fi

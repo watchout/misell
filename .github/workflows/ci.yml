@@ -83,6 +83,9 @@ jobs:
       - name: Validate player playlist build artifact
         run: npm --prefix apps/player run validate:playlist
 
+      - name: Smoke local state and event queue
+        run: npm --prefix apps/player run smoke:local-state
+
       - name: Smoke content apply hardening
         run: npm --prefix apps/player run smoke:content-apply
 
