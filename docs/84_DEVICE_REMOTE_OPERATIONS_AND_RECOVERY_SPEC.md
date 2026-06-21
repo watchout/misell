@@ -1,4 +1,4 @@
-# 81. 端末遠隔運用・再起動・保守経路 決定仕様
+# 84. 端末遠隔運用・再起動・保守経路 決定仕様
 
 ## 位置づけ
 
@@ -35,7 +35,7 @@ Misell端末の遠隔管理は、次の4層で設計する。
 
 ## Security gate
 
-この仕様は、端末へのremote command実行、Tailscale SSH、on-demand reverse SSH bastion、device token認証を扱うため、実装着手前にsecurity gateを必須とする。
+この仕様は、端末へのremote command実行、Tailscale SSH、on-demand reverse SSH bastion、device token認証を扱うため、実行系の実装着手前にsecurity gateを必須とする。
 
 必要なgate:
 
@@ -44,15 +44,32 @@ needs:cto-security
 route:ceo-approval
 ```
 
-gate通過前に実装してはならないもの:
+2026-06-21時点で、`main` には将来用の `device_commands` table定義だけが入っている。Cloud Admin API、Device API、端末runner、管理画面操作ボタン、実行系の有効化はまだ入っていない。
 
-- `device_commands` の本番投入
-- 管理画面からの `restart_device`
+gate通過前に実装・有効化してはならないもの:
+
+- `device_commands` を操作するAdmin API / Device API
+- 端末側のcommand poll / claim / execution runner
+- 管理画面からの `restart_player`, `restart_kiosk`, `restart_device`
 - 管理画面からの `open_maintenance_tunnel`
 - bastion VPS / reverse SSH の本番運用
 - Tailscale ACL / auth key の商用標準化
 
 docs mergeは可能だが、実装Issueはこのgateを通過してから着手する。
+
+### Gate通過条件
+
+実装Issueへ入る前に、少なくとも次をGitHub上の承認コメントまたはlabel更新で確認する。
+
+- `needs:cto-security` が解消されている。
+- `route:ceo-approval` が解消されている。
+- 初回実装で許可する `command_type` が固定されている。
+- 初回実装で許可しないcommandが明記されている。
+- command発行RBACが承認されている。
+- `params_json` をshell展開しない方針が承認されている。
+- device token revoke時にcommand fetch / claim / resultを拒否する方針が承認されている。
+- audit logに残すeventが承認されている。
+- feature flagまたは設定でcommand runnerを無効化できる方針が承認されている。
 
 ## 原則
 

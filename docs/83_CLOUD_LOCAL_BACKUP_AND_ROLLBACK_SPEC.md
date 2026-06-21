@@ -1,4 +1,4 @@
-# 80. Cloud/Local 正本・バックアップ・ロールバック 決定仕様
+# 83. Cloud/Local 正本・バックアップ・ロールバック 決定仕様
 
 ## 位置づけ
 
@@ -11,7 +11,7 @@
 - `docs/47_ARCHITECTURE_BOUNDARIES_AND_MVP_GATES.md`
 - `docs/58_CLOUD_MONITORING_MVP_SPEC.md`
 - `docs/67_MASTER_CONTROL_AND_CONTENT_DELIVERY_DESIGN.md`
-- `docs/81_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md`
+- `docs/84_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md`
 
 ## 決定事項
 
