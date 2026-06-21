@@ -1,6 +1,7 @@
 (function () {
   const state = {
     devices: [],
+    deviceCommands: [],
     summary: null,
     assets: [],
     releaseManifests: [],
@@ -62,6 +63,22 @@
     failed: "失敗"
   };
 
+  const DEVICE_COMMAND_LABELS = {
+    reload_player_content: "再読込",
+    restart_player: "Player再起動",
+    restart_kiosk: "Kiosk再起動",
+    collect_logs: "ログ収集",
+    sync_content_now: "同期"
+  };
+
+  const DEVICE_COMMAND_OPTIONS = [
+    ["reload_player_content", DEVICE_COMMAND_LABELS.reload_player_content],
+    ["sync_content_now", DEVICE_COMMAND_LABELS.sync_content_now],
+    ["collect_logs", DEVICE_COMMAND_LABELS.collect_logs],
+    ["restart_player", DEVICE_COMMAND_LABELS.restart_player],
+    ["restart_kiosk", DEVICE_COMMAND_LABELS.restart_kiosk]
+  ];
+
   const ROLLOUT_STATUS_LABELS = {
     ready: "反映済み",
     pending: "未反映",
@@ -98,9 +115,10 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, alerts, notifications, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [summary, devices, deviceCommands, alerts, notifications, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
+      fetchJson("/api/admin/device-commands?limit=100").catch(() => ({ device_commands: [] })),
       fetchJson("/api/admin/alerts"),
       fetchJson("/api/admin/alert-notifications"),
       fetchJson("/api/admin/release-manifests"),
@@ -113,6 +131,7 @@
     ]);
     state.summary = summary;
     state.devices = devices.devices || [];
+    state.deviceCommands = deviceCommands.device_commands || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
@@ -195,6 +214,9 @@
     els.devices.querySelectorAll(".token-action").forEach((form) => {
       form.addEventListener("submit", handleTokenAction);
     });
+    els.devices.querySelectorAll(".command-action").forEach((form) => {
+      form.addEventListener("submit", handleCommandCreate);
+    });
   }
 
   function renderDeviceRow(device) {
@@ -244,8 +266,31 @@
             <input name="notes" type="text" value="${escapeHtml(device.notes || "")}" placeholder="運用メモ" aria-label="運用メモ">
             <button type="submit">保存</button>
           </form>
+          <form class="command-action" data-device-id="${escapeHtml(device.device_id)}">
+            <select name="command_type" aria-label="端末コマンド">
+              ${DEVICE_COMMAND_OPTIONS.map(([value, label]) => (
+                `<option value="${escapeAttr(value)}">${escapeHtml(label)}</option>`
+              )).join("")}
+            </select>
+            <input name="reason" type="text" value="" placeholder="理由" aria-label="コマンド理由">
+            <button type="submit">指示</button>
+            ${renderLatestDeviceCommand(device.device_id)}
+          </form>
         </td>
       </tr>
+    `;
+  }
+
+  function renderLatestDeviceCommand(deviceId) {
+    const latest = state.deviceCommands.find((command) => command.device_id === deviceId);
+    if (!latest) return `<small>指示なし</small>`;
+    const label = DEVICE_COMMAND_LABELS[latest.command_type] || latest.command_type || "";
+    return `
+      <small>
+        ${escapeHtml(label)} /
+        <span class="update-status update-status-${escapeAttr(latest.status || "idle")}">${escapeHtml(latest.status || "")}</span>
+        ${formatTime(latest.completed_at || latest.claimed_at || latest.requested_at)}
+      </small>
     `;
   }
 
@@ -359,6 +404,36 @@
       buttons.forEach((button) => {
         button.disabled = false;
       });
+    }
+  }
+
+  async function handleCommandCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const deviceId = form.dataset.deviceId;
+    const commandType = form.elements.command_type.value;
+    const reason = form.elements.reason.value;
+    const label = DEVICE_COMMAND_LABELS[commandType] || commandType;
+    if (!window.confirm(`${deviceId} に ${label} を指示します。`)) return;
+
+    button.disabled = true;
+    button.textContent = "送信中";
+    try {
+      await fetchJson(`/api/admin/devices/${encodeURIComponent(deviceId)}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command_type: commandType,
+          reason,
+          ttl_seconds: 300
+        })
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "端末指示に失敗しました。");
+      button.disabled = false;
+      button.textContent = "指示";
     }
   }
 

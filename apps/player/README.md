@@ -207,6 +207,22 @@ INSTALL_CONTENT_SYNC=1 scripts/setup-autostart.sh
 systemctl --user status misell-content-sync.timer
 ```
 
+Enable the remote command runner only after heartbeat/token verification is
+working and Cloud command issuance has been approved. The runner is disabled by
+default even if the timer is installed.
+
+```bash
+MISELL_COMMAND_RUNNER_ENABLED=1 INSTALL_COMMAND_RUNNER=1 scripts/setup-autostart.sh
+systemctl --user status misell-command-runner.timer
+```
+
+If `~/.config/misell-player/env` already contains `MISELL_COMMAND_RUNNER_ENABLED=0`, edit that file to `MISELL_COMMAND_RUNNER_ENABLED=1` before starting the timer.
+
+`MISELL_DEVICE_COMMANDS_URL` is optional when `MISELL_HEARTBEAT_URL` ends with
+`/api/device/heartbeat`; the runner derives `/api/device/commands` from it.
+The runner executes only fixed allowlisted actions and does not expand command
+params into shell text.
+
 ## Security Baseline
 
 Dry-run:

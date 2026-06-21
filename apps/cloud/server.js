@@ -44,6 +44,34 @@ const OFFER_STATUS = new Set(["draft", "active", "retired", "archived"]);
 const OFFER_REVISION_STATUS = new Set(["draft", "active", "retired"]);
 const COUNTER_ORDER_STATUS = new Set(["issued", "redeemed", "expired", "cancelled"]);
 const REPORT_SNAPSHOT_STATUS = new Set(["draft", "published", "archived"]);
+const DEVICE_COMMAND_TYPES = new Set([
+  "reload_player_content",
+  "restart_player",
+  "restart_kiosk",
+  "collect_logs",
+  "sync_content_now"
+]);
+const DEVICE_COMMAND_STATUS = new Set(["queued", "claimed", "running", "succeeded", "failed", "cancelled", "expired"]);
+const DEVICE_COMMAND_TERMINAL_STATUS = new Set(["succeeded", "failed", "cancelled", "expired"]);
+const DEVICE_COMMAND_ISSUER_ROLES = new Set(["misell_owner", "misell_operator", "device_ops"]);
+const DEVICE_COMMAND_DEFAULT_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_DEFAULT_TTL_SECONDS,
+  300,
+  1,
+  3600
+);
+const DEVICE_COMMAND_MAX_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_MAX_TTL_SECONDS,
+  3600,
+  60,
+  86400
+);
+const DEVICE_COMMAND_RESULT_MAX_BYTES = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_RESULT_MAX_BYTES,
+  2000,
+  256,
+  8000
+);
 const QR_DESTINATION_TYPES = new Set([
   "external_url",
   "coupon",
@@ -125,7 +153,34 @@ const adminAuth = basicAuth({
 });
 
 function requireAdminAuth(req, res, next) {
-  adminAuth(req, res, next);
+  adminAuth(req, res, (error) => {
+    if (error) {
+      next(error);
+      return;
+    }
+    req.adminActor = adminActorFromRequest(req);
+    next();
+  });
+}
+
+function adminActorFromRequest(req) {
+  return {
+    actor_id: cleanString(req?.auth?.user || process.env.MISELL_CLOUD_ADMIN_ID || ADMIN_USER || "admin").slice(0, 120) || "admin",
+    role: cleanString(process.env.MISELL_CLOUD_ADMIN_ROLE || process.env.ADMIN_ROLE || "").slice(0, 80)
+  };
+}
+
+function requireDeviceCommandIssuer(req, res, next) {
+  const actor = req.adminActor || adminActorFromRequest(req);
+  if (!DEVICE_COMMAND_ISSUER_ROLES.has(actor.role)) {
+    res.status(403).json({
+      error: "Admin role is not allowed to issue device commands",
+      required_roles: Array.from(DEVICE_COMMAND_ISSUER_ROLES)
+    });
+    return;
+  }
+  req.adminActor = actor;
+  next();
 }
 
 function requireDeviceAuth(req, res, next) {
@@ -230,6 +285,62 @@ app.get("/api/admin/devices/:device_id", requireAdminAuth, (req, res) => {
     return;
   }
   res.json({ ok: true, device });
+});
+
+app.get("/api/admin/device-commands", requireAdminAuth, (req, res, next) => {
+  try {
+    expireQueuedDeviceCommands();
+    res.json({
+      ok: true,
+      device_commands: listDeviceCommands({
+        device_id: req.query.device_id,
+        status: req.query.status,
+        limit: req.query.limit
+      })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/devices/:device_id/commands", requireAdminAuth, (req, res, next) => {
+  try {
+    const deviceId = cleanId(req.params.device_id);
+    const device = db.prepare("SELECT device_id FROM devices WHERE device_id = ?").get(deviceId);
+    if (!device) {
+      res.status(404).json({ error: "Device not found" });
+      return;
+    }
+    expireQueuedDeviceCommands();
+    res.json({
+      ok: true,
+      device_commands: listDeviceCommands({
+        device_id: deviceId,
+        status: req.query.status,
+        limit: req.query.limit
+      })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/devices/:device_id/commands", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
+  try {
+    const command = createDeviceCommand(cleanId(req.params.device_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/device-commands/:device_command_id/cancel", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
+  try {
+    const command = cancelDeviceCommand(cleanId(req.params.device_command_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/admin/store-settings", requireAdminAuth, (req, res) => {
@@ -1124,6 +1235,37 @@ app.post("/api/admin/devices", requireAdminAuth, (req, res, next) => {
       device_id: input.device_id,
       device_token: deviceToken
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/device/commands", requireDeviceAuth, (req, res, next) => {
+  try {
+    expireQueuedDeviceCommands();
+    const limit = normalizedLimit(req.query.limit, 5, 1, 20);
+    res.json({
+      ok: true,
+      commands: listPendingDeviceCommands(req.device, limit)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/device/commands/:device_command_id/claim", requireDeviceAuth, (req, res, next) => {
+  try {
+    const command = claimDeviceCommand(req.device, cleanId(req.params.device_command_id), req.body || {});
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/device/commands/:device_command_id/result", requireDeviceAuth, (req, res, next) => {
+  try {
+    const command = completeDeviceCommand(req.device, cleanId(req.params.device_command_id), req.body || {});
+    res.json({ ok: true, device_command: command });
   } catch (error) {
     next(error);
   }
@@ -2514,6 +2656,26 @@ function schemaMigrations() {
         db.exec(`
           CREATE INDEX IF NOT EXISTS idx_content_manifests_scope ON content_manifests(tenant_id, store_id, screen_group_id, status, updated_at DESC);
           CREATE INDEX IF NOT EXISTS idx_content_manifests_hash ON content_manifests(content_hash);
+        `);
+      }
+    },
+    {
+      version: 6,
+      name: "device_command_queue_runtime",
+      up() {
+        addColumnIfMissing("device_commands", "claim_token", "TEXT");
+        addColumnIfMissing("device_commands", "claimed_by_runner_id", "TEXT");
+        addColumnIfMissing("device_commands", "started_at", "TEXT");
+        addColumnIfMissing("device_commands", "cancelled_at", "TEXT");
+        addColumnIfMissing("device_commands", "cancelled_by_user_id", "TEXT");
+        addColumnIfMissing("device_commands", "expired_at", "TEXT");
+        addColumnIfMissing("device_commands", "updated_at", "TEXT");
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_device_commands_claim
+            ON device_commands(device_id, status, ttl_expires_at, requested_at);
+          CREATE INDEX IF NOT EXISTS idx_device_commands_audit
+            ON device_commands(requested_at DESC, device_id, command_type);
         `);
       }
     }
@@ -5263,6 +5425,7 @@ function getDeviceDetail(deviceId) {
   if (!device) return null;
   return {
     ...device,
+    device_commands: listDeviceCommands({ device_id: deviceId, limit: 20 }),
     token_events: db.prepare("SELECT * FROM device_token_events WHERE device_id = ? ORDER BY created_at DESC LIMIT 50").all(deviceId),
     log_bundles: listDeviceLogBundles(deviceId, 20),
     asset_states: listDeviceAssetStates(deviceId, 50),
@@ -5271,6 +5434,412 @@ function getDeviceDetail(deviceId) {
     error_logs: db.prepare("SELECT * FROM error_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
     alerts: db.prepare("SELECT * FROM alerts WHERE device_id = ? AND status = 'open' ORDER BY last_seen DESC").all(deviceId)
   };
+}
+
+function listDeviceCommands(filters = {}) {
+  const conditions = [];
+  const params = {};
+  const deviceId = cleanId(filters.device_id);
+  if (deviceId) {
+    conditions.push("device_id = @device_id");
+    params.device_id = deviceId;
+  }
+  const status = cleanString(filters.status);
+  if (status) {
+    if (!DEVICE_COMMAND_STATUS.has(status)) {
+      throw requestError(`status must be one of: ${Array.from(DEVICE_COMMAND_STATUS).join(", ")}`, 400);
+    }
+    conditions.push("status = @status");
+    params.status = status;
+  }
+  const limit = normalizedLimit(filters.limit, 100, 1, 500);
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  return db.prepare(`
+    SELECT * FROM device_commands
+    ${where}
+    ORDER BY requested_at DESC, id DESC
+    LIMIT @limit
+  `).all({ ...params, limit }).map(publicDeviceCommand);
+}
+
+function listPendingDeviceCommands(device, limit = 5) {
+  return db.prepare(`
+    SELECT * FROM device_commands
+    WHERE device_id = ?
+      AND status = 'queued'
+      AND ttl_expires_at > ?
+    ORDER BY requested_at ASC, id ASC
+    LIMIT ?
+  `).all(device.device_id, nowIso(), normalizedLimit(limit, 5, 1, 20)).map(publicDeviceCommand);
+}
+
+function createDeviceCommand(deviceId, body, actor) {
+  const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+  if (!device) throw requestError("Device not found", 404);
+  if (device.token_status === "revoked") throw requestError("Device token is revoked", 409);
+  if (device.status === "retired" || device.status === "lost") {
+    throw requestError("Device is not allowed to receive commands", 409);
+  }
+
+  const input = normalizeDeviceCommandCreateInput(body);
+  const now = nowIso();
+  const commandId = nextEntityId("dcmd", `${deviceId}-${input.command_type}`);
+  const expiresAt = new Date(Date.parse(now) + input.ttl_seconds * 1000).toISOString();
+  const paramsJson = JSON.stringify(input.params);
+  const actorId = cleanString(actor?.actor_id || "admin").slice(0, 120) || "admin";
+
+  const createCommand = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO device_commands (
+        device_command_id, tenant_id, store_id, screen_group_id, device_id,
+        command_type, params_json, status, requested_by_user_id, requested_at,
+        ttl_expires_at, result_json, error, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, '{}', '', ?)
+    `).run(
+      commandId,
+      device.tenant_id,
+      device.store_id,
+      device.screen_group_id,
+      device.device_id,
+      input.command_type,
+      paramsJson,
+      actorId,
+      now,
+      expiresAt,
+      now
+    );
+    const after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    const auditLogId = recordAuditLog(
+      "admin",
+      actorId,
+      "device_command.create",
+      "device_command",
+      commandId,
+      null,
+      publicDeviceCommand(after),
+      { role: actor?.role || "", device_id: device.device_id },
+      now
+    );
+    if (auditLogId) {
+      db.prepare("UPDATE device_commands SET audit_log_id = ? WHERE device_command_id = ?").run(auditLogId, commandId);
+    }
+  });
+  createCommand();
+
+  return publicDeviceCommand(db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId));
+}
+
+function cancelDeviceCommand(commandId, body, actor) {
+  const now = nowIso();
+  const actorId = cleanString(actor?.actor_id || "admin").slice(0, 120) || "admin";
+  const reason = cleanText(body.reason || "cancelled by admin").slice(0, 500);
+  const payload = {
+    status: "cancelled",
+    reason,
+    actor_role: cleanString(actor?.role),
+    at: now
+  };
+  let after = null;
+  const cancel = db.transaction(() => {
+    const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    if (!existing) throw requestError("Device command not found", 404);
+    if (DEVICE_COMMAND_TERMINAL_STATUS.has(existing.status)) {
+      throw requestError("Device command is already terminal", 409);
+    }
+    if (existing.status !== "queued") {
+      throw requestError("Device command has already been claimed", 409);
+    }
+
+    const result = db.prepare(`
+      UPDATE device_commands SET
+        status = 'cancelled',
+        cancelled_at = ?,
+        cancelled_by_user_id = ?,
+        completed_at = ?,
+        result_json = ?,
+        error = ?,
+        updated_at = ?
+      WHERE device_command_id = ?
+        AND status = 'queued'
+    `).run(now, actorId, now, JSON.stringify(payload), reason, now, commandId);
+    if (result.changes !== 1) {
+      throw requestError("Device command could not be cancelled", 409);
+    }
+
+    after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    recordAuditLog(
+      "admin",
+      actorId,
+      "device_command.cancel",
+      "device_command",
+      commandId,
+      publicDeviceCommand(existing),
+      publicDeviceCommand(after),
+      { role: actor?.role || "", reason },
+      now
+    );
+  });
+  cancel();
+  return publicDeviceCommand(after);
+}
+
+function claimDeviceCommand(device, commandId, body) {
+  expireQueuedDeviceCommands();
+  const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ? AND device_id = ?").get(commandId, device.device_id);
+  if (!existing) throw requestError("Device command not found", 404);
+  if (existing.status !== "queued") throw requestError("Device command is not queued", 409);
+
+  const now = requestNowIso(body);
+  if (existing.ttl_expires_at <= now) {
+    expireQueuedDeviceCommands(now);
+    throw requestError("Device command has expired", 409);
+  }
+
+  const claimToken = crypto.randomBytes(24).toString("base64url");
+  const runnerId = cleanString(body.runner_id || body.runnerId || "").slice(0, 120);
+  const result = db.prepare(`
+    UPDATE device_commands SET
+      status = 'claimed',
+      claimed_at = ?,
+      claim_token = ?,
+      claimed_by_runner_id = ?,
+      updated_at = ?
+    WHERE device_command_id = ?
+      AND device_id = ?
+      AND status = 'queued'
+      AND ttl_expires_at > ?
+  `).run(now, claimToken, runnerId, now, commandId, device.device_id, now);
+  if (result.changes !== 1) {
+    throw requestError("Device command could not be claimed", 409);
+  }
+
+  const after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+  recordAuditLog(
+    "device",
+    device.device_id,
+    "device_command.claim",
+    "device_command",
+    commandId,
+    publicDeviceCommand(existing),
+    publicDeviceCommand(after),
+    { runner_id: runnerId },
+    now
+  );
+  return publicDeviceCommand(after, { include_claim_token: true });
+}
+
+function completeDeviceCommand(device, commandId, body) {
+  const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ? AND device_id = ?").get(commandId, device.device_id);
+  if (!existing) throw requestError("Device command not found", 404);
+  if (existing.status !== "claimed" && existing.status !== "running") {
+    throw requestError("Device command is not claimed", 409);
+  }
+  const claimToken = cleanString(body.claim_token || body.claimToken);
+  if (!claimToken || claimToken !== existing.claim_token) {
+    throw requestError("Device command claim token is invalid", 403);
+  }
+
+  const input = normalizeDeviceCommandResult(body);
+  const now = requestNowIso(body);
+  const resultJson = JSON.stringify({
+    status: input.status,
+    exit_code: input.exit_code,
+    summary: input.summary,
+    runner_id: input.runner_id,
+    started_at: input.started_at,
+    completed_at: now,
+    summary_truncated: input.summary_truncated
+  });
+  const result = db.prepare(`
+    UPDATE device_commands SET
+      status = ?,
+      started_at = COALESCE(NULLIF(started_at, ''), ?),
+      completed_at = ?,
+      result_json = ?,
+      error = ?,
+      updated_at = ?
+    WHERE device_command_id = ?
+      AND device_id = ?
+      AND claim_token = ?
+      AND status IN ('claimed', 'running')
+  `).run(
+    input.status,
+    input.started_at || now,
+    now,
+    resultJson,
+    input.status === "failed" ? input.summary : "",
+    now,
+    commandId,
+    device.device_id,
+    claimToken
+  );
+  if (result.changes !== 1) {
+    throw requestError("Device command result was not accepted", 409);
+  }
+
+  const after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+  recordAuditLog(
+    "device",
+    device.device_id,
+    "device_command.result",
+    "device_command",
+    commandId,
+    publicDeviceCommand(existing),
+    publicDeviceCommand(after),
+    { status: input.status, runner_id: input.runner_id },
+    now
+  );
+  return publicDeviceCommand(after);
+}
+
+function expireQueuedDeviceCommands(now = nowIso()) {
+  const expired = db.prepare(`
+    SELECT * FROM device_commands
+    WHERE status = 'queued'
+      AND ttl_expires_at <= ?
+  `).all(now);
+  if (expired.length === 0) return 0;
+
+  const expire = db.transaction((rows) => {
+    for (const row of rows) {
+      const resultPayload = {
+        status: "expired",
+        reason: "ttl expired before device claim",
+        at: now
+      };
+      db.prepare(`
+        UPDATE device_commands SET
+          status = 'expired',
+          expired_at = ?,
+          completed_at = ?,
+          result_json = ?,
+          error = ?,
+          updated_at = ?
+        WHERE device_command_id = ? AND status = 'queued'
+      `).run(now, now, JSON.stringify(resultPayload), resultPayload.reason, now, row.device_command_id);
+      recordAuditLog(
+        "system",
+        "device-command-expiry",
+        "device_command.expire",
+        "device_command",
+        row.device_command_id,
+        publicDeviceCommand(row),
+        publicDeviceCommand(db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(row.device_command_id)),
+        {},
+        now
+      );
+    }
+  });
+  expire(expired);
+  return expired.length;
+}
+
+function normalizeDeviceCommandCreateInput(input) {
+  const commandType = cleanString(input.command_type || input.commandType);
+  if (!DEVICE_COMMAND_TYPES.has(commandType)) {
+    throw requestError(`command_type must be one of: ${Array.from(DEVICE_COMMAND_TYPES).join(", ")}`, 400);
+  }
+  const ttlSeconds = normalizedLimit(input.ttl_seconds || input.ttlSeconds, DEVICE_COMMAND_DEFAULT_TTL_SECONDS, 1, DEVICE_COMMAND_MAX_TTL_SECONDS);
+  return {
+    command_type: commandType,
+    ttl_seconds: ttlSeconds,
+    params: normalizeDeviceCommandParams(input)
+  };
+}
+
+function normalizeDeviceCommandParams(input) {
+  const source = parseParamsObject(input.params_json ?? input.params ?? {});
+  const bodyFields = {
+    reason: input.reason,
+    label: input.label
+  };
+  const combined = { ...source, ...Object.fromEntries(Object.entries(bodyFields).filter(([, value]) => value !== undefined)) };
+  const allowedKeys = new Set(["reason", "label"]);
+  for (const key of Object.keys(combined)) {
+    if (!allowedKeys.has(key)) {
+      throw requestError(`params.${key} is not allowed for device commands`, 400);
+    }
+  }
+  return {
+    reason: cleanText(combined.reason).slice(0, 500),
+    label: cleanString(combined.label).slice(0, 120)
+  };
+}
+
+function parseParamsObject(value) {
+  if (!value) return {};
+  if (typeof value === "string") {
+    const parsed = parseJson(value, null);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw requestError("params_json must be a JSON object", 400);
+    }
+    return parsed;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw requestError("params must be an object", 400);
+  }
+  return value;
+}
+
+function normalizeDeviceCommandResult(input) {
+  for (const key of ["stdout", "stderr", "stdout_text", "stderr_text", "raw_output", "logs"]) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) {
+      throw requestError("Device command result must not include stdout/stderr or raw logs", 400);
+    }
+  }
+  const status = cleanString(input.status);
+  if (status !== "succeeded" && status !== "failed") {
+    throw requestError("status must be succeeded or failed", 400);
+  }
+  const startedAt = cleanIsoString(input.started_at || input.startedAt);
+  const summary = truncateTextByBytes(input.summary || input.message || "", DEVICE_COMMAND_RESULT_MAX_BYTES);
+  return {
+    status,
+    exit_code: asInteger(input.exit_code ?? input.exitCode),
+    started_at: startedAt,
+    summary: summary.value || (status === "succeeded" ? "completed" : "failed"),
+    summary_truncated: summary.truncated,
+    runner_id: cleanString(input.runner_id || input.runnerId).slice(0, 120)
+  };
+}
+
+function cleanIsoString(value) {
+  const text = cleanString(value);
+  if (!text) return "";
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function publicDeviceCommand(row, options = {}) {
+  if (!row) return null;
+  const command = {
+    device_command_id: cleanString(row.device_command_id),
+    tenant_id: cleanString(row.tenant_id),
+    store_id: cleanString(row.store_id),
+    screen_group_id: cleanString(row.screen_group_id),
+    device_id: cleanString(row.device_id),
+    command_type: cleanString(row.command_type),
+    params: parseJson(row.params_json || "{}", {}),
+    status: cleanString(row.status),
+    requested_by_user_id: cleanString(row.requested_by_user_id),
+    requested_at: cleanString(row.requested_at),
+    ttl_expires_at: cleanString(row.ttl_expires_at),
+    claimed_at: cleanString(row.claimed_at),
+    claimed_by_runner_id: cleanString(row.claimed_by_runner_id),
+    started_at: cleanString(row.started_at),
+    completed_at: cleanString(row.completed_at),
+    cancelled_at: cleanString(row.cancelled_at),
+    cancelled_by_user_id: cleanString(row.cancelled_by_user_id),
+    expired_at: cleanString(row.expired_at),
+    result: parseJson(row.result_json || "{}", {}),
+    error: cleanString(row.error),
+    audit_log_id: row.audit_log_id || null,
+    updated_at: cleanString(row.updated_at)
+  };
+  if (options.include_claim_token) {
+    command.claim_token = cleanString(row.claim_token);
+  }
+  return command;
 }
 
 function listDeviceLogBundles(deviceId = "", limit = 50) {
@@ -5567,7 +6136,7 @@ function localDateTimeParts(isoValue, timezone = DEFAULT_TIMEZONE) {
 }
 
 function recordAuditLog(actorType, actorId, action, entityType, entityId, beforeValue, afterValue, metadata = {}, createdAt = nowIso()) {
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO audit_logs (
       actor_type, actor_id, action, entity_type, entity_id,
       before_json, after_json, metadata_json, created_at
@@ -5583,6 +6152,7 @@ function recordAuditLog(actorType, actorId, action, entityType, entityId, before
     JSON.stringify(metadata || {}),
     createdAt
   );
+  return result.lastInsertRowid;
 }
 
 function normalizedCloudAssetPath(value) {
