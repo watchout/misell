@@ -20,6 +20,7 @@ loadEnvFile();
 const backupPath = path.resolve(args.backup || args.backup_path || "");
 const manifestPath = path.resolve(args.manifest || args.manifest_path || `${backupPath}.manifest.json`);
 const assetsDir = cleanString(args.assets_dir || process.env.MISELL_CLOUD_ASSETS_DIR);
+const resolvedAssetsDir = assetsDir ? path.resolve(assetsDir) : "";
 const verifyAssetFiles = args.verify_asset_files === "0" || args.no_verify_asset_files
   ? false
   : Boolean(assetsDir);
@@ -200,6 +201,7 @@ async function checkAssets(db, failures, warnings) {
     missing_manifest_links: missingLinks,
     asset_file_check: verifyAssetFiles ? "verified" : "skipped_assets_dir_not_configured",
     checked_files: 0,
+    invalid_filenames: [],
     missing_files: [],
     hash_mismatches: [],
     size_mismatches: []
@@ -212,7 +214,16 @@ async function checkAssets(db, failures, warnings) {
   }
 
   for (const asset of assets) {
-    const assetPath = resolveAssetPath(asset);
+    const resolvedAsset = resolveAssetPath(asset);
+    if (resolvedAsset.error) {
+      result.invalid_filenames.push({
+        asset_id: asset.asset_id,
+        filename: asset.filename,
+        reason: resolvedAsset.error
+      });
+      continue;
+    }
+    const assetPath = resolvedAsset.path;
     if (!assetPath || !fs.existsSync(assetPath)) {
       result.missing_files.push({ asset_id: asset.asset_id, filename: asset.filename });
       continue;
@@ -227,10 +238,12 @@ async function checkAssets(db, failures, warnings) {
       result.hash_mismatches.push({ asset_id: asset.asset_id, expected: cleanString(asset.sha256), actual: actualSha });
     }
   }
+  if (result.invalid_filenames.length > 0) failures.push(`asset file verification found ${result.invalid_filenames.length} invalid filename(s)`);
   if (result.missing_files.length > 0) failures.push(`asset file verification found ${result.missing_files.length} missing file(s)`);
   if (result.size_mismatches.length > 0) failures.push(`asset file verification found ${result.size_mismatches.length} size mismatch(es)`);
   if (result.hash_mismatches.length > 0) failures.push(`asset file verification found ${result.hash_mismatches.length} sha256 mismatch(es)`);
   result.ok = result.ok &&
+    result.invalid_filenames.length === 0 &&
     result.missing_files.length === 0 &&
     result.size_mismatches.length === 0 &&
     result.hash_mismatches.length === 0;
@@ -238,9 +251,28 @@ async function checkAssets(db, failures, warnings) {
 }
 
 function resolveAssetPath(asset) {
-  if (assetsDir) return path.join(assetsDir, cleanString(asset.filename));
+  if (assetsDir) {
+    const filename = cleanString(asset.filename);
+    const filenameError = validateAssetFilename(filename);
+    if (filenameError) return { path: "", error: filenameError };
+    const candidate = path.resolve(resolvedAssetsDir, filename);
+    const relative = path.relative(resolvedAssetsDir, candidate);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      return { path: "", error: "filename escapes assets dir" };
+    }
+    return { path: candidate, error: "" };
+  }
   const storagePath = cleanString(asset.storage_path);
-  return storagePath ? path.resolve(storagePath) : "";
+  return { path: storagePath ? path.resolve(storagePath) : "", error: "" };
+}
+
+function validateAssetFilename(filename) {
+  if (!filename) return "filename is empty";
+  if (path.isAbsolute(filename)) return "filename is absolute";
+  if (filename.includes("/") || filename.includes("\\")) return "filename contains a path separator";
+  if (filename.includes("..")) return "filename contains dot-dot";
+  if (!/^[a-zA-Z0-9_.:-]+$/.test(filename)) return "filename contains unsafe characters";
+  return "";
 }
 
 function checkReportSnapshots(db, failures) {

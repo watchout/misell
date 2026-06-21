@@ -199,6 +199,7 @@ async function main() {
     }
 
     await runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir);
+    await runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir);
     await runS3CliBackupSmoke(tmpDir, dbPath);
     await runS3EnvFileBackupSmoke(tmpDir, dbPath);
     await runS3TimeoutSmoke(tmpDir, dbPath);
@@ -212,6 +213,7 @@ async function main() {
       retention_purge: true,
       backup_dir_hardened: true,
       restore_drill: true,
+      restore_drill_asset_containment: true,
       s3_upload: true,
       s3_env_file: true,
       s3_timeout: true
@@ -257,6 +259,76 @@ async function runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir)
   }
   const evidenceMode = (await fsp.stat(evidence.evidence_path)).mode & 0o777;
   if (evidenceMode !== 0o600) throw new Error(`restore drill evidence mode was not 0600: ${evidenceMode.toString(8)}`);
+}
+
+async function runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir) {
+  const traversalDbPath = path.join(tmpDir, "misell-cloud-traversal.sqlite");
+  const outsidePath = path.join(tmpDir, "outside-secret.txt");
+  const outsideBytes = Buffer.from("outside asset dir secret");
+  await fsp.copyFile(dbPath, traversalDbPath);
+  await fsp.writeFile(outsidePath, outsideBytes, { mode: 0o600 });
+
+  const db = new Database(traversalDbPath);
+  try {
+    db.prepare(`
+      INSERT INTO cloud_assets (
+        asset_id, type, filename, original_name, mime_type, size, sha256,
+        storage_path, download_path, created_at, updated_at
+      ) VALUES (?, 'video', ?, ?, 'video/mp4', ?, ?, ?, ?, ?, ?)
+    `).run(
+      "asset-traversal-smoke",
+      "../outside-secret.txt",
+      "outside-secret.txt",
+      outsideBytes.length,
+      sha256Buffer(outsideBytes),
+      outsidePath,
+      "/api/admin/assets/asset-traversal-smoke/download",
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-20T00:00:00.000Z"
+    );
+  } finally {
+    db.close();
+  }
+
+  const backupDir = path.join(tmpDir, "traversal-backups");
+  const backupResult = await runBackup(traversalDbPath, backupDir);
+  if (backupResult.status !== 0) {
+    throw new Error(`traversal backup failed:\n${backupResult.stdout}\n${backupResult.stderr}`);
+  }
+  const backupPath = parseOutputPath(backupResult.stdout, "backup");
+  const manifestPath = parseOutputPath(backupResult.stdout, "manifest");
+  if (!backupPath || !manifestPath) throw new Error(`traversal backup output missing paths: ${backupResult.stdout}`);
+
+  const evidenceDir = path.join(tmpDir, "restore-drill-traversal");
+  const result = await runCommand(process.execPath, [
+    path.join(appDir, "scripts", "restore-drill.mjs"),
+    "--backup", backupPath,
+    "--manifest", manifestPath,
+    "--assets-dir", assetsDir,
+    "--evidence-dir", evidenceDir,
+    "--operator", "smoke",
+    "--context", "smoke-asset-containment",
+    "--json"
+  ], { cwd: appDir });
+  if (result.status === 0) {
+    throw new Error(`restore drill traversal smoke unexpectedly succeeded:\n${result.stdout}\n${result.stderr}`);
+  }
+  const evidence = JSON.parse(result.stdout);
+  if (evidence.ok !== false) throw new Error(`traversal evidence was not failed: ${result.stdout}`);
+  if (evidence.checks.assets.checked_files !== 1) {
+    throw new Error(`traversal smoke should only check the safe asset file: ${result.stdout}`);
+  }
+  const invalid = evidence.checks.assets.invalid_filenames || [];
+  const traversal = invalid.find((entry) => entry.asset_id === "asset-traversal-smoke");
+  if (!traversal || traversal.filename !== "../outside-secret.txt") {
+    throw new Error(`traversal filename was not rejected: ${result.stdout}`);
+  }
+  if (!String(traversal.reason || "").includes("path separator")) {
+    throw new Error(`unexpected traversal rejection reason: ${result.stdout}`);
+  }
+  if (!evidence.failures.some((failure) => failure.includes("invalid filename"))) {
+    throw new Error(`traversal failure summary missing: ${result.stdout}`);
+  }
 }
 
 async function runBackup(dbPath, backupDir, options = {}) {
