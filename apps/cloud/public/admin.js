@@ -71,6 +71,18 @@
     sync_content_now: "同期"
   };
 
+  const DEVICE_COMMAND_STATUS_LABELS = {
+    queued: "待機",
+    claimed: "取得済み",
+    running: "実行中",
+    succeeded: "完了",
+    failed: "失敗",
+    cancelled: "取消",
+    expired: "期限切れ",
+    stale: "応答なし",
+    force_cancelled: "強制取消"
+  };
+
   const DEVICE_COMMAND_OPTIONS = [
     ["reload_player_content", DEVICE_COMMAND_LABELS.reload_player_content],
     ["sync_content_now", DEVICE_COMMAND_LABELS.sync_content_now],
@@ -217,6 +229,9 @@
     els.devices.querySelectorAll(".command-action").forEach((form) => {
       form.addEventListener("submit", handleCommandCreate);
     });
+    els.devices.querySelectorAll(".command-force-cancel").forEach((button) => {
+      button.addEventListener("click", handleCommandForceCancel);
+    });
   }
 
   function renderDeviceRow(device) {
@@ -285,12 +300,20 @@
     const latest = state.deviceCommands.find((command) => command.device_id === deviceId);
     if (!latest) return `<small>指示なし</small>`;
     const label = DEVICE_COMMAND_LABELS[latest.command_type] || latest.command_type || "";
+    const statusLabel = DEVICE_COMMAND_STATUS_LABELS[latest.status] || latest.status || "";
+    const stamp = latest.completed_at || latest.claimed_at || latest.requested_at;
+    const forceCancel = latest.terminal ? "" : `
+      <button class="secondary command-force-cancel" type="button" data-command-id="${escapeAttr(latest.device_command_id)}" data-status="${escapeAttr(latest.status || "")}">強制取消</button>
+    `;
     return `
       <small>
         ${escapeHtml(label)} /
-        <span class="update-status update-status-${escapeAttr(latest.status || "idle")}">${escapeHtml(latest.status || "")}</span>
-        ${formatTime(latest.completed_at || latest.claimed_at || latest.requested_at)}
+        <span class="update-status update-status-${escapeAttr(latest.status || "idle")}">${escapeHtml(statusLabel)}</span>
+        ${formatTime(stamp)}
+        ${latest.claim_stale_at ? ` / 応答期限 ${formatTime(latest.claim_stale_at)}` : ""}
+        ${latest.error ? ` / ${escapeHtml(latest.error)}` : ""}
       </small>
+      ${forceCancel}
     `;
   }
 
@@ -434,6 +457,29 @@
       window.alert(error.message || "端末指示に失敗しました。");
       button.disabled = false;
       button.textContent = "指示";
+    }
+  }
+
+  async function handleCommandForceCancel(event) {
+    const button = event.currentTarget;
+    const commandId = button.dataset.commandId;
+    if (!commandId) return;
+    const reason = window.prompt(`${commandId} を強制取消します。理由を入力してください。`, "operator force-cancel");
+    if (reason === null) return;
+
+    button.disabled = true;
+    button.textContent = "取消中";
+    try {
+      await fetchJson(`/api/admin/device-commands/${encodeURIComponent(commandId)}/force-cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason })
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "強制取消に失敗しました。");
+      button.disabled = false;
+      button.textContent = "強制取消";
     }
   }
 

@@ -51,8 +51,18 @@ const DEVICE_COMMAND_TYPES = new Set([
   "collect_logs",
   "sync_content_now"
 ]);
-const DEVICE_COMMAND_STATUS = new Set(["queued", "claimed", "running", "succeeded", "failed", "cancelled", "expired"]);
-const DEVICE_COMMAND_TERMINAL_STATUS = new Set(["succeeded", "failed", "cancelled", "expired"]);
+const DEVICE_COMMAND_STATUS = new Set([
+  "queued",
+  "claimed",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "expired",
+  "stale",
+  "force_cancelled"
+]);
+const DEVICE_COMMAND_TERMINAL_STATUS = new Set(["succeeded", "failed", "cancelled", "expired", "stale", "force_cancelled"]);
 const DEVICE_COMMAND_ISSUER_ROLES = new Set(["misell_owner", "misell_operator", "device_ops"]);
 const DEVICE_COMMAND_DEFAULT_TTL_SECONDS = normalizedLimit(
   process.env.MISELL_DEVICE_COMMAND_DEFAULT_TTL_SECONDS,
@@ -71,6 +81,18 @@ const DEVICE_COMMAND_RESULT_MAX_BYTES = normalizedLimit(
   2000,
   256,
   8000
+);
+const DEVICE_COMMAND_CLAIM_LEASE_SECONDS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_CLAIM_LEASE_SECONDS,
+  300,
+  1,
+  86400
+);
+const DEVICE_COMMAND_RETENTION_DAYS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_RETENTION_DAYS,
+  90,
+  1,
+  3650
 );
 const QR_DESTINATION_TYPES = new Set([
   "external_url",
@@ -289,10 +311,13 @@ app.get("/api/admin/devices/:device_id", requireAdminAuth, (req, res) => {
 
 app.get("/api/admin/device-commands", requireAdminAuth, (req, res, next) => {
   try {
-    expireQueuedDeviceCommands();
+    maintainDeviceCommands();
     res.json({
       ok: true,
       device_commands: listDeviceCommands({
+        tenant_id: req.query.tenant_id,
+        store_id: req.query.store_id,
+        screen_group_id: req.query.screen_group_id,
         device_id: req.query.device_id,
         status: req.query.status,
         limit: req.query.limit
@@ -311,10 +336,13 @@ app.get("/api/admin/devices/:device_id/commands", requireAdminAuth, (req, res, n
       res.status(404).json({ error: "Device not found" });
       return;
     }
-    expireQueuedDeviceCommands();
+    maintainDeviceCommands();
     res.json({
       ok: true,
       device_commands: listDeviceCommands({
+        tenant_id: req.query.tenant_id,
+        store_id: req.query.store_id,
+        screen_group_id: req.query.screen_group_id,
         device_id: deviceId,
         status: req.query.status,
         limit: req.query.limit
@@ -337,6 +365,15 @@ app.post("/api/admin/devices/:device_id/commands", requireAdminAuth, requireDevi
 app.post("/api/admin/device-commands/:device_command_id/cancel", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
   try {
     const command = cancelDeviceCommand(cleanId(req.params.device_command_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/device-commands/:device_command_id/force-cancel", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
+  try {
+    const command = forceCancelDeviceCommand(cleanId(req.params.device_command_id), req.body || {}, req.adminActor);
     res.json({ ok: true, device_command: command });
   } catch (error) {
     next(error);
@@ -1242,7 +1279,7 @@ app.post("/api/admin/devices", requireAdminAuth, (req, res, next) => {
 
 app.get("/api/device/commands", requireDeviceAuth, (req, res, next) => {
   try {
-    expireQueuedDeviceCommands();
+    maintainDeviceCommands();
     const limit = normalizedLimit(req.query.limit, 5, 1, 20);
     res.json({
       ok: true,
@@ -5439,6 +5476,21 @@ function getDeviceDetail(deviceId) {
 function listDeviceCommands(filters = {}) {
   const conditions = [];
   const params = {};
+  const tenantId = cleanId(filters.tenant_id);
+  if (tenantId) {
+    conditions.push("tenant_id = @tenant_id");
+    params.tenant_id = tenantId;
+  }
+  const storeId = cleanId(filters.store_id);
+  if (storeId) {
+    conditions.push("store_id = @store_id");
+    params.store_id = storeId;
+  }
+  const screenGroupId = cleanId(filters.screen_group_id);
+  if (screenGroupId) {
+    conditions.push("screen_group_id = @screen_group_id");
+    params.screen_group_id = screenGroupId;
+  }
   const deviceId = cleanId(filters.device_id);
   if (deviceId) {
     conditions.push("device_id = @device_id");
@@ -5583,8 +5635,69 @@ function cancelDeviceCommand(commandId, body, actor) {
   return publicDeviceCommand(after);
 }
 
+function forceCancelDeviceCommand(commandId, body, actor) {
+  const now = nowIso();
+  const actorId = cleanString(actor?.actor_id || "admin").slice(0, 120) || "admin";
+  const reason = cleanText(body.reason || "force-cancelled by admin").slice(0, 500);
+  let after = null;
+  const forceCancel = db.transaction(() => {
+    const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    if (!existing) throw requestError("Device command not found", 404);
+    if (DEVICE_COMMAND_TERMINAL_STATUS.has(existing.status)) {
+      throw requestError("Device command is already terminal", 409);
+    }
+
+    const payload = {
+      status: "force_cancelled",
+      previous_status: existing.status,
+      reason,
+      actor_role: cleanString(actor?.role),
+      at: now
+    };
+    const result = db.prepare(`
+      UPDATE device_commands SET
+        status = 'force_cancelled',
+        cancelled_at = ?,
+        cancelled_by_user_id = ?,
+        completed_at = ?,
+        result_json = ?,
+        error = ?,
+        updated_at = ?
+      WHERE device_command_id = ?
+        AND status NOT IN (${sqlPlaceholders(Array.from(DEVICE_COMMAND_TERMINAL_STATUS).length)})
+    `).run(
+      now,
+      actorId,
+      now,
+      JSON.stringify(payload),
+      reason,
+      now,
+      commandId,
+      ...Array.from(DEVICE_COMMAND_TERMINAL_STATUS)
+    );
+    if (result.changes !== 1) {
+      throw requestError("Device command could not be force-cancelled", 409);
+    }
+
+    after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    recordAuditLog(
+      "admin",
+      actorId,
+      "device_command.force_cancel",
+      "device_command",
+      commandId,
+      publicDeviceCommand(existing),
+      publicDeviceCommand(after),
+      { role: actor?.role || "", reason, previous_status: existing.status },
+      now
+    );
+  });
+  forceCancel();
+  return publicDeviceCommand(after);
+}
+
 function claimDeviceCommand(device, commandId, body) {
-  expireQueuedDeviceCommands();
+  maintainDeviceCommands();
   const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ? AND device_id = ?").get(commandId, device.device_id);
   if (!existing) throw requestError("Device command not found", 404);
   if (existing.status !== "queued") throw requestError("Device command is not queued", 409);
@@ -5629,6 +5742,8 @@ function claimDeviceCommand(device, commandId, body) {
 }
 
 function completeDeviceCommand(device, commandId, body) {
+  maintainDeviceCommands();
+  const now = requestNowIso(body);
   const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ? AND device_id = ?").get(commandId, device.device_id);
   if (!existing) throw requestError("Device command not found", 404);
   if (existing.status !== "claimed" && existing.status !== "running") {
@@ -5640,7 +5755,6 @@ function completeDeviceCommand(device, commandId, body) {
   }
 
   const input = normalizeDeviceCommandResult(body);
-  const now = requestNowIso(body);
   const resultJson = JSON.stringify({
     status: input.status,
     exit_code: input.exit_code,
@@ -5692,6 +5806,13 @@ function completeDeviceCommand(device, commandId, body) {
   return publicDeviceCommand(after);
 }
 
+function maintainDeviceCommands(now = nowIso()) {
+  const expired = expireQueuedDeviceCommands(now);
+  const stale = markStaleDeviceCommands(now);
+  const purged = purgeTerminalDeviceCommands(now);
+  return { expired, stale, purged };
+}
+
 function expireQueuedDeviceCommands(now = nowIso()) {
   const expired = db.prepare(`
     SELECT * FROM device_commands
@@ -5732,6 +5853,94 @@ function expireQueuedDeviceCommands(now = nowIso()) {
   });
   expire(expired);
   return expired.length;
+}
+
+function markStaleDeviceCommands(now = nowIso()) {
+  const cutoff = new Date(Date.parse(now) - DEVICE_COMMAND_CLAIM_LEASE_SECONDS * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT * FROM device_commands
+    WHERE status IN ('claimed', 'running')
+      AND COALESCE(NULLIF(claimed_at, ''), NULLIF(started_at, ''), updated_at, requested_at) <= ?
+  `).all(cutoff);
+  if (rows.length === 0) return 0;
+
+  const mark = db.transaction((commands) => {
+    for (const row of commands) {
+      const payload = {
+        status: "stale",
+        previous_status: row.status,
+        reason: `claim lease expired after ${DEVICE_COMMAND_CLAIM_LEASE_SECONDS}s without result`,
+        at: now
+      };
+      const result = db.prepare(`
+        UPDATE device_commands SET
+          status = 'stale',
+          completed_at = ?,
+          result_json = ?,
+          error = ?,
+          updated_at = ?
+        WHERE device_command_id = ?
+          AND status IN ('claimed', 'running')
+          AND COALESCE(NULLIF(claimed_at, ''), NULLIF(started_at, ''), updated_at, requested_at) <= ?
+      `).run(now, JSON.stringify(payload), payload.reason, now, row.device_command_id, cutoff);
+      if (result.changes !== 1) continue;
+      recordAuditLog(
+        "system",
+        "device-command-lease",
+        "device_command.stale",
+        "device_command",
+        row.device_command_id,
+        publicDeviceCommand(row),
+        publicDeviceCommand(db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(row.device_command_id)),
+        { claim_lease_seconds: DEVICE_COMMAND_CLAIM_LEASE_SECONDS },
+        now
+      );
+    }
+  });
+  mark(rows);
+  return rows.length;
+}
+
+function purgeTerminalDeviceCommands(now = nowIso()) {
+  const cutoff = new Date(Date.parse(now) - DEVICE_COMMAND_RETENTION_DAYS * 86400000).toISOString();
+  const terminalStatuses = Array.from(DEVICE_COMMAND_TERMINAL_STATUS);
+  const rows = db.prepare(`
+    SELECT * FROM device_commands
+    WHERE status IN (${sqlPlaceholders(terminalStatuses.length)})
+      AND completed_at IS NOT NULL
+      AND completed_at != ''
+      AND completed_at <= ?
+    ORDER BY completed_at ASC, id ASC
+    LIMIT 500
+  `).all(...terminalStatuses, cutoff);
+  if (rows.length === 0) return 0;
+
+  const purge = db.transaction((commands) => {
+    const ids = commands.map((row) => row.id);
+    const result = db.prepare(`
+      DELETE FROM device_commands
+      WHERE id IN (${sqlPlaceholders(ids.length)})
+    `).run(...ids);
+    recordAuditLog(
+      "system",
+      "device-command-retention",
+      "device_command.purge",
+      "device_command",
+      "device-command-retention",
+      null,
+      null,
+      {
+        retention_days: DEVICE_COMMAND_RETENTION_DAYS,
+        cutoff,
+        selected_count: commands.length,
+        deleted_count: result.changes,
+        statuses: terminalStatuses
+      },
+      now
+    );
+  });
+  purge(rows);
+  return rows.length;
 }
 
 function normalizeDeviceCommandCreateInput(input) {
@@ -5812,6 +6021,12 @@ function cleanIsoString(value) {
 
 function publicDeviceCommand(row, options = {}) {
   if (!row) return null;
+  const status = cleanString(row.status);
+  const isClaimed = status === "claimed" || status === "running";
+  const claimedAtMs = Date.parse(row.claimed_at || "");
+  const claimStaleAt = isClaimed && Number.isFinite(claimedAtMs)
+    ? new Date(claimedAtMs + DEVICE_COMMAND_CLAIM_LEASE_SECONDS * 1000).toISOString()
+    : "";
   const command = {
     device_command_id: cleanString(row.device_command_id),
     tenant_id: cleanString(row.tenant_id),
@@ -5820,7 +6035,9 @@ function publicDeviceCommand(row, options = {}) {
     device_id: cleanString(row.device_id),
     command_type: cleanString(row.command_type),
     params: parseJson(row.params_json || "{}", {}),
-    status: cleanString(row.status),
+    status,
+    terminal: DEVICE_COMMAND_TERMINAL_STATUS.has(status),
+    claim_stale_at: claimStaleAt,
     requested_by_user_id: cleanString(row.requested_by_user_id),
     requested_at: cleanString(row.requested_at),
     ttl_expires_at: cleanString(row.ttl_expires_at),
@@ -5840,6 +6057,10 @@ function publicDeviceCommand(row, options = {}) {
     command.claim_token = cleanString(row.claim_token);
   }
   return command;
+}
+
+function sqlPlaceholders(count) {
+  return Array.from({ length: count }, () => "?").join(", ");
 }
 
 function listDeviceLogBundles(deviceId = "", limit = 50) {

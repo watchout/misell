@@ -231,6 +231,112 @@ async function smokeAllowedCommandFlow() {
       throw new Error("expired command was not marked expired");
     }
 
+    const staleCommand = await admin("POST", `/api/admin/devices/${encodeURIComponent(device.device_id)}/commands`, {
+      command_type: "sync_content_now",
+      reason: "stale smoke",
+      ttl_seconds: 120
+    });
+    const staleId = staleCommand.data.device_command.device_command_id;
+    const staleClaim = await request("POST", `/api/device/commands/${encodeURIComponent(staleId)}/claim`, {
+      runner_id: "stale-smoke"
+    }, auth);
+    setCommandFields(staleId, {
+      claimed_at: "2000-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:00.000Z"
+    });
+    await admin("GET", `/api/admin/device-commands?${new URLSearchParams({ device_id: device.device_id })}`);
+    const staleList = await admin("GET", `/api/admin/device-commands?${new URLSearchParams({
+      device_id: device.device_id,
+      status: "stale"
+    })}`);
+    const staleResult = staleList.data.device_commands.find((item) => item.device_command_id === staleId);
+    if (!staleResult || staleResult.terminal !== true) throw new Error("claimed command was not marked terminal stale");
+    await expectDeviceError("POST", `/api/device/commands/${encodeURIComponent(staleId)}/result`, {
+      claim_token: staleClaim.data.device_command.claim_token,
+      status: "succeeded",
+      summary: "late stale result"
+    }, auth, 409, "not claimed");
+
+    const forceCommand = await admin("POST", `/api/admin/devices/${encodeURIComponent(device.device_id)}/commands`, {
+      command_type: "collect_logs",
+      reason: "force cancel smoke",
+      ttl_seconds: 120
+    });
+    const forceId = forceCommand.data.device_command.device_command_id;
+    const forceClaim = await request("POST", `/api/device/commands/${encodeURIComponent(forceId)}/claim`, {
+      runner_id: "force-cancel-smoke"
+    }, auth);
+    const forceCancelled = await admin("POST", `/api/admin/device-commands/${encodeURIComponent(forceId)}/force-cancel`, {
+      reason: "operator force cancel smoke"
+    });
+    if (forceCancelled.data.device_command.status !== "force_cancelled" || forceCancelled.data.device_command.result.previous_status !== "claimed") {
+      throw new Error(`force-cancel did not preserve previous status: ${JSON.stringify(forceCancelled.data.device_command)}`);
+    }
+    await expectAdminError("POST", `/api/admin/device-commands/${encodeURIComponent(forceId)}/force-cancel`, {
+      reason: "terminal force cancel should fail"
+    }, 409, "already terminal");
+    await expectDeviceError("POST", `/api/device/commands/${encodeURIComponent(forceId)}/result`, {
+      claim_token: forceClaim.data.device_command.claim_token,
+      status: "failed",
+      summary: "late force-cancelled result"
+    }, auth, 409, "not claimed");
+
+    const retentionCommand = await admin("POST", `/api/admin/devices/${encodeURIComponent(device.device_id)}/commands`, {
+      command_type: "reload_player_content",
+      reason: "retention smoke",
+      ttl_seconds: 120
+    });
+    const retentionId = retentionCommand.data.device_command.device_command_id;
+    await admin("POST", `/api/admin/device-commands/${encodeURIComponent(retentionId)}/cancel`, {
+      reason: "retention smoke cancel"
+    });
+    setCommandFields(retentionId, {
+      completed_at: "2000-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:00.000Z"
+    });
+    const activeOldCommand = await admin("POST", `/api/admin/devices/${encodeURIComponent(device.device_id)}/commands`, {
+      command_type: "reload_player_content",
+      reason: "active old command must survive retention",
+      ttl_seconds: 120
+    });
+    const activeOldId = activeOldCommand.data.device_command.device_command_id;
+    setCommandFields(activeOldId, {
+      requested_at: "2000-01-01T00:00:00.000Z",
+      updated_at: "2000-01-01T00:00:00.000Z"
+    });
+    const afterPurge = await admin("GET", `/api/admin/device-commands?${new URLSearchParams({ device_id: device.device_id, limit: "500" })}`);
+    if (afterPurge.data.device_commands.some((item) => item.device_command_id === retentionId)) {
+      throw new Error("old terminal command was not purged");
+    }
+    if (!afterPurge.data.device_commands.some((item) => item.device_command_id === activeOldId)) {
+      throw new Error("active queued command was purged by retention");
+    }
+
+    const otherDevice = await createDevice("OTHER");
+    const otherCommand = await admin("POST", `/api/admin/devices/${encodeURIComponent(otherDevice.device_id)}/commands`, {
+      command_type: "reload_player_content",
+      reason: "scope smoke other device",
+      ttl_seconds: 120
+    });
+    const scoped = await admin("GET", `/api/admin/device-commands?${new URLSearchParams({
+      tenant_id: device.tenant_id,
+      store_id: device.store_id,
+      screen_group_id: device.screen_group_id,
+      device_id: device.device_id,
+      limit: "500"
+    })}`);
+    if (scoped.data.device_commands.some((item) => item.device_command_id === otherCommand.data.device_command.device_command_id)) {
+      throw new Error("scope-filtered command list included another device command");
+    }
+    const wrongScope = await admin("GET", `/api/admin/device-commands?${new URLSearchParams({
+      tenant_id: otherDevice.tenant_id,
+      device_id: device.device_id,
+      limit: "500"
+    })}`);
+    if (wrongScope.data.device_commands.length !== 0) {
+      throw new Error("command list did not enforce conflicting tenant/device scope filters");
+    }
+
     await admin("POST", `/api/admin/devices/${encodeURIComponent(device.device_id)}/token/revoke`, {
       reason: "device command smoke revoke"
     });
@@ -238,6 +344,9 @@ async function smokeAllowedCommandFlow() {
 
     const auditCount = auditLogCount();
     if (auditCount < 6) throw new Error(`expected device command audit logs, got ${auditCount}`);
+    if (auditActionCount("device_command.stale") < 1) throw new Error("stale audit was not recorded");
+    if (auditActionCount("device_command.force_cancel") < 1) throw new Error("force-cancel audit was not recorded");
+    if (auditActionCount("device_command.purge") < 1) throw new Error("retention purge audit was not recorded");
 
     return {
       ok: true,
@@ -252,6 +361,10 @@ async function smokeAllowedCommandFlow() {
       bounded_result_guard: true,
       cancel_guard: true,
       expiry_guard: true,
+      stale_claim_guard: true,
+      force_cancel_guard: true,
+      retention_purge: true,
+      scope_filtering: true,
       revoked_token_guard: true,
       audit_log_count: auditCount
     };
@@ -277,6 +390,9 @@ async function createDevice(suffix) {
   });
   return {
     device_id: deviceId,
+    tenant_id: `TEN-CMD-${suffix}-${runId}`,
+    store_id: `STO-CMD-${suffix}-${runId}`,
+    screen_group_id: `SG-CMD-${suffix}-${runId}`,
     device_token: response.data.device_token
   };
 }
@@ -302,6 +418,8 @@ async function startServer(role, prefix) {
       ADMIN_PASSWORD: adminPassword,
       REQUIRE_ADMIN_AUTH: "1",
       MISELL_CLOUD_ADMIN_ROLE: role,
+      MISELL_DEVICE_COMMAND_CLAIM_LEASE_SECONDS: "1",
+      MISELL_DEVICE_COMMAND_RETENTION_DAYS: "1",
       MISELL_CLOUD_DATA_DIR: tmpDir,
       DB_PATH: dbPath,
       DEVICE_TOKEN_PEPPER: `device-command-${prefix}-pepper`
@@ -394,6 +512,34 @@ function auditLogCount() {
   } finally {
     db.close();
   }
+}
+
+function auditActionCount(action) {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = ?").get(action).count;
+  } finally {
+    db.close();
+  }
+}
+
+function setCommandFields(commandId, fields) {
+  const entries = Object.entries(fields);
+  if (entries.length === 0) return;
+  const assignments = entries.map(([key]) => `${safeSqlIdentifier(key)} = ?`).join(", ");
+  const values = entries.map(([, value]) => value);
+  const db = new Database(dbPath);
+  try {
+    db.prepare(`UPDATE device_commands SET ${assignments} WHERE device_command_id = ?`).run(...values, commandId);
+  } finally {
+    db.close();
+  }
+}
+
+function safeSqlIdentifier(value) {
+  const text = String(value || "");
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(text)) throw new Error(`unsafe SQL identifier: ${text}`);
+  return text;
 }
 
 function runNode(args, options = {}) {
