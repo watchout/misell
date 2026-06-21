@@ -15,7 +15,7 @@ const multer = require("multer");
 const { nanoid } = require("nanoid");
 const QRCode = require("qrcode");
 
-const { PLAYLOG_ENDPOINT, openLocalState } = require("./lib/local-state");
+const { ERROR_ENDPOINT, PLAYLOG_ENDPOINT, openLocalState } = require("./lib/local-state");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -164,7 +164,7 @@ async function ensureRuntimeFiles(options = {}) {
     } catch (error) {
       localState = null;
       localStateError = "local_state open failed";
-      await appendJsonl(ERROR_LOG_KEY, {
+      await persistErrorLog({
         action: "local_state.open_failed",
         message: error.message || localStateError
       }).catch(() => {});
@@ -408,7 +408,7 @@ function safeLocalStateSummary() {
     };
   } catch (error) {
     localStateError = "local_state summary failed";
-    appendJsonl(ERROR_LOG_KEY, {
+    persistErrorLog({
       action: "local_state.summary_failed",
       message: error.message || localStateError
     }).catch(() => {});
@@ -2436,12 +2436,56 @@ async function persistPlaybackLog(entry) {
   });
 
   if (localStateQueueError) {
-    await appendJsonl(ERROR_LOG_KEY, {
+    await persistErrorLog({
       action: "local_state.enqueue_playlog_failed",
       event_id: cleanString(entry.event_id),
       message: localStateQueueError
     });
   }
+}
+
+async function persistErrorLog(entry) {
+  const timestamp = cleanString(entry.timestamp || entry.occurred_at) || new Date().toISOString();
+  const eventId = cleanString(entry.event_id) || `err-${Date.now()}-${nanoid(10)}`;
+  const severity = cleanString(entry.severity) || "error";
+  const message = cleanString(entry.message || entry.error || "Device error").slice(0, 1000);
+  let queuedToLocalState = false;
+  let localStateQueueError = "";
+
+  try {
+    if (!localState) throw new Error(localStateError || "local state unavailable");
+    localState.enqueueOutboundEvent({
+      event_id: eventId,
+      event_type: "device_error",
+      endpoint: ERROR_ENDPOINT,
+      payload: {
+        ...deviceIdentity,
+        event_id: eventId,
+        event_type: "device_error",
+        occurred_at: timestamp,
+        timestamp,
+        severity,
+        message,
+        action: cleanString(entry.action),
+        path: cleanString(entry.path),
+        status: entry.status || undefined,
+        error: cleanString(entry.error).slice(0, 1000)
+      }
+    });
+    queuedToLocalState = true;
+  } catch (error) {
+    localStateQueueError = error.message || "local state enqueue failed";
+  }
+
+  await appendJsonl(ERROR_LOG_KEY, {
+    ...entry,
+    event_id: eventId,
+    timestamp,
+    severity,
+    message,
+    queued_to_local_state: queuedToLocalState,
+    local_state_error: localStateQueueError
+  });
 }
 
 function enqueuePlaybackLog(entry) {
@@ -2467,7 +2511,7 @@ app.use((req, res) => {
 
 app.use((error, req, res, next) => {
   const status = error.code === "LIMIT_FILE_SIZE" ? 413 : 400;
-  appendJsonl(ERROR_LOG_KEY, {
+  persistErrorLog({
     action: "request.error",
     ip: req.ip,
     path: req.originalUrl,

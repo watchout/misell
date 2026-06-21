@@ -6,7 +6,12 @@ const path = require("path");
 
 const dotenv = require("dotenv");
 
-const { openLocalState, sha256File } = require("../lib/local-state");
+const {
+  CONTENT_RESULT_ENDPOINT,
+  OUTBOUND_ENDPOINTS,
+  openLocalState,
+  sha256File
+} = require("../lib/local-state");
 
 const APP_DIR = path.resolve(__dirname, "..");
 
@@ -31,6 +36,42 @@ try {
       manifest: parseJson(process.env.POLICY_JSON || "", null)
     });
     print({ ok: true, local_state: state.summary() });
+  } else if (command === "record-apply-job") {
+    const job = state.recordContentApplyJob({
+      job_id: args.job_id,
+      content_id: args.content_id,
+      playlist_version: args.playlist_version,
+      source: args.source,
+      status: args.status,
+      message: args.message,
+      previous_playlist_version: args.previous_playlist_version,
+      playlist_sha256: args.playlist_sha256 || hashIfExists(args.playlist_path),
+      manifest: parseJson(process.env.POLICY_JSON || args.manifest_json || "", null)
+    });
+    print({ ok: true, job, local_state: state.summary() });
+  } else if (command === "queue-outbound") {
+    const payload = parseJson(process.env.PAYLOAD_JSON || args.payload_json || "", {});
+    const result = state.enqueueOutboundEvent({
+      event_id: args.event_id,
+      event_type: args.event_type,
+      endpoint: args.endpoint || CONTENT_RESULT_ENDPOINT,
+      payload
+    });
+    print({ ok: true, ...result, local_state: state.summary() });
+  } else if (command === "mark-outbound-sent") {
+    state.markOutboundSent(args.event_id, {
+      response_status: args.response_status,
+      claim_token: args.claim_token
+    });
+    print({ ok: true, local_state: state.summary() });
+  } else if (command === "mark-outbound-failed") {
+    state.markOutboundFailed(args.event_id, args.message || "outbound event sync failed", {
+      response_status: args.response_status,
+      claim_token: args.claim_token
+    });
+    print({ ok: true, local_state: state.summary() });
+  } else if (command === "endpoints") {
+    print({ ok: true, endpoints: Array.from(OUTBOUND_ENDPOINTS) });
   } else if (command === "record-asset") {
     state.recordAssetState({
       content_id: args.content_id,
