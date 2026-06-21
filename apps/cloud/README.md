@@ -175,12 +175,34 @@ AWS_DEFAULT_REGION=ap-northeast-1
 `MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL` is optional for AWS S3 and required for
 many S3-compatible providers. `MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS` defaults to
 300000 ms per artifact upload. Use a bucket policy or access key that can write
-only to the backup prefix. Confirm restore readiness periodically by downloading
-a backup, decompressing it if needed, and running:
+only to the backup prefix.
+
+Run a restore drill without mutating the live DB:
 
 ```bash
-sqlite3 restored-misell-cloud.sqlite 'PRAGMA integrity_check;'
+scripts/restore-drill.sh \
+  --backup /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz \
+  --manifest /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.manifest.json \
+  --assets-dir /path/to/cloud/assets \
+  --operator ops \
+  --context monthly-drill
 ```
+
+The drill decompresses or copies the artifact into a temporary SQLite file,
+opens it read-only, runs `PRAGMA integrity_check`, verifies the backup manifest
+hashes, checks `cloud_assets` and `content_manifest_assets` consistency, checks
+asset file presence/size/sha256 when `--assets-dir` is supplied, and validates
+report snapshot JSON/hash evidence plus daily metrics key uniqueness. It writes
+an auditable JSON result under `MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_DIR`,
+defaulting to `~/.local/share/misell-cloud/restore-drills`, with file mode 0600.
+Old restore drill evidence files are retained for
+`MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_RETENTION_DAYS`, defaulting to 400 days.
+
+Recommended cadence:
+
+- MVP/test introduction: run a restore drill after backup configuration changes and before any paid PoC.
+- Commercial deployment: run at least monthly, plus after DB migration releases and after backup storage provider changes.
+- Failure handling: treat a failed drill as a release/ops blocker, keep the failed evidence JSON, create an incident or maintenance issue, and run a successful drill before relying on that backup set.
 
 ## Register a Device
 

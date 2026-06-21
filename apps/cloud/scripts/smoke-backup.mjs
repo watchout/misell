@@ -22,7 +22,22 @@ async function main() {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "misell-cloud-backup."));
   const dbPath = path.join(tmpDir, "misell-cloud.sqlite");
   const backupDir = path.join(tmpDir, "backups");
+  const assetsDir = path.join(tmpDir, "assets");
   try {
+    await fsp.mkdir(assetsDir, { recursive: true });
+    const assetBytes = Buffer.from("verified cloud asset");
+    const assetPath = path.join(assetsDir, "asset-restore-smoke.mp4");
+    await fsp.writeFile(assetPath, assetBytes);
+    const assetSha256 = sha256Buffer(assetBytes);
+    const reportSummary = {
+      generated_at: "2026-06-20T00:00:00.000Z",
+      totals: {
+        play_started_count: 1,
+        error_count: 0
+      },
+      daily: []
+    };
+    const metricsSha256 = reportMetricsSha256(reportSummary);
     const db = new Database(dbPath);
     db.exec(`
       CREATE TABLE smoke_backup (
@@ -30,7 +45,120 @@ async function main() {
         name TEXT NOT NULL
       );
       INSERT INTO smoke_backup (name) VALUES ('verified-backup');
+
+      CREATE TABLE cloud_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_id TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        label TEXT,
+        notes TEXT,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        storage_path TEXT NOT NULL,
+        download_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE content_manifest_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        required INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(content_id, asset_id)
+      );
+
+      CREATE TABLE report_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        snapshot_id TEXT NOT NULL UNIQUE,
+        snapshot_key TEXT,
+        campaign_id TEXT,
+        advertiser_id TEXT,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        snapshot_type TEXT NOT NULL DEFAULT 'monthly',
+        report_type TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        metrics_json TEXT NOT NULL,
+        summary_json TEXT,
+        metrics_sha256 TEXT,
+        notes TEXT,
+        created_by TEXT,
+        generated_at TEXT,
+        published_at TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE report_daily_store_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        metric_key TEXT NOT NULL UNIQUE,
+        metric_date TEXT NOT NULL,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
+        tenant_id TEXT NOT NULL,
+        store_id TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        source_from TEXT NOT NULL,
+        source_to TEXT NOT NULL
+      );
     `);
+    db.prepare(`
+      INSERT INTO cloud_assets (
+        asset_id, type, filename, original_name, mime_type, size, sha256,
+        storage_path, download_path, created_at, updated_at
+      ) VALUES (?, 'video', ?, ?, 'video/mp4', ?, ?, ?, ?, ?, ?)
+    `).run(
+      "asset-restore-smoke",
+      path.basename(assetPath),
+      path.basename(assetPath),
+      assetBytes.length,
+      assetSha256,
+      assetPath,
+      "/api/admin/assets/asset-restore-smoke/download",
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-20T00:00:00.000Z"
+    );
+    db.prepare(`
+      INSERT INTO content_manifest_assets (
+        content_id, asset_id, target_path, required, created_at, updated_at
+      ) VALUES ('content-restore-smoke', 'asset-restore-smoke', '/assets/videos/asset-restore-smoke.mp4', 1, ?, ?)
+    `).run("2026-06-20T00:00:00.000Z", "2026-06-20T00:00:00.000Z");
+    db.prepare(`
+      INSERT INTO report_snapshots (
+        snapshot_id, snapshot_key, period_start, period_end, snapshot_type,
+        report_type, status, metrics_json, summary_json, metrics_sha256,
+        created_by, generated_at, created_at
+      ) VALUES (?, ?, '2026-06-01', '2026-06-30', 'monthly_summary',
+        'monthly_summary', 'published', ?, ?, ?, 'smoke', ?, ?)
+    `).run(
+      "rpts-restore-smoke",
+      "monthly_summary:restore-smoke",
+      JSON.stringify(reportSummary),
+      JSON.stringify(reportSummary),
+      metricsSha256,
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-20T00:00:00.000Z"
+    );
+    db.prepare(`
+      INSERT INTO report_daily_store_metrics (
+        metric_key, metric_date, period_start, period_end, tenant_id, store_id,
+        generated_at, updated_at, source_from, source_to
+      ) VALUES ('metric-restore-smoke', '2026-06-01', '2026-06-01', '2026-06-30',
+        'TEN-RESTORE', 'STO-RESTORE', ?, ?, ?, ?)
+    `).run(
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-01T00:00:00.000Z",
+      "2026-06-30T23:59:59.999Z"
+    );
     db.close();
 
     await createOldBackupFixtures(backupDir);
@@ -70,6 +198,8 @@ async function main() {
       throw new Error(`backup dir mode was not hardened: ${backupDirMode.toString(8)}`);
     }
 
+    await runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir);
+    await runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir);
     await runS3CliBackupSmoke(tmpDir, dbPath);
     await runS3EnvFileBackupSmoke(tmpDir, dbPath);
     await runS3TimeoutSmoke(tmpDir, dbPath);
@@ -82,12 +212,122 @@ async function main() {
       artifact_sha256: manifest.artifact_sha256,
       retention_purge: true,
       backup_dir_hardened: true,
+      restore_drill: true,
+      restore_drill_asset_containment: true,
       s3_upload: true,
       s3_env_file: true,
       s3_timeout: true
     }, null, 2));
   } finally {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function runRestoreDrillSmoke(tmpDir, backupPath, manifestPath, assetsDir) {
+  const evidenceDir = path.join(tmpDir, "restore-drills");
+  await fsp.mkdir(evidenceDir, { recursive: true, mode: 0o700 });
+  const oldEvidence = path.join(evidenceDir, "restore-drill-20000101-000000-abcdef.json");
+  await fsp.writeFile(oldEvidence, "{}\n", { mode: 0o600 });
+  const oldTime = new Date("2000-01-01T00:00:00.000Z");
+  await fsp.utimes(oldEvidence, oldTime, oldTime);
+  const result = await runCommand(process.execPath, [
+    path.join(appDir, "scripts", "restore-drill.mjs"),
+    "--backup", backupPath,
+    "--manifest", manifestPath,
+    "--assets-dir", assetsDir,
+    "--evidence-dir", evidenceDir,
+    "--operator", "smoke",
+    "--context", "smoke-backup",
+    "--json"
+  ], { cwd: appDir });
+  if (result.status !== 0) {
+    throw new Error(`restore drill failed:\n${result.stdout}\n${result.stderr}`);
+  }
+  const evidence = JSON.parse(result.stdout);
+  if (!evidence.ok) throw new Error(`restore drill evidence was not ok: ${result.stdout}`);
+  if (evidence.checks.sqlite.ok !== true) throw new Error(`sqlite check failed: ${result.stdout}`);
+  if (evidence.checks.assets.checked_files !== 1) throw new Error(`asset file check did not run: ${result.stdout}`);
+  if (evidence.checks.report_snapshots.snapshot_count !== 1) throw new Error(`report snapshot check did not run: ${result.stdout}`);
+  if (evidence.checks.report_daily_store_metrics.row_count !== 1) throw new Error(`daily metrics check did not run: ${result.stdout}`);
+  if (evidence.deleted_old_evidence !== 1) throw new Error(`old restore drill evidence was not purged: ${result.stdout}`);
+  await fsp.access(evidence.evidence_path);
+  try {
+    await fsp.access(oldEvidence);
+    throw new Error("old restore drill evidence still exists");
+  } catch (error) {
+    if (error.message === "old restore drill evidence still exists") throw error;
+  }
+  const evidenceMode = (await fsp.stat(evidence.evidence_path)).mode & 0o777;
+  if (evidenceMode !== 0o600) throw new Error(`restore drill evidence mode was not 0600: ${evidenceMode.toString(8)}`);
+}
+
+async function runRestoreDrillAssetContainmentSmoke(tmpDir, dbPath, assetsDir) {
+  const traversalDbPath = path.join(tmpDir, "misell-cloud-traversal.sqlite");
+  const outsidePath = path.join(tmpDir, "outside-secret.txt");
+  const outsideBytes = Buffer.from("outside asset dir secret");
+  await fsp.copyFile(dbPath, traversalDbPath);
+  await fsp.writeFile(outsidePath, outsideBytes, { mode: 0o600 });
+
+  const db = new Database(traversalDbPath);
+  try {
+    db.prepare(`
+      INSERT INTO cloud_assets (
+        asset_id, type, filename, original_name, mime_type, size, sha256,
+        storage_path, download_path, created_at, updated_at
+      ) VALUES (?, 'video', ?, ?, 'video/mp4', ?, ?, ?, ?, ?, ?)
+    `).run(
+      "asset-traversal-smoke",
+      "../outside-secret.txt",
+      "outside-secret.txt",
+      outsideBytes.length,
+      sha256Buffer(outsideBytes),
+      outsidePath,
+      "/api/admin/assets/asset-traversal-smoke/download",
+      "2026-06-20T00:00:00.000Z",
+      "2026-06-20T00:00:00.000Z"
+    );
+  } finally {
+    db.close();
+  }
+
+  const backupDir = path.join(tmpDir, "traversal-backups");
+  const backupResult = await runBackup(traversalDbPath, backupDir);
+  if (backupResult.status !== 0) {
+    throw new Error(`traversal backup failed:\n${backupResult.stdout}\n${backupResult.stderr}`);
+  }
+  const backupPath = parseOutputPath(backupResult.stdout, "backup");
+  const manifestPath = parseOutputPath(backupResult.stdout, "manifest");
+  if (!backupPath || !manifestPath) throw new Error(`traversal backup output missing paths: ${backupResult.stdout}`);
+
+  const evidenceDir = path.join(tmpDir, "restore-drill-traversal");
+  const result = await runCommand(process.execPath, [
+    path.join(appDir, "scripts", "restore-drill.mjs"),
+    "--backup", backupPath,
+    "--manifest", manifestPath,
+    "--assets-dir", assetsDir,
+    "--evidence-dir", evidenceDir,
+    "--operator", "smoke",
+    "--context", "smoke-asset-containment",
+    "--json"
+  ], { cwd: appDir });
+  if (result.status === 0) {
+    throw new Error(`restore drill traversal smoke unexpectedly succeeded:\n${result.stdout}\n${result.stderr}`);
+  }
+  const evidence = JSON.parse(result.stdout);
+  if (evidence.ok !== false) throw new Error(`traversal evidence was not failed: ${result.stdout}`);
+  if (evidence.checks.assets.checked_files !== 1) {
+    throw new Error(`traversal smoke should only check the safe asset file: ${result.stdout}`);
+  }
+  const invalid = evidence.checks.assets.invalid_filenames || [];
+  const traversal = invalid.find((entry) => entry.asset_id === "asset-traversal-smoke");
+  if (!traversal || traversal.filename !== "../outside-secret.txt") {
+    throw new Error(`traversal filename was not rejected: ${result.stdout}`);
+  }
+  if (!String(traversal.reason || "").includes("path separator")) {
+    throw new Error(`unexpected traversal rejection reason: ${result.stdout}`);
+  }
+  if (!evidence.failures.some((failure) => failure.includes("invalid filename"))) {
+    throw new Error(`traversal failure summary missing: ${result.stdout}`);
   }
 }
 
@@ -263,4 +503,29 @@ function sha256File(filePath) {
     stream.on("error", reject);
     stream.on("end", () => resolve(hash.digest("hex")));
   });
+}
+
+function sha256Buffer(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function reportMetricsSha256(report) {
+  return crypto.createHash("sha256")
+    .update(JSON.stringify(stableReportPayloadForHash(report)))
+    .digest("hex");
+}
+
+function stableReportPayloadForHash(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableReportPayloadForHash);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const result = {};
+  for (const key of Object.keys(value).sort()) {
+    if (key === "generated_at") continue;
+    result[key] = stableReportPayloadForHash(value[key]);
+  }
+  return result;
 }

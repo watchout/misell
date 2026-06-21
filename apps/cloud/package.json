@@ -7,13 +7,14 @@
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check lib/studio-phase1-contract.js && node --check public/admin.js && node --check scripts/backup-sqlite.mjs && node --check scripts/smoke-backup.mjs && node --check scripts/smoke-reporting.mjs && node --check scripts/smoke-device-commands.mjs && node --check scripts/smoke-mvp-foundation.mjs && node --check scripts/smoke-mvp-audit-fixes.mjs",
+    "check": "node --check server.js && node --check lib/studio-phase1-contract.js && node --check public/admin.js && node --check scripts/backup-sqlite.mjs && node --check scripts/restore-drill.mjs && node --check scripts/smoke-backup.mjs && node --check scripts/smoke-reporting.mjs && node --check scripts/smoke-device-commands.mjs && node --check scripts/smoke-mvp-foundation.mjs && node --check scripts/smoke-mvp-audit-fixes.mjs",
     "smoke:mvp-foundation": "node scripts/smoke-mvp-foundation.mjs",
     "smoke:mvp-audit-fixes": "node scripts/smoke-mvp-audit-fixes.mjs",
     "smoke:backup": "node scripts/smoke-backup.mjs",
     "smoke:reporting": "node scripts/smoke-reporting.mjs",
     "smoke:device-commands": "node scripts/smoke-device-commands.mjs",
-    "backup": "scripts/backup-sqlite.sh"
+    "backup": "scripts/backup-sqlite.sh",
+    "restore:drill": "scripts/restore-drill.sh"
   },
   "dependencies": {
     "better-sqlite3": "^12.4.6",
