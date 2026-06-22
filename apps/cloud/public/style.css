@@ -867,6 +867,33 @@ td small {
   grid-column: span 3;
 }
 
+.customer-panel {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 12px;
+}
+
+.customer-panel > strong {
+  font-size: 15px;
+}
+
+.customer-offer-revision,
+.customer-access-create {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin-top: 8px;
+}
+
+.customer-offer-revision button,
+.customer-access-create button {
+  min-width: 120px;
+}
+
 pre {
   background: #19212a;
   border-radius: 8px;
@@ -905,7 +932,9 @@ pre {
   .order-receipt-meta,
   .store-login-form,
   .store-orders-toolbar,
-  .store-order-action {
+  .store-order-action,
+  .customer-offer-revision,
+  .customer-access-create {
     grid-template-columns: 1fr;
   }
 

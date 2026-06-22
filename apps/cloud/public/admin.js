@@ -10,8 +10,10 @@
     storeSettings: [],
     counterOrders: [],
     storeAccessTokens: [],
+    customerAccessTokens: [],
     issuedToken: null,
-    issuedStoreAccessToken: null
+    issuedStoreAccessToken: null,
+    issuedCustomerAccessToken: null
   };
 
   const STATUS_LABELS = {
@@ -119,6 +121,7 @@
     assets: document.getElementById("assets"),
     logBundles: document.getElementById("log-bundles"),
     storeAccessTokens: document.getElementById("store-access-tokens"),
+    customerAccessTokens: document.getElementById("customer-access-tokens"),
     counterOrders: document.getElementById("counter-orders"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
@@ -140,7 +143,7 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/device-commands?limit=100").catch(() => ({ device_commands: [] })),
@@ -149,6 +152,7 @@
       fetchJson("/api/admin/store-settings").catch(() => ({ store_settings: [] })),
       fetchJson("/api/admin/counter-orders?limit=100").catch(() => ({ counter_orders: [] })),
       fetchJson("/api/admin/store-access-tokens?limit=100").catch(() => ({ store_access_tokens: [] })),
+      fetchJson("/api/admin/customer-access-tokens?limit=100").catch(() => ({ customer_access_tokens: [] })),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/assets"),
@@ -163,6 +167,7 @@
     state.storeSettings = storeSettings.store_settings || [];
     state.counterOrders = counterOrders.counter_orders || [];
     state.storeAccessTokens = storeAccessTokens.store_access_tokens || [];
+    state.customerAccessTokens = customerAccessTokens.customer_access_tokens || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
@@ -172,6 +177,7 @@
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
     renderStoreAccessTokens(state.storeAccessTokens);
+    renderCustomerAccessTokens(state.customerAccessTokens);
     renderCounterOrders(state.counterOrders);
     renderReleaseManifests(state.releaseManifests);
     renderContentManifests(state.contentManifests);
@@ -1096,7 +1102,7 @@
 
   function renderTokenResult() {
     if (!els.tokenResult) return;
-    if (!state.issuedToken && !state.issuedStoreAccessToken) {
+    if (!state.issuedToken && !state.issuedStoreAccessToken && !state.issuedCustomerAccessToken) {
       els.tokenResult.hidden = true;
       els.tokenResult.innerHTML = "";
       return;
@@ -1127,6 +1133,17 @@
           <button id="clear-issued-store-token" class="secondary" type="button">閉じる</button>
         </div>
       ` : ""}
+      ${state.issuedCustomerAccessToken ? `
+        <div class="token-banner">
+          <div>
+            <strong>顧客管理 ${escapeHtml(state.issuedCustomerAccessToken.tenant_id)}</strong>
+            <small>${formatTime(state.issuedCustomerAccessToken.issued_at)}</small>
+          </div>
+          <input id="issued-customer-url" class="token-value" type="text" readonly value="${escapeHtml(state.issuedCustomerAccessToken.url)}" aria-label="発行済み顧客管理URL">
+          <button class="copy-issued-value" type="button" data-target-id="issued-customer-url">URLコピー</button>
+          <button id="clear-issued-customer-token" class="secondary" type="button">閉じる</button>
+        </div>
+      ` : ""}
     `;
 
     els.tokenResult.querySelectorAll(".copy-issued-value").forEach((button) => {
@@ -1144,6 +1161,10 @@
     });
     document.getElementById("clear-issued-store-token")?.addEventListener("click", () => {
       state.issuedStoreAccessToken = null;
+      renderTokenResult();
+    });
+    document.getElementById("clear-issued-customer-token")?.addEventListener("click", () => {
+      state.issuedCustomerAccessToken = null;
       renderTokenResult();
     });
   }
@@ -1297,6 +1318,108 @@
       window.alert(error.message || "PIN変更に失敗しました。");
       button.disabled = false;
     }
+  }
+
+  function renderCustomerAccessTokens(tokens) {
+    if (!els.customerAccessTokens) return;
+    const tenants = uniqueTenantsFromStores(state.storeSettings || []);
+    els.customerAccessTokens.innerHTML = `
+      <form class="customer-access-create">
+        <select name="tenant_id" aria-label="顧客" required>
+          <option value="">顧客を選択</option>
+          ${tenants.map((tenant) => (
+            `<option value="${escapeHtml(tenant.tenant_id || "")}">${escapeHtml(tenant.tenant_name || tenant.tenant_id || "")}</option>`
+          )).join("")}
+        </select>
+        <input name="store_ids" type="text" placeholder="store_id CSV（空ならtenant全体）" aria-label="店舗スコープ">
+        <select name="role" aria-label="顧客ロール">
+          <option value="customer_viewer">viewer</option>
+          <option value="customer_editor">editor</option>
+          <option value="customer_admin">admin</option>
+        </select>
+        <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="顧客PIN" aria-label="顧客PIN" required>
+        <input name="notes" type="text" placeholder="メモ" aria-label="メモ">
+        <button type="submit">URL発行</button>
+      </form>
+      ${tokens.length === 0 ? `<p class="empty">顧客管理URLはまだ発行されていません。</p>` : `
+        <table class="customer-access-table">
+          <thead>
+            <tr>
+              <th>顧客</th>
+              <th>Role</th>
+              <th>店舗Scope</th>
+              <th>Status</th>
+              <th>最終利用</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tokens.slice(0, 50).map(renderCustomerAccessTokenRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+    els.customerAccessTokens.querySelector(".customer-access-create")?.addEventListener("submit", handleCustomerAccessTokenCreate);
+  }
+
+  function renderCustomerAccessTokenRow(token) {
+    return `
+      <tr>
+        <td>${escapeHtml(token.tenant_name || token.tenant_id || "")}<small>${escapeHtml(token.tenant_id || "")}</small></td>
+        <td>${escapeHtml(token.role || "")}</td>
+        <td>${(token.store_ids || []).length ? (token.store_ids || []).map(escapeHtml).join(", ") : "tenant全体"}</td>
+        <td>
+          <span class="update-status update-status-${token.status === "active" ? "success" : "failed"}">${escapeHtml(token.status || "")}</span>
+          ${token.locked_until ? `<small>lock ${formatTime(token.locked_until)}</small>` : ""}
+          <small>PIN更新 ${formatTime(token.pin_rotated_at)}</small>
+        </td>
+        <td>${formatTime(token.last_used_at)}<small>${escapeHtml(token.notes || "")}</small></td>
+      </tr>
+    `;
+  }
+
+  async function handleCustomerAccessTokenCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const tenantId = form.elements.tenant_id.value;
+    button.disabled = true;
+    button.textContent = "発行中";
+    try {
+      const result = await fetchJson(`/api/admin/tenants/${encodeURIComponent(tenantId)}/customer-access-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pin: form.elements.pin.value,
+          role: form.elements.role.value,
+          store_ids: form.elements.store_ids.value.split(",").map((item) => item.trim()).filter(Boolean),
+          notes: form.elements.notes.value
+        })
+      });
+      state.issuedCustomerAccessToken = {
+        tenant_id: tenantId,
+        token: result.customer_token,
+        url: result.customer_admin_url,
+        issued_at: new Date().toISOString()
+      };
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "顧客管理URLの発行に失敗しました。");
+      button.disabled = false;
+      button.textContent = "URL発行";
+    }
+  }
+
+  function uniqueTenantsFromStores(stores) {
+    const map = new Map();
+    for (const store of stores) {
+      if (!store.tenant_id || map.has(store.tenant_id)) continue;
+      map.set(store.tenant_id, {
+        tenant_id: store.tenant_id,
+        tenant_name: store.tenant_name || store.tenant_id
+      });
+    }
+    return Array.from(map.values());
   }
 
   function renderCounterOrders(orders) {
