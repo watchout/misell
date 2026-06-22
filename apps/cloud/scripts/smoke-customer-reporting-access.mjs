@@ -64,8 +64,15 @@ async function main() {
       pin: "2468",
       notes: "customer reporting smoke viewer"
     });
-    if (!viewerAccess.data.customer_token || !viewerAccess.data.customer_admin_url) {
-      throw new Error("customer access token URL was not returned once");
+    assertNoCustomerSecretExposure(viewerAccess.text, ["2468"]);
+    if (viewerAccess.data.customer_token) {
+      throw new Error(`raw customer token was exposed: ${viewerAccess.text}`);
+    }
+    if (!viewerAccess.data.customer_access_token?.customer_access_token_id || !viewerAccess.data.customer_admin_url) {
+      throw new Error("customer access URL was not returned");
+    }
+    if (!viewerAccess.data.customer_admin_url.endsWith(`/${viewerAccess.data.customer_access_token.customer_access_token_id}`)) {
+      throw new Error(`customer URL should use public access id, not a raw secret: ${viewerAccess.data.customer_admin_url}`);
     }
 
     const customerPage = await fetch(`${baseUrl}${viewerAccess.data.customer_admin_url}`, {
@@ -75,12 +82,20 @@ async function main() {
     if (!customerPage.ok || !customerHtml.includes("customer-admin.js") || !customerHtml.includes("顧客PIN")) {
       throw new Error(`customer admin HTML did not render: ${customerPage.status} ${customerHtml.slice(0, 200)}`);
     }
+    assertNoCustomerSecretExposure(customerHtml, ["2468"]);
+    if (customerHtml.includes("MISELL_CUSTOMER_TOKEN")) {
+      throw new Error("customer HTML still bootstraps the raw token variable");
+    }
 
     await expectError("POST", `${viewerAccess.data.customer_admin_url}/session`, { pin: "0000" }, {}, 401, "PIN");
     const viewerLogin = await rawRequest("POST", `${viewerAccess.data.customer_admin_url}/session`, { pin: "2468" });
     const viewerCookie = viewerLogin.headers.get("set-cookie");
     if (!viewerCookie || viewerLogin.data.session?.role !== "customer_viewer") {
       throw new Error(`customer viewer login failed: ${viewerLogin.text}`);
+    }
+    assertNoCustomerSecretExposure(viewerLogin.text, ["2468"]);
+    if (viewerLogin.data.session?.session_token) {
+      throw new Error(`raw customer session token was exposed in JSON: ${viewerLogin.text}`);
     }
 
     const report = await request("GET", `/api/customer/reports/conversion?month=2026-06&store_id=${encodeURIComponent(records.storeId)}`, null, { cookie: viewerCookie });
@@ -112,8 +127,13 @@ async function main() {
       pin: "1357",
       notes: "customer reporting smoke editor"
     });
+    assertNoCustomerSecretExposure(editorAccess.text, ["1357"]);
     const editorLogin = await rawRequest("POST", `${editorAccess.data.customer_admin_url}/session`, { pin: "1357" });
     const editorCookie = editorLogin.headers.get("set-cookie");
+    assertNoCustomerSecretExposure(editorLogin.text, ["1357"]);
+    if (editorLogin.data.session?.session_token) {
+      throw new Error(`raw editor session token was exposed in JSON: ${editorLogin.text}`);
+    }
     const revision = await request("POST", `/api/customer/offers/${records.offerId}/revisions`, {
       status: "active",
       title: "Customer edited offer",
@@ -139,6 +159,7 @@ async function main() {
       customer_kpi_dashboard: true,
       customer_scope_guard: true,
       customer_offer_revision: true,
+      customer_secret_non_exposure: true,
       scan_to_order_rate: kpis.scan_to_order_rate,
       order_to_redeem_rate: kpis.order_to_redeem_rate
     }, null, 2));
@@ -352,4 +373,22 @@ function tableCount(table, where = "1 = 1", params = []) {
 
 function auditActionCount(action) {
   return tableCount("audit_logs", "action = ?", [action]);
+}
+
+function assertNoCustomerSecretExposure(text, rawSecrets = []) {
+  const forbidden = [
+    "customer_token",
+    "token_hash",
+    "pin_hash",
+    "session_token",
+    "MISELL_CUSTOMER_TOKEN",
+    ...rawSecrets
+  ];
+  const lowerText = String(text || "").toLowerCase();
+  for (const value of forbidden) {
+    if (!value) continue;
+    if (lowerText.includes(String(value).toLowerCase())) {
+      throw new Error(`customer secret material was exposed: ${value}`);
+    }
+  }
 }

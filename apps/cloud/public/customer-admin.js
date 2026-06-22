@@ -47,7 +47,7 @@
     button.disabled = true;
     button.textContent = "確認中";
     try {
-      const result = await fetchJson(`/customer/admin/${encodeURIComponent(window.MISELL_CUSTOMER_TOKEN || "")}/session`, {
+      const result = await fetchJson(`/customer/admin/${encodeURIComponent(window.MISELL_CUSTOMER_ACCESS_ID || "")}/session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin: els.loginForm.elements.pin.value })

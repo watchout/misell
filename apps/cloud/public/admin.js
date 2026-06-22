@@ -1397,7 +1397,6 @@
       });
       state.issuedCustomerAccessToken = {
         tenant_id: tenantId,
-        token: result.customer_token,
         url: result.customer_admin_url,
         issued_at: new Date().toISOString()
       };

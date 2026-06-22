@@ -421,7 +421,7 @@ curl -u admin:change-me \
   http://localhost:3200/api/admin/tenants/TEN-LOCAL/customer-access-token
 ```
 
-Customers open `/customer/admin/:customer_token`, enter the PIN, and can only read data inside the server-side tenant/store scope. `customer_viewer` can view KPI reports, counter-order status, store settings, and offers. `customer_editor` / `customer_admin` can create a new `offer_revision` for allowed offers; published order snapshots remain immutable.
+Customers open `/customer/admin/:customer_access_token_id`, enter the PIN, and can only read data inside the server-side tenant/store scope. The URL identifier is not a raw secret; the PIN and session token remain hash-only server-side and are not returned in JSON or HTML bootstrap responses. `customer_viewer` can view KPI reports, counter-order status, store settings, and offers. `customer_editor` / `customer_admin` can create a new `offer_revision` for allowed offers; published order snapshots remain immutable.
 
 Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
 

@@ -772,8 +772,8 @@ app.get("/customer/admin", (req, res) => {
   res.type("html").send(renderCustomerAdminNotFoundPage());
 });
 
-app.get("/customer/admin/:customer_token", (req, res) => {
-  const customerAccess = getCustomerAccessTokenByRawToken(cleanString(req.params.customer_token));
+app.get("/customer/admin/:customer_access_token_id", (req, res) => {
+  const customerAccess = getCustomerAccessToken(cleanId(req.params.customer_access_token_id));
   if (!customerAccess || customerAccess.status !== "active") {
     res.status(404).type("html").send(renderCustomerAdminNotFoundPage());
     return;
@@ -781,9 +781,9 @@ app.get("/customer/admin/:customer_token", (req, res) => {
   res.type("html").send(renderCustomerAdminPage(customerAccess, req));
 });
 
-app.post("/customer/admin/:customer_token/session", (req, res, next) => {
+app.post("/customer/admin/:customer_access_token_id/session", (req, res, next) => {
   try {
-    const session = createCustomerSession(cleanString(req.params.customer_token), req.body || {}, req);
+    const session = createCustomerSession(cleanId(req.params.customer_access_token_id), req.body || {}, req);
     setCustomerSessionCookie(req, res, session.session_token, session.expires_at);
     res.status(201).json({ ok: true, session: publicCustomerSession(session) });
   } catch (error) {
@@ -4890,8 +4890,7 @@ function createCustomerAccessToken(tenantId, input, actor = {}) {
   }, now);
   return {
     customer_access_token: created,
-    customer_token: token,
-    customer_admin_url: `/customer/admin/${token}`
+    customer_admin_url: `/customer/admin/${tokenId}`
   };
 }
 
@@ -4920,19 +4919,19 @@ function getCustomerAccessToken(customerAccessTokenId) {
   return row ? publicCustomerAccessToken(row) : null;
 }
 
-function getCustomerAccessTokenByRawToken(token) {
-  if (!token) return null;
+function getCustomerAccessTokenForAuth(customerAccessTokenId) {
+  if (!customerAccessTokenId) return null;
   const row = db.prepare(`
     SELECT cat.*, t.name AS tenant_name
     FROM customer_access_tokens cat
     LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
-    WHERE cat.token_hash = ?
-  `).get(hashCustomerAccessToken(token));
+    WHERE cat.customer_access_token_id = ?
+  `).get(cleanId(customerAccessTokenId));
   return row ? publicCustomerAccessToken(row, { includeHashFields: true }) : null;
 }
 
-function createCustomerSession(customerToken, input, req) {
-  const access = getCustomerAccessTokenByRawToken(customerToken);
+function createCustomerSession(customerAccessTokenId, input, req) {
+  const access = getCustomerAccessTokenForAuth(customerAccessTokenId);
   if (!access) throw requestError("Customer access token not found", 404);
   const now = nowIso();
   if (access.status !== "active") throw requestError("Customer access token is not active", 403);
@@ -5115,7 +5114,7 @@ function publicCustomerAccessToken(row, options = {}) {
     notes: cleanString(row.notes),
     created_at: cleanString(row.created_at),
     updated_at: cleanString(row.updated_at),
-    customer_admin_path: "/customer/admin/:customer_token"
+    customer_admin_path: "/customer/admin/:customer_access_token_id"
   };
   if (options.includeHashFields) {
     token.token_hash = cleanString(row.token_hash);
@@ -9155,7 +9154,7 @@ function renderCustomerAdminPage(customerAccess, req) {
       </main>
     </div>
     <script>
-      window.MISELL_CUSTOMER_TOKEN = ${escapeJsonForScript(cleanString(req.params.customer_token))};
+      window.MISELL_CUSTOMER_ACCESS_ID = ${escapeJsonForScript(customerAccess.customer_access_token_id)};
       window.MISELL_CUSTOMER_ACCESS = ${escapeJsonForScript({
         tenant_id: customerAccess.tenant_id,
         tenant_name: customerAccess.tenant_name,
