@@ -11,6 +11,7 @@
     counterOrders: [],
     storeAccessTokens: [],
     customerAccessTokens: [],
+    campaignProposals: [],
     issuedToken: null,
     issuedStoreAccessToken: null,
     issuedCustomerAccessToken: null
@@ -122,6 +123,7 @@
     logBundles: document.getElementById("log-bundles"),
     storeAccessTokens: document.getElementById("store-access-tokens"),
     customerAccessTokens: document.getElementById("customer-access-tokens"),
+    campaignProposals: document.getElementById("campaign-proposals"),
     counterOrders: document.getElementById("counter-orders"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
@@ -143,7 +145,7 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, campaignProposals, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/device-commands?limit=100").catch(() => ({ device_commands: [] })),
@@ -153,6 +155,7 @@
       fetchJson("/api/admin/counter-orders?limit=100").catch(() => ({ counter_orders: [] })),
       fetchJson("/api/admin/store-access-tokens?limit=100").catch(() => ({ store_access_tokens: [] })),
       fetchJson("/api/admin/customer-access-tokens?limit=100").catch(() => ({ customer_access_tokens: [] })),
+      fetchJson("/api/admin/campaign-proposals?limit=100").catch(() => ({ campaign_proposals: [] })),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/assets"),
@@ -168,6 +171,7 @@
     state.counterOrders = counterOrders.counter_orders || [];
     state.storeAccessTokens = storeAccessTokens.store_access_tokens || [];
     state.customerAccessTokens = customerAccessTokens.customer_access_tokens || [];
+    state.campaignProposals = campaignProposals.campaign_proposals || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
@@ -178,6 +182,7 @@
     renderNotifications(notifications);
     renderStoreAccessTokens(state.storeAccessTokens);
     renderCustomerAccessTokens(state.customerAccessTokens);
+    renderCampaignProposals(state.campaignProposals);
     renderCounterOrders(state.counterOrders);
     renderReleaseManifests(state.releaseManifests);
     renderContentManifests(state.contentManifests);
@@ -1409,6 +1414,124 @@
     }
   }
 
+  function renderCampaignProposals(proposals) {
+    if (!els.campaignProposals) return;
+    const tenants = uniqueTenantsFromStores(state.storeSettings || []);
+    const stores = state.storeSettings || [];
+    const screenGroups = uniqueScreenGroupsFromDevices(state.devices || []);
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    els.campaignProposals.innerHTML = `
+      <form class="campaign-proposal-create">
+        <select name="tenant_id" aria-label="顧客" required>
+          <option value="">顧客</option>
+          ${tenants.map((tenant) => `<option value="${escapeHtml(tenant.tenant_id || "")}">${escapeHtml(tenant.tenant_name || tenant.tenant_id || "")}</option>`).join("")}
+        </select>
+        <select name="store_id" aria-label="店舗" required>
+          <option value="">店舗</option>
+          ${stores.map((store) => `<option value="${escapeHtml(store.store_id || "")}" data-tenant-id="${escapeHtml(store.tenant_id || "")}">${escapeHtml(store.store_name || store.store_id || "")}</option>`).join("")}
+        </select>
+        <select name="screen_group_id" aria-label="画面グループ">
+          <option value="">画面グループ任意</option>
+          ${screenGroups.map((group) => `<option value="${escapeHtml(group.screen_group_id || "")}" data-store-id="${escapeHtml(group.store_id || "")}">${escapeHtml(group.screen_group_name || group.screen_group_id || "")}</option>`).join("")}
+        </select>
+        <input name="proposal_month" type="month" value="${escapeHtml(currentMonth)}" aria-label="提案月" required>
+        <input name="title" type="text" placeholder="提案タイトル" aria-label="提案タイトル" required>
+        <input name="objective" type="text" placeholder="狙い" aria-label="狙い">
+        <input name="target_audience" type="text" placeholder="想定ターゲット" aria-label="想定ターゲット">
+        <textarea name="three_screen_outline" rows="3" placeholder="3連ラフ（1行1画面/1シーン）" aria-label="3連ラフ"></textarea>
+        <input name="qr_flow" type="text" placeholder="QR導線案" aria-label="QR導線案">
+        <input name="expected_effect" type="text" placeholder="期待する効果" aria-label="期待する効果">
+        <button type="submit">提案を追加</button>
+      </form>
+      ${proposals.length === 0 ? `<p class="empty">AI販促提案はまだありません。</p>` : `
+        <table class="campaign-proposal-table">
+          <thead>
+            <tr>
+              <th>提案</th>
+              <th>Scope</th>
+              <th>Status</th>
+              <th>Snapshot / Brief</th>
+              <th>履歴</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${proposals.slice(0, 50).map(renderCampaignProposalRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+    els.campaignProposals.querySelector(".campaign-proposal-create")?.addEventListener("submit", handleCampaignProposalCreate);
+  }
+
+  function renderCampaignProposalRow(proposal) {
+    const events = proposal.events || [];
+    return `
+      <tr>
+        <td>
+          <strong>${escapeHtml(proposal.title || "")}</strong>
+          <small>${escapeHtml(proposal.campaign_proposal_id || "")}</small>
+          <small>${escapeHtml(proposal.objective || "")}</small>
+        </td>
+        <td>
+          ${escapeHtml(proposal.proposal_month || "")}
+          <small>${escapeHtml(proposal.tenant_id || "")}</small>
+          <small>${escapeHtml(proposal.store_id || "")}${proposal.screen_group_id ? ` / ${escapeHtml(proposal.screen_group_id)}` : ""}</small>
+        </td>
+        <td>
+          <span class="update-status update-status-${proposal.status === "rejected" ? "failed" : proposal.status === "selected" ? "success" : "pending"}">${escapeHtml(proposal.status || "")}</span>
+          ${proposal.rejected_reason ? `<small>${escapeHtml(proposal.rejected_reason)}</small>` : ""}
+        </td>
+        <td>
+          <small>${escapeHtml((proposal.context_snapshot_sha256 || "").slice(0, 12))}</small>
+          <small>${proposal.campaign_brief_id ? `brief ${escapeHtml(proposal.campaign_brief_id)}` : "brief未作成"}</small>
+        </td>
+        <td>
+          ${events.slice(0, 4).map((event) => `<small>${escapeHtml(event.to_status || "")} ${formatTime(event.created_at)}</small>`).join("")}
+        </td>
+      </tr>
+    `;
+  }
+
+  async function handleCampaignProposalCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    button.textContent = "追加中";
+    try {
+      await fetchJson("/api/admin/campaign-proposals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: form.elements.tenant_id.value,
+          store_id: form.elements.store_id.value,
+          screen_group_id: form.elements.screen_group_id.value,
+          proposal_month: form.elements.proposal_month.value,
+          title: form.elements.title.value,
+          objective: form.elements.objective.value,
+          target_audience: form.elements.target_audience.value,
+          three_screen_outline: outlineFromText(form.elements.three_screen_outline.value),
+          qr_flow: form.elements.qr_flow.value,
+          expected_effect: form.elements.expected_effect.value,
+          status: "visible"
+        })
+      });
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "AI販促提案の追加に失敗しました。");
+      button.disabled = false;
+      button.textContent = "提案を追加";
+    }
+  }
+
+  function outlineFromText(value) {
+    return String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((copy, index) => ({
+      order: index + 1,
+      copy
+    }));
+  }
+
   function uniqueTenantsFromStores(stores) {
     const map = new Map();
     for (const store of stores) {
@@ -1416,6 +1539,19 @@
       map.set(store.tenant_id, {
         tenant_id: store.tenant_id,
         tenant_name: store.tenant_name || store.tenant_id
+      });
+    }
+    return Array.from(map.values());
+  }
+
+  function uniqueScreenGroupsFromDevices(devices) {
+    const map = new Map();
+    for (const device of devices) {
+      if (!device.screen_group_id || map.has(device.screen_group_id)) continue;
+      map.set(device.screen_group_id, {
+        screen_group_id: device.screen_group_id,
+        screen_group_name: device.screen_group_name || device.screen_group_id,
+        store_id: device.store_id
       });
     }
     return Array.from(map.values());

@@ -4,6 +4,7 @@
     stores: [],
     offers: [],
     orders: [],
+    proposals: [],
     report: null
   };
 
@@ -17,6 +18,7 @@
     storeFilter: document.getElementById("customer-store-filter"),
     summary: document.getElementById("customer-session-summary"),
     kpis: document.getElementById("customer-kpis"),
+    proposals: document.getElementById("customer-campaign-proposals"),
     orders: document.getElementById("customer-orders"),
     storeSettings: document.getElementById("customer-store-settings"),
     offers: document.getElementById("customer-offers"),
@@ -81,19 +83,22 @@
     const storeId = selectedStoreId();
     const params = new URLSearchParams({ month: els.month.value || new Date().toISOString().slice(0, 7) });
     if (storeId) params.set("store_id", storeId);
-    const [report, orders, stores, offers] = await Promise.all([
+    const [report, proposals, orders, stores, offers] = await Promise.all([
       fetchJson(`/api/customer/reports/conversion?${params}`),
+      fetchJson(`/api/customer/campaign-proposals?${params}`).catch(() => ({ campaign_proposals: [] })),
       fetchJson(`/api/customer/counter-orders?${storeId ? `store_id=${encodeURIComponent(storeId)}&` : ""}limit=50`).catch(() => ({ counter_orders: [] })),
       fetchJson("/api/customer/store-settings"),
       fetchJson("/api/customer/offers")
     ]);
     state.report = report.report;
+    state.proposals = proposals.campaign_proposals || [];
     state.orders = orders.counter_orders || [];
     state.stores = stores.store_settings || [];
     state.offers = offers.offers || [];
     populateStoreFilter();
     renderSession();
     renderKpis();
+    renderProposals();
     renderOrders();
     renderStores();
     renderOffers();
@@ -146,6 +151,74 @@
         <strong>${escapeHtml(value)}</strong>
       </section>
     `).join("");
+  }
+
+  function renderProposals() {
+    if (!els.proposals) return;
+    if (state.proposals.length === 0) {
+      els.proposals.innerHTML = `<p class="empty">今月の提案はまだありません。</p>`;
+      return;
+    }
+    els.proposals.innerHTML = state.proposals.map((proposal) => `
+      <article class="customer-panel customer-proposal" data-proposal-id="${escapeAttr(proposal.campaign_proposal_id)}">
+        <div>
+          <strong>${escapeHtml(proposal.title || "")}</strong>
+          <span>${escapeHtml(proposal.objective || "")}</span>
+          <span>${escapeHtml(proposal.target_audience || "")}</span>
+        </div>
+        ${renderProposalOutline(proposal)}
+        <div>
+          <span>QR: ${escapeHtml(proposal.qr_flow || "未設定")}</span>
+          <span>狙い: ${escapeHtml(proposal.expected_effect || "未設定")}</span>
+          <span>Status: ${escapeHtml(proposal.status || "")}</span>
+          ${proposal.campaign_brief_id ? `<span>Brief: ${escapeHtml(proposal.campaign_brief_id)}</span>` : ""}
+          ${proposal.rejected_reason ? `<span>却下理由: ${escapeHtml(proposal.rejected_reason)}</span>` : ""}
+        </div>
+        <form class="customer-proposal-action">
+          <input name="rejected_reason" type="text" placeholder="却下理由" aria-label="却下理由" value="${escapeAttr(proposal.rejected_reason || "")}">
+          <button name="status" value="selected" type="submit">採用</button>
+          <button name="status" value="held" type="submit">保留</button>
+          <button name="status" value="rejected" type="submit">却下</button>
+        </form>
+      </article>
+    `).join("");
+    els.proposals.querySelectorAll(".customer-proposal-action").forEach((form) => {
+      form.addEventListener("submit", handleProposalAction);
+    });
+  }
+
+  function renderProposalOutline(proposal) {
+    const outline = Array.isArray(proposal.three_screen_outline) ? proposal.three_screen_outline : [];
+    if (outline.length === 0) return `<p class="empty">3連ラフは未設定です。</p>`;
+    return `
+      <ol class="proposal-outline">
+        ${outline.slice(0, 6).map((item) => `<li>${escapeHtml(item.copy || item.text || item.title || JSON.stringify(item))}</li>`).join("")}
+      </ol>
+    `;
+  }
+
+  async function handleProposalAction(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitter = event.submitter;
+    const status = submitter?.value || "";
+    const proposalId = form.closest(".customer-proposal")?.dataset.proposalId || "";
+    const button = submitter || form.querySelector("button");
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/customer/campaign-proposals/${encodeURIComponent(proposalId)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status,
+          rejected_reason: form.elements.rejected_reason.value
+        })
+      });
+      await loadCustomerDashboard();
+    } catch (error) {
+      setMessage(error.message || "提案の更新に失敗しました。");
+      button.disabled = false;
+    }
   }
 
   function renderOrders() {

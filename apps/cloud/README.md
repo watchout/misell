@@ -99,6 +99,21 @@ reason, previous status, and command scope. Terminal commands are retained for
 the configured retention window and then purged; active `queued` / `claimed`
 work is never purged by retention.
 
+## AI Campaign Proposal Foundation
+
+The AI campaign proposal foundation is intentionally local and operator-driven
+for the first implementation. It stores customer context items, immutable
+context snapshots, campaign proposals, proposal action events, proposal run
+stubs, and campaign brief stubs.
+
+This phase does not call an external AI provider, does not create scenes, does
+not create `content_manifest` rows, does not publish content, does not add
+collaboration preview flows, and does not implement billing or credits.
+
+Customer Admin can view this month's proposals and mark them as `selected`,
+`held`, or `rejected` with a reason. Selecting a proposal creates only a
+`campaign_briefs` stub for the later Campaign Generator phase.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
@@ -129,6 +144,7 @@ sed -n 's/^ADMIN_PASSWORD=//p' ~/.config/misell-cloud/env
 npm run check
 npm run smoke:counter-order-ux
 npm run smoke:customer-reporting-access
+npm run smoke:ai-campaign-proposals
 npm audit --audit-level=moderate
 ```
 

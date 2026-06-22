@@ -154,6 +154,9 @@ jobs:
       - name: Smoke customer reporting access
         run: npm --prefix apps/cloud run smoke:customer-reporting-access
 
+      - name: Smoke AI campaign proposal foundation
+        run: npm --prefix apps/cloud run smoke:ai-campaign-proposals
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
