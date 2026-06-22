@@ -99,6 +99,50 @@ reason, previous status, and command scope. Terminal commands are retained for
 the configured retention window and then purged; active `queued` / `claimed`
 work is never purged by retention.
 
+## AI Campaign Proposal Foundation
+
+The AI campaign proposal foundation is intentionally local and operator-driven
+for the first implementation. It stores customer context items, immutable
+context snapshots, campaign proposals, proposal action events, proposal run
+stubs, and campaign brief stubs.
+
+The first slice is screen-group scoped. Admin proposal seed, operator-created
+proposals, context items, context snapshots, proposal generation run stubs, and
+campaign brief stubs all require `tenant_id`, `store_id`, `screen_group_id`, and
+`proposal_month` where applicable. Store-wide or tenant-wide proposals are left
+for a later scope.
+
+Customer context items require explicit classification/source fields:
+`context_category`, `visibility_scope`, `source_owner`, `source_type`, and
+`confidence`. These fields are enum-validated against the #145 Campaign
+Intelligence Context vocabulary so context snapshots remain auditable and
+stable:
+
+- `context_category`: `customer_profile`, `internal_notes`, `market_signal`,
+  `operation_summary`, `proposal_feedback`, `asset_source`,
+  `collaboration_signal`
+- `visibility_scope`: `customer_visible`, `operator_internal`,
+  `system_internal`, `partner_limited`
+- `source_owner`: `customer`, `misell_operator`, `system`, `partner`,
+  `external_reference`
+- `confidence`: `customer_confirmed`, `operator_confirmed`,
+  `operator_observed`, `market_reference`, `system_aggregated`, `inferred`,
+  `stale`, `expired`
+
+Campaign proposal status is one of `draft`, `proposed`, `selected`, `held`,
+`rejected`, or `expired`. Customer Admin only sees customer-visible proposals;
+operator-created proposals default to `proposed`, while `draft` / `expired` are
+not returned from the customer proposal API.
+
+This phase does not call an external AI provider, does not create scenes, does
+not create `content_manifest` rows, does not publish content, does not add
+collaboration preview flows, and does not implement billing or credits.
+
+Customer Admin can view this month's proposals and mark them as `selected`,
+`held`, or `rejected`; rejected reason is optional and preserved when supplied.
+Selecting a proposal creates only a
+`campaign_briefs` stub for the later Campaign Generator phase.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
@@ -129,6 +173,7 @@ sed -n 's/^ADMIN_PASSWORD=//p' ~/.config/misell-cloud/env
 npm run check
 npm run smoke:counter-order-ux
 npm run smoke:customer-reporting-access
+npm run smoke:ai-campaign-proposals
 npm audit --audit-level=moderate
 ```
 

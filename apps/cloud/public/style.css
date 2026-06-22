@@ -882,7 +882,9 @@ td small {
 }
 
 .customer-offer-revision,
-.customer-access-create {
+.customer-access-create,
+.campaign-proposal-create,
+.customer-proposal-action {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -890,8 +892,20 @@ td small {
 }
 
 .customer-offer-revision button,
-.customer-access-create button {
+.customer-access-create button,
+.campaign-proposal-create button,
+.customer-proposal-action button {
   min-width: 120px;
+}
+
+.campaign-proposal-create textarea,
+.customer-proposal-action input {
+  grid-column: 1 / -1;
+}
+
+.proposal-outline {
+  margin: 0;
+  padding-left: 20px;
 }
 
 pre {
