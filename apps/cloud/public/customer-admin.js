@@ -6,6 +6,7 @@
     offers: [],
     orders: [],
     proposals: [],
+    contextItems: [],
     report: null
   };
 
@@ -21,6 +22,7 @@
     summary: document.getElementById("customer-session-summary"),
     kpis: document.getElementById("customer-kpis"),
     proposals: document.getElementById("customer-campaign-proposals"),
+    contextItems: document.getElementById("customer-context-items"),
     orders: document.getElementById("customer-orders"),
     storeSettings: document.getElementById("customer-store-settings"),
     offers: document.getElementById("customer-offers"),
@@ -101,19 +103,25 @@
     const proposalRequest = screenGroupId
       ? fetchJson(`/api/customer/campaign-proposals?${proposalParams}`).catch(() => ({ campaign_proposals: [] }))
       : Promise.resolve({ campaign_proposals: [] });
-    const [report, proposals, orders, offers] = await Promise.all([
+    const contextRequest = screenGroupId
+      ? fetchJson(`/api/customer/context-items?${proposalParams}`).catch(() => ({ customer_context_items: [] }))
+      : Promise.resolve({ customer_context_items: [] });
+    const [report, proposals, contextItems, orders, offers] = await Promise.all([
       fetchJson(`/api/customer/reports/conversion?${params}`),
       proposalRequest,
+      contextRequest,
       fetchJson(`/api/customer/counter-orders?${storeId ? `store_id=${encodeURIComponent(storeId)}&` : ""}limit=50`).catch(() => ({ counter_orders: [] })),
       fetchJson("/api/customer/offers")
     ]);
     state.report = report.report;
     state.proposals = proposals.campaign_proposals || [];
+    state.contextItems = contextItems.customer_context_items || [];
     state.orders = orders.counter_orders || [];
     state.offers = offers.offers || [];
     renderSession();
     renderKpis();
     renderProposals();
+    renderContextItems();
     renderOrders();
     renderStores();
     renderOffers();
@@ -253,6 +261,190 @@
     } catch (error) {
       setMessage(error.message || "提案の更新に失敗しました。");
       button.disabled = false;
+    }
+  }
+
+  function renderContextItems() {
+    if (!els.contextItems) return;
+    const canEdit = ["customer_admin", "customer_editor"].includes(state.session?.role);
+    const screenGroupId = selectedScreenGroupId();
+    els.contextItems.innerHTML = `
+      ${canEdit && screenGroupId ? renderContextCreateForm() : ""}
+      ${!screenGroupId ? `<p class="empty">画面グループを選択してください。</p>` : ""}
+      ${state.contextItems.length === 0 && screenGroupId ? `<p class="empty">店舗文脈はまだありません。</p>` : ""}
+      ${state.contextItems.map((item) => renderContextItem(item, canEdit)).join("")}
+    `;
+    els.contextItems.querySelector(".customer-context-create")?.addEventListener("submit", handleContextCreate);
+    els.contextItems.querySelectorAll(".customer-context-edit").forEach((form) => {
+      form.addEventListener("submit", handleContextEdit);
+    });
+    els.contextItems.querySelectorAll(".customer-context-upload").forEach((form) => {
+      form.addEventListener("submit", handleContextUpload);
+    });
+    els.contextItems.querySelectorAll("[data-context-delete]").forEach((button) => {
+      button.addEventListener("click", handleContextDelete);
+    });
+    els.contextItems.querySelectorAll("[data-source-asset-delete]").forEach((button) => {
+      button.addEventListener("click", handleSourceAssetDelete);
+    });
+  }
+
+  function renderContextCreateForm() {
+    return `
+      <form class="customer-context-create customer-context-form">
+        <select name="context_category" aria-label="分類">
+          ${contextCategoryOptions("customer_profile")}
+        </select>
+        <input name="item_key" type="text" placeholder="管理名" aria-label="管理名" required>
+        <textarea name="text" rows="3" placeholder="市場情報、店舗の前提、訴求したい内容など" aria-label="文脈内容" required></textarea>
+        <button type="submit">追加</button>
+      </form>
+    `;
+  }
+
+  function renderContextItem(item, canEdit) {
+    const assets = item.source_assets || [];
+    return `
+      <article class="customer-panel customer-context-item" data-context-id="${escapeAttr(item.customer_context_item_id)}">
+        <strong>${escapeHtml(contextCategoryLabel(item.context_category))} / ${escapeHtml(item.item_key || "")}</strong>
+        <span>${escapeHtml(contextText(item.value))}</span>
+        <span>Status: ${escapeHtml(item.status || "")}</span>
+        ${assets.length ? `
+          <div class="customer-context-assets">
+            ${assets.map((asset) => `
+              <span>
+                <a href="${escapeAttr(asset.view_path || "")}" target="_blank" rel="noreferrer">${escapeHtml(asset.original_name || asset.filename || "")}</a>
+                <small>${escapeHtml(asset.mime_type || "")} / ${Math.round((asset.size_bytes || 0) / 1024)}KB</small>
+                ${canEdit ? `<button class="danger" type="button" data-source-asset-delete="${escapeAttr(asset.customer_context_source_asset_id)}">削除</button>` : ""}
+              </span>
+            `).join("")}
+          </div>
+        ` : ""}
+        ${canEdit ? `
+          <form class="customer-context-edit customer-context-form">
+            <select name="context_category" aria-label="分類">
+              ${contextCategoryOptions(item.context_category)}
+            </select>
+            <textarea name="text" rows="3" aria-label="文脈内容">${escapeHtml(contextText(item.value))}</textarea>
+            <button type="submit">保存</button>
+            <button class="danger" type="button" data-context-delete="${escapeAttr(item.customer_context_item_id)}">削除</button>
+          </form>
+          <form class="customer-context-upload customer-context-form">
+            <input name="source" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" aria-label="添付ファイル">
+            <input name="usage_notes" type="text" placeholder="利用メモ" aria-label="利用メモ">
+            <button type="submit">添付</button>
+          </form>
+        ` : ""}
+      </article>
+    `;
+  }
+
+  function contextCategoryOptions(current) {
+    return window.MisellContextUi?.categoryOptions?.(current, { includeInternal: false }) || "";
+  }
+
+  function contextCategoryLabel(value) {
+    return window.MisellContextUi?.categoryLabel?.(value) || value || "";
+  }
+
+  function contextText(value) {
+    return window.MisellContextUi?.contextText?.(value) || "";
+  }
+
+  async function handleContextCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      await fetchJson("/api/customer/context-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: selectedStoreId(),
+          screen_group_id: selectedScreenGroupId(),
+          context_category: form.elements.context_category.value,
+          item_type: "customer_note",
+          item_key: form.elements.item_key.value,
+          value: { text: form.elements.text.value }
+        })
+      });
+      form.reset();
+      await loadCustomerDashboard();
+    } catch (error) {
+      setMessage(error.message || "店舗文脈の追加に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleContextEdit(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const contextId = form.closest(".customer-context-item")?.dataset.contextId || "";
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/customer/context-items/${encodeURIComponent(contextId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          context_category: form.elements.context_category.value,
+          value: { text: form.elements.text.value },
+          status: "active"
+        })
+      });
+      await loadCustomerDashboard();
+    } catch (error) {
+      setMessage(error.message || "店舗文脈の保存に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleContextUpload(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const contextId = form.closest(".customer-context-item")?.dataset.contextId || "";
+    const file = form.elements.source.files?.[0];
+    if (!file) return;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    const body = new FormData();
+    body.append("source", file);
+    body.append("usage_notes", form.elements.usage_notes.value || "");
+    try {
+      await fetchJson(`/api/customer/context-items/${encodeURIComponent(contextId)}/source-assets`, {
+        method: "POST",
+        body
+      });
+      form.reset();
+      await loadCustomerDashboard();
+    } catch (error) {
+      setMessage(error.message || "添付に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleContextDelete(event) {
+    const contextId = event.currentTarget.dataset.contextDelete || "";
+    event.currentTarget.disabled = true;
+    try {
+      await fetchJson(`/api/customer/context-items/${encodeURIComponent(contextId)}`, { method: "DELETE" });
+      await loadCustomerDashboard();
+    } catch (error) {
+      setMessage(error.message || "店舗文脈の削除に失敗しました。");
+      event.currentTarget.disabled = false;
+    }
+  }
+
+  async function handleSourceAssetDelete(event) {
+    const assetId = event.currentTarget.dataset.sourceAssetDelete || "";
+    event.currentTarget.disabled = true;
+    try {
+      await fetchJson(`/api/customer/context-source-assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+      await loadCustomerDashboard();
+    } catch (error) {
+      setMessage(error.message || "添付ファイルの削除に失敗しました。");
+      event.currentTarget.disabled = false;
     }
   }
 

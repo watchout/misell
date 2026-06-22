@@ -884,7 +884,8 @@ td small {
 .customer-offer-revision,
 .customer-access-create,
 .campaign-proposal-create,
-.customer-proposal-action {
+.customer-proposal-action,
+.customer-context-form {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -894,13 +895,51 @@ td small {
 .customer-offer-revision button,
 .customer-access-create button,
 .campaign-proposal-create button,
-.customer-proposal-action button {
+.customer-proposal-action button,
+.customer-context-form button {
   min-width: 120px;
 }
 
 .campaign-proposal-create textarea,
-.customer-proposal-action input {
+.customer-proposal-action input,
+.customer-context-form textarea {
   grid-column: 1 / -1;
+}
+
+.admin-context-panel {
+  margin-bottom: 12px;
+}
+
+.admin-context-upload {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto;
+  margin-top: 6px;
+}
+
+.admin-context-table {
+  margin-bottom: 12px;
+  table-layout: fixed;
+}
+
+.customer-context-assets {
+  display: grid;
+  gap: 6px;
+}
+
+.customer-context-assets span {
+  align-items: center;
+  background: #f8fafb;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+  display: grid;
+  gap: 4px 8px;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, auto) auto;
+  padding: 8px;
+}
+
+.customer-context-assets small {
+  color: #697986;
 }
 
 .proposal-outline {
