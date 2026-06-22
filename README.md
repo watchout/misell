@@ -87,6 +87,7 @@ npm audit --audit-level=moderate
 
 ## ドキュメント
 
+- docs/README.md
 - docs/00_PROJECT_OVERVIEW.md
 - docs/01_STRATEGY_BUYOUT_2027.md
 - docs/02_PRODUCT_BRAND.md
@@ -173,6 +174,8 @@ npm audit --audit-level=moderate
 - docs/83_CLOUD_LOCAL_BACKUP_AND_ROLLBACK_SPEC.md
 - docs/84_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md
 - docs/85_MVP_CANONICAL_ARCHITECTURE_DECISIONS.md
+- docs/90_AI_CAMPAIGN_STUDIO_RETENTION_LOOP_SPEC.md
+- docs/91_CANONICAL_DOMAIN_VOCABULARY_ADR.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
