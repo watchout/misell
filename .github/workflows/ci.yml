@@ -157,6 +157,9 @@ jobs:
       - name: Smoke AI campaign proposal foundation
         run: npm --prefix apps/cloud run smoke:ai-campaign-proposals
 
+      - name: Smoke AI context source CRUD
+        run: npm --prefix apps/cloud run smoke:ai-context-source-crud
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest

@@ -12,6 +12,7 @@
     storeAccessTokens: [],
     customerAccessTokens: [],
     campaignProposals: [],
+    customerContextItems: [],
     issuedToken: null,
     issuedStoreAccessToken: null,
     issuedCustomerAccessToken: null
@@ -145,7 +146,7 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, campaignProposals, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, customerContextItems, campaignProposals, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/device-commands?limit=100").catch(() => ({ device_commands: [] })),
@@ -155,6 +156,7 @@
       fetchJson("/api/admin/counter-orders?limit=100").catch(() => ({ counter_orders: [] })),
       fetchJson("/api/admin/store-access-tokens?limit=100").catch(() => ({ store_access_tokens: [] })),
       fetchJson("/api/admin/customer-access-tokens?limit=100").catch(() => ({ customer_access_tokens: [] })),
+      fetchJson("/api/admin/customer-context-items?limit=100&status=active").catch(() => ({ customer_context_items: [] })),
       fetchJson("/api/admin/campaign-proposals?limit=100").catch(() => ({ campaign_proposals: [] })),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
@@ -171,6 +173,7 @@
     state.counterOrders = counterOrders.counter_orders || [];
     state.storeAccessTokens = storeAccessTokens.store_access_tokens || [];
     state.customerAccessTokens = customerAccessTokens.customer_access_tokens || [];
+    state.customerContextItems = customerContextItems.customer_context_items || [];
     state.campaignProposals = campaignProposals.campaign_proposals || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
@@ -1421,6 +1424,7 @@
     const screenGroups = uniqueScreenGroupsFromDevices(state.devices || []);
     const currentMonth = new Date().toISOString().slice(0, 7);
     els.campaignProposals.innerHTML = `
+      ${renderCustomerContextAdminPanel(tenants, stores, screenGroups)}
       <form class="campaign-proposal-create">
         <select name="tenant_id" aria-label="顧客" required>
           <option value="">顧客</option>
@@ -1460,7 +1464,90 @@
         </table>
       `}
     `;
+    els.campaignProposals.querySelector(".admin-context-create")?.addEventListener("submit", handleAdminContextCreate);
+    els.campaignProposals.querySelectorAll(".admin-context-upload").forEach((form) => {
+      form.addEventListener("submit", handleAdminContextUpload);
+    });
+    els.campaignProposals.querySelectorAll("[data-admin-context-delete]").forEach((button) => {
+      button.addEventListener("click", handleAdminContextDelete);
+    });
+    els.campaignProposals.querySelectorAll("[data-admin-source-asset-delete]").forEach((button) => {
+      button.addEventListener("click", handleAdminSourceAssetDelete);
+    });
     els.campaignProposals.querySelector(".campaign-proposal-create")?.addEventListener("submit", handleCampaignProposalCreate);
+  }
+
+  function renderCustomerContextAdminPanel(tenants, stores, screenGroups) {
+    return `
+      <section class="admin-context-panel">
+        <form class="admin-context-create campaign-proposal-create">
+          <select name="tenant_id" aria-label="顧客" required>
+            <option value="">顧客</option>
+            ${tenants.map((tenant) => `<option value="${escapeHtml(tenant.tenant_id || "")}">${escapeHtml(tenant.tenant_name || tenant.tenant_id || "")}</option>`).join("")}
+          </select>
+          <select name="store_id" aria-label="店舗" required>
+            <option value="">店舗</option>
+            ${stores.map((store) => `<option value="${escapeHtml(store.store_id || "")}" data-tenant-id="${escapeHtml(store.tenant_id || "")}">${escapeHtml(store.store_name || store.store_id || "")}</option>`).join("")}
+          </select>
+          <select name="screen_group_id" aria-label="画面グループ" required>
+            <option value="">画面グループ</option>
+            ${screenGroups.map((group) => `<option value="${escapeHtml(group.screen_group_id || "")}" data-store-id="${escapeHtml(group.store_id || "")}">${escapeHtml(group.screen_group_name || group.screen_group_id || "")}</option>`).join("")}
+          </select>
+          <select name="context_category" aria-label="分類">
+            ${contextCategoryOptions("customer_profile")}
+          </select>
+          <select name="visibility_scope" aria-label="表示範囲">
+            <option value="customer_visible">customer_visible</option>
+            <option value="operator_internal">operator_internal</option>
+          </select>
+          <input name="item_key" type="text" placeholder="管理名" aria-label="管理名" required>
+          <textarea name="text" rows="3" placeholder="文脈メモ" aria-label="文脈メモ"></textarea>
+          <button type="submit">文脈を追加</button>
+        </form>
+        ${state.customerContextItems.length === 0 ? `<p class="empty">文脈 seed はまだありません。</p>` : `
+          <table class="campaign-proposal-table admin-context-table">
+            <thead><tr><th>文脈</th><th>Scope</th><th>Source</th><th>添付</th><th>操作</th></tr></thead>
+            <tbody>${state.customerContextItems.slice(0, 50).map(renderAdminContextRow).join("")}</tbody>
+          </table>
+        `}
+      </section>
+    `;
+  }
+
+  function renderAdminContextRow(item) {
+    const assets = item.source_assets || [];
+    return `
+      <tr>
+        <td>
+          <strong>${escapeHtml(contextCategoryLabel(item.context_category))} / ${escapeHtml(item.item_key || "")}</strong>
+          <small>${escapeHtml(contextText(item.value))}</small>
+        </td>
+        <td>
+          ${escapeHtml(item.tenant_id || "")}
+          <small>${escapeHtml(item.store_id || "")} / ${escapeHtml(item.screen_group_id || "")}</small>
+        </td>
+        <td>
+          ${escapeHtml(item.visibility_scope || "")}
+          <small>${escapeHtml(item.source_owner || "")} / ${escapeHtml(item.source_type || "")}</small>
+        </td>
+        <td>
+          ${assets.length ? assets.map((asset) => `
+            <small>
+              <a href="${escapeHtml(asset.admin_view_path || "")}" target="_blank" rel="noreferrer">${escapeHtml(asset.original_name || asset.filename || "")}</a>
+              <button class="danger asset-delete" type="button" data-admin-source-asset-delete="${escapeAttr(asset.customer_context_source_asset_id)}">削除</button>
+            </small>
+          `).join("") : `<small>添付なし</small>`}
+          <form class="admin-context-upload" data-context-id="${escapeAttr(item.customer_context_item_id)}">
+            <input name="source" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" aria-label="添付ファイル">
+            <input name="usage_notes" type="text" placeholder="利用メモ" aria-label="利用メモ">
+            <button type="submit">添付</button>
+          </form>
+        </td>
+        <td>
+          <button class="danger" type="button" data-admin-context-delete="${escapeAttr(item.customer_context_item_id)}">削除</button>
+        </td>
+      </tr>
+    `;
   }
 
   function renderCampaignProposalRow(proposal) {
@@ -1523,6 +1610,103 @@
       button.disabled = false;
       button.textContent = "提案を追加";
     }
+  }
+
+  async function handleAdminContextCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    button.textContent = "追加中";
+    try {
+      await fetchJson("/api/admin/customer-context-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: form.elements.tenant_id.value,
+          store_id: form.elements.store_id.value,
+          screen_group_id: form.elements.screen_group_id.value,
+          context_category: form.elements.context_category.value,
+          visibility_scope: form.elements.visibility_scope.value,
+          source_owner: "misell_operator",
+          source_type: "operator_input",
+          confidence: "operator_confirmed",
+          item_type: "operator_note",
+          item_key: form.elements.item_key.value,
+          value: { text: form.elements.text.value },
+          status: "active"
+        })
+      });
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "文脈の追加に失敗しました。");
+      button.disabled = false;
+      button.textContent = "文脈を追加";
+    }
+  }
+
+  async function handleAdminContextUpload(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const file = form.elements.source.files?.[0];
+    if (!file) return;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    const body = new FormData();
+    body.append("source", file);
+    body.append("usage_notes", form.elements.usage_notes.value || "");
+    try {
+      await fetchJson(`/api/admin/customer-context-items/${encodeURIComponent(form.dataset.contextId)}/source-assets`, {
+        method: "POST",
+        body
+      });
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "添付に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleAdminContextDelete(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/admin/customer-context-items/${encodeURIComponent(button.dataset.adminContextDelete || "")}`, {
+        method: "DELETE"
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "文脈の削除に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleAdminSourceAssetDelete(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/admin/customer-context-source-assets/${encodeURIComponent(button.dataset.adminSourceAssetDelete || "")}`, {
+        method: "DELETE"
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "添付ファイルの削除に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  function contextCategoryOptions(current) {
+    return window.MisellContextUi?.categoryOptions?.(current, { includeInternal: true }) || "";
+  }
+
+  function contextCategoryLabel(value) {
+    return window.MisellContextUi?.categoryLabel?.(value) || value || "";
+  }
+
+  function contextText(value) {
+    return window.MisellContextUi?.contextText?.(value) || "";
   }
 
   function outlineFromText(value) {

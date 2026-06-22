@@ -143,6 +143,25 @@ Customer Admin can view this month's proposals and mark them as `selected`,
 Selecting a proposal creates only a
 `campaign_briefs` stub for the later Campaign Generator phase.
 
+Customer Admin users with `customer_admin` or `customer_editor` can create,
+edit, and soft-delete customer-owned context items for a selected
+`store_id` / `screen_group_id`. Customer-created context is always
+`visibility_scope=customer_visible`, `source_owner=customer`, and
+`source_type=customer_input` or `asset_upload`; operator/internal context is not
+returned from customer context APIs.
+
+Context source files are stored separately from Cloud delivery assets. The
+first upload slice allows only PDF and bitmap image evidence:
+
+- image: `.jpg`, `.jpeg`, `.png`, `.webp`, max 25 MB
+- PDF: `.pdf`, max 100 MB
+- forbidden for now: `.svg`, `.txt`, Office files, archives, executables
+
+Source files are available through authenticated inline view endpoints only.
+No customer/admin download API is exposed in this slice. The stored file path is
+not returned in API responses or context snapshots; snapshots include only
+source asset IDs, usage notes, processing status, and `external_ai_used=false`.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:

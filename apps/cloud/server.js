@@ -9,6 +9,23 @@ const express = require("express");
 const basicAuth = require("express-basic-auth");
 const multer = require("multer");
 const { buildManifestContract } = require("./lib/studio-phase1-contract");
+const {
+  CONTEXT_CATEGORIES,
+  VISIBILITY_SCOPES,
+  SOURCE_OWNERS,
+  SOURCE_TYPES,
+  CONFIDENCE_LEVELS,
+  CONTEXT_RECORD_STATUSES,
+  COST_OWNERS,
+  DOCUMENT_PROCESSING_STATUSES,
+  CONTEXT_SOURCE_IMAGE_MAX_BYTES,
+  CONTEXT_SOURCE_PDF_MAX_BYTES,
+  assertContextContract,
+  assertCustomerWritableContext,
+  assertContextSourceAssetContract,
+  assertNoAutomaticExternalAi,
+  buildContextSnapshotSourceSummary
+} = require("./lib/ai-campaign-context-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -17,6 +34,8 @@ const DATA_DIR = runtimePath("MISELL_CLOUD_DATA_DIR", path.join(ROOT_DIR, "data"
 const DB_PATH = runtimePath("DB_PATH", path.join(DATA_DIR, "misell-cloud.sqlite"));
 const CLOUD_ASSETS_DIR = runtimePath("MISELL_CLOUD_ASSETS_DIR", path.join(DATA_DIR, "assets"));
 const CLOUD_ASSET_UPLOAD_TMP_DIR = path.join(DATA_DIR, "tmp", "asset-uploads");
+const CUSTOMER_CONTEXT_SOURCE_DIR = runtimePath("MISELL_CUSTOMER_CONTEXT_SOURCE_DIR", path.join(DATA_DIR, "customer-context-sources"));
+const CUSTOMER_CONTEXT_SOURCE_UPLOAD_TMP_DIR = path.join(DATA_DIR, "tmp", "customer-context-source-uploads");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3200);
@@ -137,28 +156,15 @@ const CUSTOMER_EDIT_ROLES = new Set(["customer_admin", "customer_editor"]);
 const CAMPAIGN_PROPOSAL_STATUS = new Set(["draft", "proposed", "selected", "held", "rejected", "expired"]);
 const CUSTOMER_CAMPAIGN_PROPOSAL_STATUS = new Set(["selected", "held", "rejected"]);
 const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["proposed", "selected", "held", "rejected"]);
-const CUSTOMER_CONTEXT_CATEGORIES = new Set([
-  "customer_profile",
-  "internal_notes",
-  "market_signal",
-  "operation_summary",
-  "proposal_feedback",
-  "asset_source",
-  "collaboration_signal"
-]);
-const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(["customer_visible", "operator_internal", "system_internal", "partner_limited"]);
-const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(["customer", "misell_operator", "system", "partner", "external_reference"]);
-const CUSTOMER_CONTEXT_SOURCE_TYPES = new Set(["operator_input", "customer_input", "imported", "report_summary", "system_generated"]);
-const CUSTOMER_CONTEXT_CONFIDENCE = new Set([
-  "customer_confirmed",
-  "operator_confirmed",
-  "operator_observed",
-  "market_reference",
-  "system_aggregated",
-  "inferred",
-  "stale",
-  "expired"
-]);
+const CUSTOMER_CONTEXT_CATEGORIES = new Set(CONTEXT_CATEGORIES);
+const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(VISIBILITY_SCOPES);
+const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(SOURCE_OWNERS);
+const CUSTOMER_CONTEXT_SOURCE_TYPES = new Set(SOURCE_TYPES);
+const CUSTOMER_CONTEXT_CONFIDENCE = new Set(CONFIDENCE_LEVELS);
+const CUSTOMER_CONTEXT_RECORD_STATUS = new Set(CONTEXT_RECORD_STATUSES);
+const CUSTOMER_CONTEXT_COST_OWNERS = new Set(COST_OWNERS);
+const CUSTOMER_CONTEXT_DOCUMENT_PROCESSING_STATUS = new Set(DOCUMENT_PROCESSING_STATUSES);
+const CUSTOMER_CONTEXT_SOURCE_MAX_BYTES = Math.max(CONTEXT_SOURCE_IMAGE_MAX_BYTES, CONTEXT_SOURCE_PDF_MAX_BYTES);
 const PUBLIC_QR_VIEW_LIMIT = normalizedLimit(
   process.env.MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE,
   120,
@@ -239,6 +245,8 @@ const REPORT_HEARTBEAT_INTERVAL_MINUTES = normalizedLimit(
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(CLOUD_ASSETS_DIR, { recursive: true });
 fs.mkdirSync(CLOUD_ASSET_UPLOAD_TMP_DIR, { recursive: true });
+fs.mkdirSync(CUSTOMER_CONTEXT_SOURCE_DIR, { recursive: true, mode: 0o700 });
+fs.mkdirSync(CUSTOMER_CONTEXT_SOURCE_UPLOAD_TMP_DIR, { recursive: true, mode: 0o700 });
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
@@ -253,6 +261,19 @@ const cloudAssetUpload = multer({
   }),
   limits: {
     fileSize: CLOUD_ASSET_MAX_BYTES,
+    files: 1
+  }
+});
+
+const customerContextSourceUpload = multer({
+  storage: multer.diskStorage({
+    destination: CUSTOMER_CONTEXT_SOURCE_UPLOAD_TMP_DIR,
+    filename(req, file, cb) {
+      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${path.extname(file.originalname || "").toLowerCase()}`);
+    }
+  }),
+  limits: {
+    fileSize: CUSTOMER_CONTEXT_SOURCE_MAX_BYTES,
     files: 1
   }
 });
@@ -538,6 +559,69 @@ app.post("/api/admin/customer-context-items", requireAdminAuth, (req, res, next)
   try {
     const item = upsertCustomerContextItem(req.body || {}, req.adminActor);
     res.status(201).json({ ok: true, customer_context_item: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/customer-context-items/:customer_context_item_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const item = updateCustomerContextItem(cleanId(req.params.customer_context_item_id), req.body || {}, {
+      actorType: "admin",
+      actorId: req.adminActor?.actor_id || "admin"
+    });
+    res.json({ ok: true, customer_context_item: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/customer-context-items/:customer_context_item_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const item = softDeleteCustomerContextItem(cleanId(req.params.customer_context_item_id), {
+      actorType: "admin",
+      actorId: req.adminActor?.actor_id || "admin"
+    });
+    res.json({ ok: true, customer_context_item: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/customer-context-items/:customer_context_item_id/source-assets", requireAdminAuth, (req, res, next) => {
+  customerContextSourceUpload.single("source")(req, res, (error) => {
+    if (error) {
+      next(normalizeCustomerContextSourceUploadError(error));
+      return;
+    }
+    try {
+      const asset = createCustomerContextSourceAsset(cleanId(req.params.customer_context_item_id), req.file, req.body || {}, {
+        actorType: "admin",
+        actorId: req.adminActor?.actor_id || "admin"
+      });
+      res.status(201).json({ ok: true, customer_context_source_asset: asset });
+    } catch (createError) {
+      cleanupUploadedFile(req.file);
+      next(createError);
+    }
+  });
+});
+
+app.get("/api/admin/customer-context-source-assets/:customer_context_source_asset_id/view", requireAdminAuth, (req, res, next) => {
+  try {
+    sendCustomerContextSourceAsset(req, res, cleanId(req.params.customer_context_source_asset_id), { actorType: "admin" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/customer-context-source-assets/:customer_context_source_asset_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const asset = softDeleteCustomerContextSourceAsset(cleanId(req.params.customer_context_source_asset_id), {
+      actorType: "admin",
+      actorId: req.adminActor?.actor_id || "admin"
+    });
+    res.json({ ok: true, customer_context_source_asset: asset });
   } catch (error) {
     next(error);
   }
@@ -913,6 +997,85 @@ app.get("/api/customer/screen-groups", requireCustomerSession, (req, res) => {
 
 app.get("/api/customer/offers", requireCustomerSession, (req, res) => {
   res.json({ ok: true, offers: listCustomerOffers(req.customerSession) });
+});
+
+app.get("/api/customer/context-items", requireCustomerSession, (req, res, next) => {
+  try {
+    res.json({ ok: true, customer_context_items: listCustomerVisibleContextItems(req.customerSession, req.query || {}) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/customer/context-items", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  try {
+    const item = createCustomerOwnedContextItem(req.customerSession, req.body || {});
+    res.status(201).json({ ok: true, customer_context_item: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/customer/context-items/:customer_context_item_id", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  try {
+    const item = updateCustomerOwnedContextItem(req.customerSession, cleanId(req.params.customer_context_item_id), req.body || {});
+    res.json({ ok: true, customer_context_item: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/customer/context-items/:customer_context_item_id", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  try {
+    const item = softDeleteCustomerOwnedContextItem(req.customerSession, cleanId(req.params.customer_context_item_id));
+    res.json({ ok: true, customer_context_item: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/customer/context-items/:customer_context_item_id/source-assets", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  customerContextSourceUpload.single("source")(req, res, (error) => {
+    if (error) {
+      next(normalizeCustomerContextSourceUploadError(error));
+      return;
+    }
+    try {
+      const item = getCustomerOwnedContextItemForWrite(req.customerSession, cleanId(req.params.customer_context_item_id));
+      const asset = createCustomerContextSourceAsset(item.customer_context_item_id, req.file, {
+        ...(req.body || {}),
+        source_owner: "customer",
+        visibility_scope: "customer_visible"
+      }, {
+        actorType: "customer",
+        actorId: req.customerSession.customer_session_id
+      });
+      res.status(201).json({ ok: true, customer_context_source_asset: asset });
+    } catch (createError) {
+      cleanupUploadedFile(req.file);
+      next(createError);
+    }
+  });
+});
+
+app.get("/api/customer/context-source-assets/:customer_context_source_asset_id/view", requireCustomerSession, (req, res, next) => {
+  try {
+    sendCustomerContextSourceAsset(req, res, cleanId(req.params.customer_context_source_asset_id), {
+      actorType: "customer",
+      session: req.customerSession
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/customer/context-source-assets/:customer_context_source_asset_id", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  try {
+    const asset = softDeleteCustomerOwnedContextSourceAsset(req.customerSession, cleanId(req.params.customer_context_source_asset_id));
+    res.json({ ok: true, customer_context_source_asset: asset });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/customer/campaign-proposals", requireCustomerSession, (req, res, next) => {
@@ -3392,6 +3555,48 @@ function schemaMigrations() {
             ON campaign_briefs(tenant_id, store_id, screen_group_id, status, created_at DESC);
         `);
       }
+    },
+    {
+      version: 10,
+      name: "ai_context_source_assets",
+      up() {
+        addColumnIfMissing("customer_context_items", "deleted_at", "TEXT");
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS customer_context_source_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_context_source_asset_id TEXT NOT NULL UNIQUE,
+            customer_context_item_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            source_owner TEXT NOT NULL,
+            visibility_scope TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            extension TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            usage_notes TEXT NOT NULL DEFAULT '',
+            extraction_status TEXT NOT NULL DEFAULT 'manual_no_ai',
+            external_ai_used INTEGER NOT NULL DEFAULT 0,
+            cost_owner TEXT NOT NULL DEFAULT 'manual_no_ai',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_by_actor_type TEXT NOT NULL DEFAULT 'admin',
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(customer_context_item_id) REFERENCES customer_context_items(customer_context_item_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_customer_context_source_assets_item
+            ON customer_context_source_assets(customer_context_item_id, status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_customer_context_source_assets_scope
+            ON customer_context_source_assets(tenant_id, store_id, screen_group_id, visibility_scope, status, created_at DESC);
+        `);
+      }
     }
   ];
 }
@@ -5550,18 +5755,23 @@ function createCustomerOfferRevision(session, offerId, input) {
   return revision;
 }
 
-function listCustomerContextItems(query = {}) {
+function listCustomerContextItems(query = {}, options = {}) {
   const scope = normalizeCampaignScope(query, { requireStore: false, allowEmptyTenant: true });
   const itemType = cleanId(query.item_type || query.itemType);
   const contextCategory = cleanString(query.context_category || query.contextCategory);
+  const visibilityScope = cleanString(query.visibility_scope || query.visibilityScope);
+  const sourceOwner = cleanString(query.source_owner || query.sourceOwner);
   const status = cleanString(query.status || "active");
   const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
-  return db.prepare(`
+  if (status && !CUSTOMER_CONTEXT_RECORD_STATUS.has(status)) throw requestError("status is invalid", 400);
+  const items = db.prepare(`
     SELECT * FROM customer_context_items
     WHERE (? = '' OR tenant_id = ?)
       AND (? = '' OR store_id = ?)
       AND (? = '' OR screen_group_id = ?)
       AND (? = '' OR context_category = ?)
+      AND (? = '' OR visibility_scope = ?)
+      AND (? = '' OR source_owner = ?)
       AND (? = '' OR item_type = ?)
       AND (? = '' OR status = ?)
     ORDER BY tenant_id ASC, store_id ASC, screen_group_id ASC, context_category ASC, item_type ASC, item_key ASC
@@ -5571,10 +5781,13 @@ function listCustomerContextItems(query = {}) {
     scope.store_id, scope.store_id,
     scope.screen_group_id, scope.screen_group_id,
     contextCategory, contextCategory,
+    visibilityScope, visibilityScope,
+    sourceOwner, sourceOwner,
     itemType, itemType,
     status, status,
     limit
   ).map(publicCustomerContextItem);
+  return options.includeAssets === false ? items : attachContextSourceAssets(items);
 }
 
 function upsertCustomerContextItem(input, actor = {}) {
@@ -5583,12 +5796,16 @@ function upsertCustomerContextItem(input, actor = {}) {
   const itemKey = cleanId(input.item_key || input.itemKey || input.key);
   if (!itemType) throw requestError("item_type is required", 400);
   if (!itemKey) throw requestError("item_key is required", 400);
-  const classification = normalizeCustomerContextClassification(input, itemType);
+  const classification = normalizeCustomerContextClassification({
+    ...input,
+    item_type: itemType,
+    item_key: itemKey
+  });
   const value = normalizeStructuredJson(input.value_json ?? input.valueJson ?? input.value ?? {}, {});
   const valueJson = safeJsonStringify(value, 30000);
   const source = cleanString(input.source || "operator").slice(0, 80) || "operator";
   const status = cleanString(input.status || "active");
-  if (!["active", "archived"].includes(status)) throw requestError("status must be active or archived", 400);
+  if (!CUSTOMER_CONTEXT_RECORD_STATUS.has(status)) throw requestError("status must be active, archived, or deleted", 400);
   const now = nowIso();
   const contextItemId = cleanId(input.customer_context_item_id || input.customerContextItemId) ||
     nextEntityId("cci", `${scope.tenant_id}-${scope.store_id || "tenant"}-${itemType}-${itemKey}`);
@@ -5601,41 +5818,52 @@ function upsertCustomerContextItem(input, actor = {}) {
       AND item_key = ?
   `).get(scope.tenant_id, scope.store_id, scope.screen_group_id, itemType, itemKey);
 
-  db.prepare(`
-    INSERT INTO customer_context_items (
-      customer_context_item_id, tenant_id, store_id, screen_group_id,
-      context_category, visibility_scope, source_owner, source_type, confidence,
-      item_type, item_key, value_json, source, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(tenant_id, store_id, screen_group_id, item_type, item_key)
-    DO UPDATE SET
-      context_category = excluded.context_category,
-      visibility_scope = excluded.visibility_scope,
-      source_owner = excluded.source_owner,
-      source_type = excluded.source_type,
-      confidence = excluded.confidence,
-      value_json = excluded.value_json,
-      source = excluded.source,
-      status = excluded.status,
-      updated_at = excluded.updated_at
-  `).run(
-    existing?.customer_context_item_id || contextItemId,
-    scope.tenant_id,
-    scope.store_id,
-    scope.screen_group_id,
-    classification.context_category,
-    classification.visibility_scope,
-    classification.source_owner,
-    classification.source_type,
-    classification.confidence,
-    itemType,
-    itemKey,
-    valueJson,
-    source,
-    status,
-    now,
-    now
-  );
+  const storedContextItemId = existing?.customer_context_item_id || contextItemId;
+  let sourceAssetScopeSyncedCount = 0;
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO customer_context_items (
+        customer_context_item_id, tenant_id, store_id, screen_group_id,
+        context_category, visibility_scope, source_owner, source_type, confidence,
+        item_type, item_key, value_json, source, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(tenant_id, store_id, screen_group_id, item_type, item_key)
+      DO UPDATE SET
+        context_category = excluded.context_category,
+        visibility_scope = excluded.visibility_scope,
+        source_owner = excluded.source_owner,
+        source_type = excluded.source_type,
+        confidence = excluded.confidence,
+        value_json = excluded.value_json,
+        source = excluded.source,
+        status = excluded.status,
+        deleted_at = CASE WHEN excluded.status = 'deleted' THEN excluded.updated_at ELSE NULL END,
+        updated_at = excluded.updated_at
+    `).run(
+      storedContextItemId,
+      scope.tenant_id,
+      scope.store_id,
+      scope.screen_group_id,
+      classification.context_category,
+      classification.visibility_scope,
+      classification.source_owner,
+      classification.source_type,
+      classification.confidence,
+      itemType,
+      itemKey,
+      valueJson,
+      source,
+      status,
+      now,
+      now
+    );
+    sourceAssetScopeSyncedCount = syncCustomerContextSourceAssetScope(
+      storedContextItemId,
+      classification.source_owner,
+      classification.visibility_scope,
+      now
+    );
+  })();
   const item = db.prepare(`
     SELECT * FROM customer_context_items
     WHERE tenant_id = ?
@@ -5644,15 +5872,504 @@ function upsertCustomerContextItem(input, actor = {}) {
       AND item_type = ?
       AND item_key = ?
   `).get(scope.tenant_id, scope.store_id, scope.screen_group_id, itemType, itemKey);
-  recordAuditLog("admin", actor.actor_id || "admin", existing ? "customer_context_item.update" : "customer_context_item.create", "customer_context_item", item.customer_context_item_id, existing ? publicCustomerContextItem(existing) : null, publicCustomerContextItem(item), {
+  recordAuditLog(actor.actor_type || actor.actorType || "admin", actor.actor_id || actor.actorId || "admin", existing ? "customer_context_item.update" : "customer_context_item.create", "customer_context_item", item.customer_context_item_id, existing ? publicCustomerContextItem(existing) : null, publicCustomerContextItem(item), {
     tenant_id: scope.tenant_id,
     store_id: scope.store_id,
     screen_group_id: scope.screen_group_id,
     ...classification,
     item_type: itemType,
-    item_key: itemKey
+    item_key: itemKey,
+    source_asset_scope_synced_count: sourceAssetScopeSyncedCount
   }, now);
-  return publicCustomerContextItem(item);
+  return attachContextSourceAssets([publicCustomerContextItem(item)])[0];
+}
+
+function listCustomerVisibleContextItems(session, query = {}) {
+  const scope = normalizeCustomerContextScope(session, query, { requireScreenGroup: true });
+  return listCustomerContextItems({
+    tenant_id: session.tenant_id,
+    store_id: scope.store_id,
+    screen_group_id: scope.screen_group_id,
+    context_category: query.context_category || query.contextCategory || "",
+    item_type: query.item_type || query.itemType || "",
+    visibility_scope: "customer_visible",
+    status: query.status || "active",
+    limit: query.limit || 100
+  }).filter((item) => item.source_owner === "customer" || item.visibility_scope === "customer_visible");
+}
+
+function createCustomerOwnedContextItem(session, input = {}) {
+  const scope = normalizeCustomerContextScope(session, input, { requireScreenGroup: true });
+  const payload = customerWritableContextPayload(input, scope);
+  return upsertCustomerContextItem(payload, { actor_type: "customer", actor_id: session.customer_session_id });
+}
+
+function updateCustomerOwnedContextItem(session, contextItemId, input = {}) {
+  const existing = getCustomerOwnedContextItemForWrite(session, contextItemId);
+  return updateCustomerContextItem(existing.customer_context_item_id, customerWritableContextPayload({
+    ...existing,
+    ...input,
+    item_type: existing.item_type,
+    item_key: existing.item_key
+  }, existing), {
+    actorType: "customer",
+    actorId: session.customer_session_id
+  });
+}
+
+function softDeleteCustomerOwnedContextItem(session, contextItemId) {
+  const existing = getCustomerOwnedContextItemForWrite(session, contextItemId);
+  return softDeleteCustomerContextItem(existing.customer_context_item_id, {
+    actorType: "customer",
+    actorId: session.customer_session_id
+  });
+}
+
+function getCustomerOwnedContextItemForWrite(session, contextItemId) {
+  const item = getCustomerContextItem(contextItemId);
+  if (!item) throw requestError("Customer context item not found", 404);
+  assertCustomerContextItemScope(session, item);
+  if (item.visibility_scope !== "customer_visible" || item.source_owner !== "customer") {
+    throw requestError("Customer can only edit customer-owned visible context", 403);
+  }
+  if (item.status === "deleted") throw requestError("Customer context item is deleted", 409);
+  return item;
+}
+
+function customerWritableContextPayload(input, scope) {
+  const status = cleanString(input.status || "active");
+  const payload = {
+    ...input,
+    tenant_id: scope.tenant_id,
+    store_id: scope.store_id,
+    screen_group_id: scope.screen_group_id,
+    visibility_scope: "customer_visible",
+    source_owner: "customer",
+    source_type: cleanString(input.source_type || input.sourceType || "customer_input") === "asset_upload" ? "asset_upload" : "customer_input",
+    confidence: cleanString(input.confidence || "customer_confirmed") || "customer_confirmed",
+    source: "customer",
+    status
+  };
+  const normalized = assertContextContract(payload, { customerInput: true });
+  assertCustomerWritableContext(normalized);
+  return {
+    ...payload,
+    ...normalized
+  };
+}
+
+function updateCustomerContextItem(contextItemId, input = {}, actor = {}) {
+  const existing = getCustomerContextItem(contextItemId);
+  if (!existing) throw requestError("Customer context item not found", 404);
+  const classification = normalizeCustomerContextClassification({
+    context_category: input.context_category ?? input.contextCategory ?? existing.context_category,
+    visibility_scope: input.visibility_scope ?? input.visibilityScope ?? existing.visibility_scope,
+    source_owner: input.source_owner ?? input.sourceOwner ?? existing.source_owner,
+    source_type: input.source_type ?? input.sourceType ?? existing.source_type,
+    confidence: input.confidence ?? existing.confidence,
+    item_type: existing.item_type,
+    item_key: existing.item_key,
+    status: input.status ?? existing.status
+  });
+  const status = cleanString(input.status || existing.status || "active");
+  if (!CUSTOMER_CONTEXT_RECORD_STATUS.has(status)) throw requestError("status must be active, archived, or deleted", 400);
+  const value = normalizeStructuredJson(input.value_json ?? input.valueJson ?? input.value ?? existing.value ?? {}, {});
+  const now = nowIso();
+  let sourceAssetScopeSyncedCount = 0;
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE customer_context_items SET
+        context_category = ?,
+        visibility_scope = ?,
+        source_owner = ?,
+        source_type = ?,
+        confidence = ?,
+        value_json = ?,
+        source = ?,
+        status = ?,
+        deleted_at = CASE WHEN ? = 'deleted' THEN COALESCE(deleted_at, ?) ELSE NULL END,
+        updated_at = ?
+      WHERE customer_context_item_id = ?
+    `).run(
+      classification.context_category,
+      classification.visibility_scope,
+      classification.source_owner,
+      classification.source_type,
+      classification.confidence,
+      safeJsonStringify(value, 30000),
+      cleanString(input.source || existing.source || "operator").slice(0, 80) || "operator",
+      status,
+      status,
+      now,
+      now,
+      existing.customer_context_item_id
+    );
+    sourceAssetScopeSyncedCount = syncCustomerContextSourceAssetScope(
+      existing.customer_context_item_id,
+      classification.source_owner,
+      classification.visibility_scope,
+      now
+    );
+  })();
+  const updated = getCustomerContextItem(existing.customer_context_item_id);
+  recordAuditLog(actor.actorType || "admin", actor.actorId || "admin", "customer_context_item.update", "customer_context_item", existing.customer_context_item_id, existing, updated, {
+    tenant_id: updated.tenant_id,
+    store_id: updated.store_id,
+    screen_group_id: updated.screen_group_id,
+    status,
+    source_asset_scope_synced_count: sourceAssetScopeSyncedCount
+  }, now);
+  return attachContextSourceAssets([updated])[0];
+}
+
+function syncCustomerContextSourceAssetScope(contextItemId, sourceOwner, visibilityScope, now) {
+  const result = db.prepare(`
+    UPDATE customer_context_source_assets SET
+      source_owner = ?,
+      visibility_scope = ?,
+      updated_at = ?
+    WHERE customer_context_item_id = ?
+      AND status != 'deleted'
+      AND (source_owner != ? OR visibility_scope != ?)
+  `).run(
+    cleanString(sourceOwner),
+    cleanString(visibilityScope),
+    now,
+    cleanId(contextItemId),
+    cleanString(sourceOwner),
+    cleanString(visibilityScope)
+  );
+  return result.changes || 0;
+}
+
+function softDeleteCustomerContextItem(contextItemId, actor = {}) {
+  const existing = getCustomerContextItem(contextItemId);
+  if (!existing) throw requestError("Customer context item not found", 404);
+  const now = nowIso();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE customer_context_items SET
+        status = 'deleted',
+        deleted_at = COALESCE(deleted_at, ?),
+        updated_at = ?
+      WHERE customer_context_item_id = ?
+    `).run(now, now, existing.customer_context_item_id);
+    db.prepare(`
+      UPDATE customer_context_source_assets SET
+        status = 'deleted',
+        deleted_at = COALESCE(deleted_at, ?),
+        updated_at = ?
+      WHERE customer_context_item_id = ?
+        AND status != 'deleted'
+    `).run(now, now, existing.customer_context_item_id);
+  })();
+  const updated = getCustomerContextItem(existing.customer_context_item_id);
+  recordAuditLog(actor.actorType || "admin", actor.actorId || "admin", "customer_context_item.delete", "customer_context_item", existing.customer_context_item_id, existing, updated, {
+    tenant_id: updated.tenant_id,
+    store_id: updated.store_id,
+    screen_group_id: updated.screen_group_id,
+    soft_delete: true
+  }, now);
+  return attachContextSourceAssets([updated], { assetStatus: "" })[0];
+}
+
+function normalizeCustomerContextScope(session, input = {}, options = {}) {
+  const screenGroupId = cleanId(input.screen_group_id || input.screenGroupId);
+  if (!screenGroupId && options.requireScreenGroup) throw requestError("screen_group_id is required", 400);
+  const suppliedStoreId = cleanId(input.store_id || input.storeId);
+  let storeId = defaultCustomerStoreId(session, suppliedStoreId);
+  if (screenGroupId) {
+    const screenGroup = db.prepare("SELECT tenant_id, store_id FROM screen_groups WHERE screen_group_id = ?").get(screenGroupId);
+    if (!screenGroup) throw requestError("Screen group not found", 404);
+    if (cleanId(screenGroup.tenant_id) !== session.tenant_id) throw requestError("Screen group is outside tenant scope", 403);
+    storeId = defaultCustomerStoreId(session, suppliedStoreId || screenGroup.store_id);
+    if (cleanId(screenGroup.store_id) !== storeId) throw requestError("Screen group is outside store scope", 403);
+    assertScreenGroupScope(session.tenant_id, storeId, screenGroupId);
+  }
+  return {
+    tenant_id: session.tenant_id,
+    store_id: storeId,
+    screen_group_id: screenGroupId
+  };
+}
+
+function assertCustomerContextItemScope(session, item) {
+  if (item.tenant_id !== session.tenant_id) throw requestError("Customer context item is outside tenant scope", 403);
+  assertCustomerStoreScope(session, item.store_id);
+  if (item.screen_group_id) assertScreenGroupScope(session.tenant_id, item.store_id, item.screen_group_id);
+}
+
+function getCustomerContextItem(contextItemId) {
+  const row = db.prepare("SELECT * FROM customer_context_items WHERE customer_context_item_id = ?").get(cleanId(contextItemId));
+  return row ? publicCustomerContextItem(row) : null;
+}
+
+function attachContextSourceAssets(items, options = {}) {
+  if (!items.length) return items;
+  const assetsByItem = listCustomerContextSourceAssetsForItems(
+    items.map((item) => item.customer_context_item_id),
+    { status: options.assetStatus ?? "active" }
+  );
+  return items.map((item) => ({
+    ...item,
+    source_assets: (assetsByItem.get(item.customer_context_item_id) || [])
+      .filter((asset) => sourceAssetMatchesContextItemScope(item, asset))
+  }));
+}
+
+function sourceAssetMatchesContextItemScope(item, asset) {
+  if (!item || !asset) return false;
+  return cleanId(asset.customer_context_item_id || asset.context_item_id) === cleanId(item.customer_context_item_id) &&
+    cleanId(asset.tenant_id) === cleanId(item.tenant_id) &&
+    cleanId(asset.store_id) === cleanId(item.store_id) &&
+    cleanId(asset.screen_group_id) === cleanId(item.screen_group_id) &&
+    cleanString(asset.source_owner) === cleanString(item.source_owner) &&
+    cleanString(asset.visibility_scope) === cleanString(item.visibility_scope);
+}
+
+function listCustomerContextSourceAssetsForItems(contextItemIds, options = {}) {
+  const ids = [...new Set((contextItemIds || []).map(cleanId).filter(Boolean))];
+  const result = new Map(ids.map((id) => [id, []]));
+  if (ids.length === 0) return result;
+  const placeholders = ids.map(() => "?").join(", ");
+  const status = cleanString(options.status ?? "active");
+  const rows = db.prepare(`
+    SELECT * FROM customer_context_source_assets
+    WHERE customer_context_item_id IN (${placeholders})
+      AND (? = '' OR status = ?)
+    ORDER BY created_at DESC, id DESC
+  `).all(...ids, status, status);
+  for (const row of rows) {
+    const asset = publicCustomerContextSourceAsset(row, options);
+    if (!result.has(asset.customer_context_item_id)) result.set(asset.customer_context_item_id, []);
+    result.get(asset.customer_context_item_id).push(asset);
+  }
+  return result;
+}
+
+function createCustomerContextSourceAsset(contextItemId, file, body = {}, actor = {}) {
+  if (!file) throw requestError("source file is required", 400);
+  const item = getCustomerContextItem(contextItemId);
+  if (!item) throw requestError("Customer context item not found", 404);
+  if (item.status === "deleted") throw requestError("Customer context item is deleted", 409);
+  assertNoAutomaticExternalAi(body);
+  const contract = assertContextSourceAssetContract({
+    ...body,
+    context_item_id: item.customer_context_item_id,
+    tenant_id: item.tenant_id,
+    store_id: item.store_id,
+    screen_group_id: item.screen_group_id,
+    source_owner: item.source_owner,
+    visibility_scope: item.visibility_scope,
+    filename: file.originalname || file.filename,
+    mime_type: file.mimetype,
+    size_bytes: file.size,
+    extraction_status: cleanString(body.extraction_status || body.extractionStatus || "manual_no_ai") || "manual_no_ai"
+  });
+  if (contract.visibility_scope !== item.visibility_scope || contract.source_owner !== item.source_owner) {
+    throw requestError("source asset scope must match context item", 400);
+  }
+  if (!CUSTOMER_CONTEXT_DOCUMENT_PROCESSING_STATUS.has(contract.extraction_status)) throw requestError("extraction_status is invalid", 400);
+  if (contract.extraction_status !== "manual_no_ai") {
+    throw requestError("automatic document processing is out of scope for this endpoint", 400);
+  }
+  const costOwner = cleanString(body.cost_owner || body.costOwner || "manual_no_ai") || "manual_no_ai";
+  if (!CUSTOMER_CONTEXT_COST_OWNERS.has(costOwner)) throw requestError("cost_owner is invalid", 400);
+  const bytes = fs.readFileSync(file.path);
+  validateCustomerContextSourceHeader(contract.extension, bytes);
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  const now = nowIso();
+  const assetId = cleanId(body.customer_context_source_asset_id || body.customerContextSourceAssetId) ||
+    nextEntityId("ccsa", `${item.store_id}-${item.item_type}-${item.item_key}`);
+  if (db.prepare("SELECT customer_context_source_asset_id FROM customer_context_source_assets WHERE customer_context_source_asset_id = ?").get(assetId)) {
+    throw requestError("Customer context source asset already exists", 409);
+  }
+  const filename = `${assetId}${contract.extension}`;
+  const storagePath = normalizedCustomerContextSourcePath(path.join(CUSTOMER_CONTEXT_SOURCE_DIR, filename));
+  if (fs.existsSync(storagePath)) throw requestError("Customer context source file already exists", 409);
+  fs.renameSync(file.path, storagePath);
+  try {
+    fs.chmodSync(storagePath, 0o600);
+    db.prepare(`
+      INSERT INTO customer_context_source_assets (
+        customer_context_source_asset_id, customer_context_item_id, tenant_id, store_id, screen_group_id,
+        source_owner, visibility_scope, original_name, filename, extension, mime_type,
+        size_bytes, sha256, storage_path, usage_notes, extraction_status, external_ai_used,
+        cost_owner, status, created_by_actor_type, created_by_actor_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'active', ?, ?, ?, ?)
+    `).run(
+      assetId,
+      item.customer_context_item_id,
+      item.tenant_id,
+      item.store_id,
+      item.screen_group_id,
+      contract.source_owner,
+      contract.visibility_scope,
+      cleanString(file.originalname).slice(0, 240) || filename,
+      filename,
+      contract.extension,
+      contract.mime_type,
+      contract.size_bytes,
+      sha256,
+      storagePath,
+      contract.usage_notes,
+      contract.extraction_status,
+      costOwner,
+      cleanString(actor.actorType || "admin"),
+      cleanString(actor.actorId || "admin").slice(0, 160),
+      now,
+      now
+    );
+  } catch (error) {
+    fs.rmSync(storagePath, { force: true });
+    throw error;
+  }
+  const asset = getCustomerContextSourceAsset(assetId);
+  recordAuditLog(actor.actorType || "admin", actor.actorId || "admin", "customer_context_source_asset.create", "customer_context_source_asset", assetId, null, asset, {
+    tenant_id: item.tenant_id,
+    store_id: item.store_id,
+    screen_group_id: item.screen_group_id,
+    customer_context_item_id: item.customer_context_item_id,
+    no_external_ai: true
+  }, now);
+  return asset;
+}
+
+function softDeleteCustomerOwnedContextSourceAsset(session, sourceAssetId) {
+  const asset = getCustomerContextSourceAsset(sourceAssetId);
+  if (!asset) throw requestError("Customer context source asset not found", 404);
+  const item = getCustomerOwnedContextItemForWrite(session, asset.customer_context_item_id);
+  if (asset.visibility_scope !== "customer_visible" || asset.source_owner !== "customer") {
+    throw requestError("Customer can only delete customer-owned visible source assets", 403);
+  }
+  assertCustomerContextItemScope(session, item);
+  return softDeleteCustomerContextSourceAsset(asset.customer_context_source_asset_id, {
+    actorType: "customer",
+    actorId: session.customer_session_id
+  });
+}
+
+function softDeleteCustomerContextSourceAsset(sourceAssetId, actor = {}) {
+  const existing = getCustomerContextSourceAsset(sourceAssetId);
+  if (!existing) throw requestError("Customer context source asset not found", 404);
+  const now = nowIso();
+  db.prepare(`
+    UPDATE customer_context_source_assets SET
+      status = 'deleted',
+      deleted_at = COALESCE(deleted_at, ?),
+      updated_at = ?
+    WHERE customer_context_source_asset_id = ?
+  `).run(now, now, existing.customer_context_source_asset_id);
+  const updated = getCustomerContextSourceAsset(existing.customer_context_source_asset_id, { includeDeleted: true });
+  recordAuditLog(actor.actorType || "admin", actor.actorId || "admin", "customer_context_source_asset.delete", "customer_context_source_asset", existing.customer_context_source_asset_id, existing, updated, {
+    tenant_id: updated.tenant_id,
+    store_id: updated.store_id,
+    screen_group_id: updated.screen_group_id,
+    customer_context_item_id: updated.customer_context_item_id,
+    soft_delete: true
+  }, now);
+  return updated;
+}
+
+function getCustomerContextSourceAsset(sourceAssetId, options = {}) {
+  const row = db.prepare(`
+    SELECT * FROM customer_context_source_assets
+    WHERE customer_context_source_asset_id = ?
+      AND (? = 1 OR status != 'deleted')
+  `).get(cleanId(sourceAssetId), options.includeDeleted ? 1 : 0);
+  return row ? publicCustomerContextSourceAsset(row, options) : null;
+}
+
+function sendCustomerContextSourceAsset(req, res, sourceAssetId, options = {}) {
+  const row = db.prepare("SELECT * FROM customer_context_source_assets WHERE customer_context_source_asset_id = ?").get(cleanId(sourceAssetId));
+  if (!row || cleanString(row.status) !== "active") throw requestError("Customer context source asset not found", 404);
+  const asset = publicCustomerContextSourceAsset(row, { includeStoragePath: true });
+  if (options.actorType === "customer") {
+    const item = getCustomerContextItem(asset.customer_context_item_id);
+    if (!item || item.status !== "active") throw requestError("Customer context item is not active", 404);
+    if (!sourceAssetMatchesContextItemScope(item, asset)) throw requestError("Customer context source asset scope does not match context item", 403);
+    if (item.visibility_scope !== "customer_visible" || asset.visibility_scope !== "customer_visible") {
+      throw requestError("Customer context source asset is not visible", 403);
+    }
+    assertCustomerContextItemScope(options.session, item);
+  }
+  res.setHeader("Content-Type", asset.mime_type);
+  res.setHeader("Content-Length", String(asset.size_bytes));
+  res.setHeader("Content-Disposition", `inline; filename="${asset.original_name.replace(/"/g, "")}"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.sendFile(asset.storage_path);
+}
+
+function publicCustomerContextSourceAsset(row, options = {}) {
+  const asset = {
+    customer_context_source_asset_id: cleanId(row.customer_context_source_asset_id),
+    asset_id: cleanId(row.customer_context_source_asset_id),
+    customer_context_item_id: cleanId(row.customer_context_item_id),
+    context_item_id: cleanId(row.customer_context_item_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    source_owner: cleanString(row.source_owner),
+    visibility_scope: cleanString(row.visibility_scope),
+    original_name: cleanString(row.original_name),
+    filename: cleanString(row.filename),
+    extension: cleanString(row.extension),
+    mime_type: cleanString(row.mime_type),
+    size_bytes: asInteger(row.size_bytes) || 0,
+    sha256: cleanString(row.sha256),
+    usage_notes: cleanString(row.usage_notes),
+    extraction_status: cleanString(row.extraction_status),
+    external_ai_used: row.external_ai_used === 1,
+    cost_owner: cleanString(row.cost_owner),
+    status: cleanString(row.status),
+    view_path: `/api/customer/context-source-assets/${encodeURIComponent(cleanId(row.customer_context_source_asset_id))}/view`,
+    admin_view_path: `/api/admin/customer-context-source-assets/${encodeURIComponent(cleanId(row.customer_context_source_asset_id))}/view`,
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    deleted_at: cleanString(row.deleted_at)
+  };
+  if (options.includeStoragePath) {
+    asset.storage_path = normalizedCustomerContextSourcePath(row.storage_path);
+  }
+  return asset;
+}
+
+function validateCustomerContextSourceHeader(extension, bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 4) throw requestError("source file is empty or invalid", 400);
+  if (extension === ".pdf") {
+    if (bytes.length < 5 || bytes.toString("ascii", 0, 5) !== "%PDF-") throw requestError("pdf source file has an invalid file signature", 400);
+    return;
+  }
+  if (extension === ".png") {
+    const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (bytes.length < pngSignature.length || !bytes.subarray(0, pngSignature.length).equals(pngSignature)) throw requestError("png source file has an invalid file signature", 400);
+    return;
+  }
+  if (extension === ".jpg" || extension === ".jpeg") {
+    if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) throw requestError("jpeg source file has an invalid file signature", 400);
+    return;
+  }
+  if (extension === ".webp") {
+    if (bytes.length < 12 || bytes.toString("ascii", 0, 4) !== "RIFF" || bytes.toString("ascii", 8, 12) !== "WEBP") {
+      throw requestError("webp source file has an invalid file signature", 400);
+    }
+  }
+}
+
+function normalizedCustomerContextSourcePath(value) {
+  const resolved = path.resolve(value);
+  const root = path.resolve(CUSTOMER_CONTEXT_SOURCE_DIR);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw requestError("customer context source storage path is invalid", 400);
+  }
+  return resolved;
+}
+
+function normalizeCustomerContextSourceUploadError(error) {
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    return requestError("source file exceeds the maximum upload size", 413);
+  }
+  return requestError(error.message || "source file upload failed", error.status || 400);
 }
 
 function createProposalGenerationRun(input, actor = {}) {
@@ -5950,31 +6667,16 @@ function assertCustomerProposalScope(session, proposal) {
 }
 
 function normalizeCustomerContextClassification(input = {}) {
-  const contextCategory = cleanString(input.context_category || input.contextCategory);
-  if (!contextCategory) throw requestError("context_category is required", 400);
-  if (!CUSTOMER_CONTEXT_CATEGORIES.has(contextCategory)) {
-    throw requestError(`context_category must be one of: ${Array.from(CUSTOMER_CONTEXT_CATEGORIES).join(", ")}`, 400);
+  for (const field of ["context_category", "visibility_scope", "source_owner", "source_type", "confidence"]) {
+    const camel = field.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
+    if (!cleanString(input[field] ?? input[camel])) throw requestError(`${field} is required`, 400);
   }
-  const visibilityScope = cleanString(input.visibility_scope || input.visibilityScope);
-  if (!visibilityScope) throw requestError("visibility_scope is required", 400);
-  if (!CUSTOMER_CONTEXT_VISIBILITY_SCOPES.has(visibilityScope)) {
-    throw requestError(`visibility_scope must be one of: ${Array.from(CUSTOMER_CONTEXT_VISIBILITY_SCOPES).join(", ")}`, 400);
-  }
-  const sourceOwner = cleanString(input.source_owner || input.sourceOwner);
-  if (!sourceOwner) throw requestError("source_owner is required", 400);
-  if (!CUSTOMER_CONTEXT_SOURCE_OWNERS.has(sourceOwner)) {
-    throw requestError(`source_owner must be one of: ${Array.from(CUSTOMER_CONTEXT_SOURCE_OWNERS).join(", ")}`, 400);
-  }
-  const sourceType = cleanString(input.source_type || input.sourceType);
-  if (!sourceType) throw requestError("source_type is required", 400);
-  if (!CUSTOMER_CONTEXT_SOURCE_TYPES.has(sourceType)) {
-    throw requestError(`source_type must be one of: ${Array.from(CUSTOMER_CONTEXT_SOURCE_TYPES).join(", ")}`, 400);
-  }
-  const confidence = cleanString(input.confidence);
-  if (!confidence) throw requestError("confidence is required", 400);
-  if (!CUSTOMER_CONTEXT_CONFIDENCE.has(confidence)) {
-    throw requestError(`confidence must be one of: ${Array.from(CUSTOMER_CONTEXT_CONFIDENCE).join(", ")}`, 400);
-  }
+  const normalized = assertContextContract(input);
+  const contextCategory = normalized.context_category;
+  const visibilityScope = normalized.visibility_scope;
+  const sourceOwner = normalized.source_owner;
+  const sourceType = normalized.source_type;
+  const confidence = normalized.confidence;
   return {
     context_category: contextCategory,
     visibility_scope: visibilityScope,
@@ -5985,14 +6687,19 @@ function normalizeCustomerContextClassification(input = {}) {
 }
 
 function createCustomerContextSnapshotRecord(scope, proposalMonth, source = "operator_seed") {
-  const items = contextItemsForSnapshot(scope).map(publicCustomerContextItem);
+  const itemRows = contextItemsForSnapshot(scope);
+  const items = itemRows.map(publicCustomerContextItem);
+  const itemsById = new Map(items.map((item) => [item.customer_context_item_id, item]));
+  const sourceAssets = Array.from(
+    listCustomerContextSourceAssetsForItems(items.map((item) => item.customer_context_item_id), { status: "active" }).values()
+  ).flat().filter((asset) => sourceAssetMatchesContextItemScope(itemsById.get(asset.customer_context_item_id), asset));
   const snapshotPayload = {
     schema_version: 1,
     tenant_id: scope.tenant_id,
     store_id: scope.store_id,
     screen_group_id: scope.screen_group_id,
     proposal_month: proposalMonth,
-    items
+    items: buildContextSnapshotSourceSummary(items, sourceAssets)
   };
   const snapshotJson = safeJsonStringify(stableReportPayloadForHash(snapshotPayload), 50000);
   const snapshotSha256 = crypto.createHash("sha256").update(snapshotJson).digest("hex");
@@ -6213,7 +6920,8 @@ function publicCustomerContextItem(row) {
     source: cleanString(row.source),
     status: cleanString(row.status),
     created_at: cleanString(row.created_at),
-    updated_at: cleanString(row.updated_at)
+    updated_at: cleanString(row.updated_at),
+    deleted_at: cleanString(row.deleted_at)
   };
 }
 
@@ -10216,6 +10924,10 @@ function renderCustomerAdminPage(customerAccess, req) {
             <div id="customer-campaign-proposals"></div>
           </section>
           <section class="section">
+            <h2>店舗文脈</h2>
+            <div id="customer-context-items"></div>
+          </section>
+          <section class="section">
             <h2>受付状況</h2>
             <div id="customer-orders"></div>
           </section>
@@ -10240,6 +10952,7 @@ function renderCustomerAdminPage(customerAccess, req) {
         store_ids: customerAccess.store_ids || []
       })};
     </script>
+    <script src="/context-ui.js"></script>
     <script src="/customer-admin.js"></script>
   </body>
 </html>`;
