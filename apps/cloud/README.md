@@ -128,6 +128,7 @@ sed -n 's/^ADMIN_PASSWORD=//p' ~/.config/misell-cloud/env
 ```bash
 npm run check
 npm run smoke:counter-order-ux
+npm run smoke:customer-reporting-access
 npm audit --audit-level=moderate
 ```
 
@@ -378,6 +379,24 @@ Offers use immutable revisions. `offers.current_offer_revision_id` points at the
 
 QR links can resolve to public QR pages or issue counter orders. Counter-order QR links track `offers.current_offer_revision_id` by default, so publishing a new active revision keeps existing displayed QR codes usable. Supplying `offer_revision_id` or `pin_offer_revision` creates an explicitly pinned QR link. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
 
+Public QR and order routes are unauthenticated by design, but bounded by hash-only rate-limit evidence:
+
+- `GET /q/:qr_token`
+- `POST /q/:qr_token/orders`
+- `GET /order/:order_token`
+- `GET /api/public/orders/:order_token`
+
+Configuration:
+
+```bash
+MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE=120
+MISELL_PUBLIC_ORDER_CREATE_LIMIT_PER_MINUTE=8
+MISELL_PUBLIC_ORDER_VIEW_LIMIT_PER_MINUTE=120
+MISELL_PUBLIC_RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+Rejected bursts return HTTP 429 and write `public_rate_limit_events` plus an audit event. The table stores route type, hashed scope, hashed IP, hashed user agent, and window evidence only; raw IP addresses and public tokens are not persisted.
+
 Opening `/order/:order_token` in a browser renders a reusable reception-number card with item name, unit price, quantity, subtotal, total, tax/currency, pickup location/window, and expiry snapshots. The page includes image save/share/copy controls, local previous-order recall, and an iPhone Safari image-preview fallback with long-press save guidance. API clients that do not request `text/html` keep the existing JSON response, and `/api/public/orders/:order_token` returns the same order payload with store profile and resolved receipt snapshot data. Public page actions are recorded in `order_page_events` with a hashed IP and bounded event names.
 
 Store staff redemption uses a separate store-scoped URL and PIN, not the Cloud admin login. Operators create or rotate a store access URL from the Admin UI or:
@@ -391,6 +410,18 @@ curl -u admin:change-me \
 ```
 
 Staff open `/store/orders/:store_token`, enter the PIN, and can list only that store's orders. Marking an order `redeemed` requires the customer's `verify_code`; `issued` and `cancelled` updates remain store-scoped and audited. Store access tokens and staff sessions are hash-only in the DB. PIN failures lock temporarily using `MISELL_STORE_STAFF_PIN_MAX_ATTEMPTS` and `MISELL_STORE_STAFF_PIN_LOCK_SECONDS`; sessions expire with `MISELL_STORE_STAFF_SESSION_TTL_SECONDS`.
+
+Customer management access is separate from staff access. Operators can issue a tenant-scoped customer URL from the Admin UI or API:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"role":"customer_viewer","store_ids":["STO-LOCAL"],"pin":"2468"}' \
+  http://localhost:3200/api/admin/tenants/TEN-LOCAL/customer-access-token
+```
+
+Customers open `/customer/admin/:customer_access_token_id`, enter the PIN, and can only read data inside the server-side tenant/store scope. The URL identifier is not a raw secret; the PIN and session token remain hash-only server-side and are not returned in JSON or HTML bootstrap responses. `customer_viewer` can view KPI reports, counter-order status, store settings, and offers. `customer_editor` / `customer_admin` can create a new `offer_revision` for allowed offers; published order snapshots remain immutable.
 
 Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
 
@@ -408,7 +439,14 @@ Report periods are local business days. Bucketing uses each store's `timezone` a
 
 `metrics_sha256` is calculated from a stable normalized report payload with generation timestamps removed. Replacing a monthly snapshot with the same underlying data keeps the same metrics hash while still updating `generated_at` in the saved payload.
 
-These endpoints are currently operator-admin APIs behind the existing Cloud admin auth. Customer/advertiser-scoped report access is intentionally out of scope for this PR and should be added with the RBAC/self-service work before exposing reports outside operators.
+Customer scoped conversion reporting is exposed through:
+
+- `GET /api/customer/reports/conversion`
+- `GET /api/customer/counter-orders`
+- `GET /api/customer/store-settings`
+- `GET /api/customer/offers`
+
+The customer conversion report includes QR scans, issued orders, redeemed orders, `scan_to_order_rate`, `order_to_redeem_rate`, issued amount, and redeemed amount. Amount labels are intentionally `potential_sales_amount` and `estimated_redeemed_amount`; they are not POS-settled sales.
 
 ## API
 

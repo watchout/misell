@@ -172,6 +172,7 @@ npm audit --audit-level=moderate
 - docs/82_MISELL_STUDIO_PHASE1_PR1_IMPLEMENTATION_HANDOFF.md
 - docs/83_CLOUD_LOCAL_BACKUP_AND_ROLLBACK_SPEC.md
 - docs/84_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md
+- docs/85_MVP_CANONICAL_ARCHITECTURE_DECISIONS.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 

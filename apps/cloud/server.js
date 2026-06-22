@@ -113,6 +113,51 @@ const STORE_STAFF_PIN_LOCK_SECONDS = normalizedLimit(
   60,
   24 * 60 * 60
 );
+const CUSTOMER_ACCESS_TOKEN_PEPPER = process.env.MISELL_CUSTOMER_ACCESS_TOKEN_PEPPER || process.env.CUSTOMER_ACCESS_TOKEN_PEPPER || DEVICE_TOKEN_PEPPER;
+const CUSTOMER_SESSION_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_CUSTOMER_SESSION_TTL_SECONDS,
+  12 * 60 * 60,
+  60,
+  7 * 24 * 60 * 60
+);
+const CUSTOMER_PIN_MAX_ATTEMPTS = normalizedLimit(
+  process.env.MISELL_CUSTOMER_PIN_MAX_ATTEMPTS,
+  5,
+  1,
+  20
+);
+const CUSTOMER_PIN_LOCK_SECONDS = normalizedLimit(
+  process.env.MISELL_CUSTOMER_PIN_LOCK_SECONDS,
+  10 * 60,
+  60,
+  24 * 60 * 60
+);
+const CUSTOMER_ROLES = new Set(["customer_admin", "customer_editor", "customer_viewer"]);
+const CUSTOMER_EDIT_ROLES = new Set(["customer_admin", "customer_editor"]);
+const PUBLIC_QR_VIEW_LIMIT = normalizedLimit(
+  process.env.MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE,
+  120,
+  1,
+  10000
+);
+const PUBLIC_ORDER_CREATE_LIMIT = normalizedLimit(
+  process.env.MISELL_PUBLIC_ORDER_CREATE_LIMIT_PER_MINUTE,
+  8,
+  1,
+  10000
+);
+const PUBLIC_ORDER_VIEW_LIMIT = normalizedLimit(
+  process.env.MISELL_PUBLIC_ORDER_VIEW_LIMIT_PER_MINUTE,
+  120,
+  1,
+  10000
+);
+const PUBLIC_RATE_LIMIT_WINDOW_SECONDS = normalizedLimit(
+  process.env.MISELL_PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
+  60,
+  10,
+  3600
+);
 const QR_DESTINATION_TYPES = new Set([
   "external_url",
   "coupon",
@@ -416,6 +461,10 @@ app.get("/api/admin/store-access-tokens", requireAdminAuth, (req, res) => {
   res.json({ ok: true, store_access_tokens: listStoreAccessTokens(req.query || {}) });
 });
 
+app.get("/api/admin/customer-access-tokens", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, customer_access_tokens: listCustomerAccessTokens(req.query || {}) });
+});
+
 app.get("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res) => {
   const settings = getStoreSettings(cleanId(req.params.store_id), { withDefaults: true });
   if (!settings) {
@@ -437,6 +486,15 @@ app.put("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res, nex
 app.post("/api/admin/stores/:store_id/access-token", requireAdminAuth, (req, res, next) => {
   try {
     const result = createStoreAccessToken(cleanId(req.params.store_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/tenants/:tenant_id/customer-access-token", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createCustomerAccessToken(cleanId(req.params.tenant_id), req.body || {}, req.adminActor);
     res.status(201).json({ ok: true, ...result });
   } catch (error) {
     next(error);
@@ -548,6 +606,10 @@ app.get("/q/:qr_token", (req, res, next) => {
       return;
     }
     assertQrLinkUsable(qrLink);
+    enforcePublicRateLimit(req, "qr_view", qrLink.qr_token || req.params.qr_token, {
+      limit: PUBLIC_QR_VIEW_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
     const offerRevision = resolveQrLinkOfferRevision(qrLink);
     if (qrLink.destination_type === "counter_order_offer" && !offerRevision) {
       throw requestError("QR link has no active offer revision", 409);
@@ -579,6 +641,10 @@ app.post("/q/:qr_token/orders", (req, res, next) => {
     if (qrLink.destination_type !== "counter_order_offer") {
       throw requestError("QR link does not issue counter orders", 400);
     }
+    enforcePublicRateLimit(req, "counter_order_create", qrLink.qr_token || req.params.qr_token, {
+      limit: PUBLIC_ORDER_CREATE_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
     const qrScan = resolveQrScanForOrder(qrLink, req);
     const offerRevision = resolveQrLinkOfferRevision(qrLink);
     if (!offerRevision) {
@@ -603,30 +669,46 @@ app.post("/q/:qr_token/orders", (req, res, next) => {
   }
 });
 
-app.get("/order/:order_token", (req, res) => {
-  const order = getCounterOrderByToken(cleanString(req.params.order_token));
-  if (!order) {
-    if (requestAcceptsHtml(req)) {
-      res.status(404).type("html").send(renderOrderNotFoundPage());
+app.get("/order/:order_token", (req, res, next) => {
+  try {
+    enforcePublicRateLimit(req, "order_view", cleanString(req.params.order_token), {
+      limit: PUBLIC_ORDER_VIEW_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
+    const order = getCounterOrderByToken(cleanString(req.params.order_token));
+    if (!order) {
+      if (requestAcceptsHtml(req)) {
+        res.status(404).type("html").send(renderOrderNotFoundPage());
+        return;
+      }
+      res.status(404).json({ error: "Order not found" });
       return;
     }
-    res.status(404).json({ error: "Order not found" });
-    return;
+    if (requestAcceptsHtml(req)) {
+      res.type("html").send(renderCounterOrderPage(order, cleanString(req.params.order_token), req));
+      return;
+    }
+    res.json({ ok: true, counter_order: order });
+  } catch (error) {
+    next(error);
   }
-  if (requestAcceptsHtml(req)) {
-    res.type("html").send(renderCounterOrderPage(order, cleanString(req.params.order_token), req));
-    return;
-  }
-  res.json({ ok: true, counter_order: order });
 });
 
-app.get("/api/public/orders/:order_token", (req, res) => {
-  const order = getCounterOrderByToken(cleanString(req.params.order_token));
-  if (!order) {
-    res.status(404).json({ error: "Order not found" });
-    return;
+app.get("/api/public/orders/:order_token", (req, res, next) => {
+  try {
+    enforcePublicRateLimit(req, "order_view", cleanString(req.params.order_token), {
+      limit: PUBLIC_ORDER_VIEW_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
+    const order = getCounterOrderByToken(cleanString(req.params.order_token));
+    if (!order) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    res.json({ ok: true, counter_order: withCounterOrderStoreProfile(order) });
+  } catch (error) {
+    next(error);
   }
-  res.json({ ok: true, counter_order: withCounterOrderStoreProfile(order) });
 });
 
 app.post("/api/public/orders/:order_token/events", (req, res, next) => {
@@ -681,6 +763,74 @@ app.patch("/api/store/orders/:counter_order_id/status", requireStoreStaffSession
   try {
     const order = updateStoreCounterOrderStatus(req.storeStaffSession, cleanId(req.params.counter_order_id), req.body || {});
     res.json({ ok: true, counter_order: order });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/customer/admin", (req, res) => {
+  res.type("html").send(renderCustomerAdminNotFoundPage());
+});
+
+app.get("/customer/admin/:customer_access_token_id", (req, res) => {
+  const customerAccess = getCustomerAccessToken(cleanId(req.params.customer_access_token_id));
+  if (!customerAccess || customerAccess.status !== "active") {
+    res.status(404).type("html").send(renderCustomerAdminNotFoundPage());
+    return;
+  }
+  res.type("html").send(renderCustomerAdminPage(customerAccess, req));
+});
+
+app.post("/customer/admin/:customer_access_token_id/session", (req, res, next) => {
+  try {
+    const session = createCustomerSession(cleanId(req.params.customer_access_token_id), req.body || {}, req);
+    setCustomerSessionCookie(req, res, session.session_token, session.expires_at);
+    res.status(201).json({ ok: true, session: publicCustomerSession(session) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/customer/session", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, session: publicCustomerSession(req.customerSession) });
+});
+
+app.post("/api/customer/logout", requireCustomerSession, (req, res) => {
+  revokeCustomerSession(req.customerSession);
+  clearCustomerSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/customer/reports/conversion", requireCustomerSession, (req, res, next) => {
+  try {
+    const criteria = normalizeCustomerReportCriteria(req.query || {}, req.customerSession);
+    res.json({ ok: true, report: buildCustomerConversionReport(criteria, req.customerSession) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/customer/counter-orders", requireCustomerSession, (req, res, next) => {
+  try {
+    const query = normalizeCustomerCounterOrderQuery(req.query || {}, req.customerSession);
+    res.json({ ok: true, counter_orders: listCounterOrders(query) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/customer/store-settings", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, store_settings: listCustomerStoreSettings(req.customerSession) });
+});
+
+app.get("/api/customer/offers", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, offers: listCustomerOffers(req.customerSession) });
+});
+
+app.post("/api/customer/offers/:offer_id/revisions", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  try {
+    const revision = createCustomerOfferRevision(req.customerSession, cleanId(req.params.offer_id), req.body || {});
+    res.status(201).json({ ok: true, offer_revision: revision, offer: getOffer(cleanId(req.params.offer_id), { includeRevisions: true }) });
   } catch (error) {
     next(error);
   }
@@ -2918,6 +3068,77 @@ function schemaMigrations() {
             ON order_page_events(store_id, event_name, occurred_at DESC);
         `);
       }
+    },
+    {
+      version: 8,
+      name: "public_abuse_guard_customer_reporting_access",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS public_rate_limit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            public_rate_limit_event_id TEXT NOT NULL UNIQUE,
+            route_type TEXT NOT NULL,
+            scope_hash TEXT NOT NULL,
+            window_started_at TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            limit_count INTEGER NOT NULL,
+            window_seconds INTEGER NOT NULL,
+            reason TEXT,
+            ip_hash TEXT,
+            user_agent_hash TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+          );
+
+          CREATE TABLE IF NOT EXISTS customer_access_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_access_token_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            pin_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'customer_viewer',
+            store_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            failed_attempts INTEGER NOT NULL DEFAULT 0,
+            locked_until TEXT,
+            rotated_at TEXT,
+            pin_rotated_at TEXT,
+            last_used_at TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS customer_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_session_id TEXT NOT NULL UNIQUE,
+            customer_access_token_id TEXT NOT NULL,
+            session_token_hash TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            store_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT,
+            FOREIGN KEY(customer_access_token_id) REFERENCES customer_access_tokens(customer_access_token_id) ON DELETE CASCADE,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_public_rate_limit_scope
+            ON public_rate_limit_events(route_type, scope_hash, window_started_at, decision);
+          CREATE INDEX IF NOT EXISTS idx_public_rate_limit_time
+            ON public_rate_limit_events(occurred_at DESC, decision, route_type);
+          CREATE INDEX IF NOT EXISTS idx_customer_access_tokens_tenant
+            ON customer_access_tokens(tenant_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_customer_sessions_token
+            ON customer_sessions(session_token_hash, status, expires_at);
+          CREATE INDEX IF NOT EXISTS idx_customer_sessions_tenant
+            ON customer_sessions(tenant_id, status, expires_at);
+        `);
+      }
     }
   ];
 }
@@ -3868,6 +4089,7 @@ function publicQrLink(row) {
 }
 
 function listCounterOrders(query = {}) {
+  const tenantId = cleanId(query.tenant_id || query.tenantId);
   const storeId = cleanId(query.store_id);
   const status = cleanString(query.status);
   const q = cleanString(query.q || query.search || "").slice(0, 80);
@@ -3875,12 +4097,13 @@ function listCounterOrders(query = {}) {
   const qLike = q ? `%${q}%` : "";
   const rows = db.prepare(`
     SELECT * FROM counter_orders
-    WHERE (? = '' OR store_id = ?)
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
       AND (? = '' OR status = ?)
       AND (? = '' OR order_number LIKE ? OR verify_code LIKE ? OR counter_order_id LIKE ?)
     ORDER BY issued_at DESC, id DESC
     LIMIT ?
-  `).all(storeId, storeId, status, status, q, qLike, qLike, qLike, boundedLimit);
+  `).all(tenantId, tenantId, storeId, storeId, status, status, q, qLike, qLike, qLike, boundedLimit);
   return rows.map(publicCounterOrder);
 }
 
@@ -4538,6 +4761,553 @@ function normalizeStoreStaffPin(value, options = {}) {
   if (!pin && options.allowEmpty !== true) throw requestError(`${options.label || "pin"} is required`, 400);
   if (!/^\d{4,12}$/.test(pin)) throw requestError(`${options.label || "pin"} must be 4 to 12 digits`, 400);
   return pin;
+}
+
+function enforcePublicRateLimit(req, routeType, rawScope, options = {}) {
+  const limit = Math.max(1, asInteger(options.limit) || 1);
+  const windowSeconds = Math.max(10, asInteger(options.windowSeconds) || 60);
+  const now = requestNowIso({ ...(req.query || {}), ...(req.body || {}) });
+  const occurredAt = new Date(now).getTime();
+  const windowStartedAt = new Date(Math.floor(occurredAt / (windowSeconds * 1000)) * windowSeconds * 1000).toISOString();
+  const ipHash = hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`);
+  const userAgent = cleanString(req.get("user-agent")).slice(0, 500);
+  const userAgentHash = hashToken(userAgent);
+  const visitId = cleanId(req.query?.visit_id || req.query?.visitId || req.body?.visit_id || req.body?.visitId);
+  const scopeHash = hashToken(JSON.stringify({
+    route_type: cleanString(routeType),
+    scope: cleanString(rawScope),
+    visit_id: visitId,
+    ip_hash: ipHash,
+    user_agent_hash: userAgentHash
+  }));
+  const count = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM public_rate_limit_events
+    WHERE route_type = ?
+      AND scope_hash = ?
+      AND window_started_at = ?
+      AND decision = 'allow'
+  `).get(cleanString(routeType), scopeHash, windowStartedAt).count;
+  const allowed = count < limit;
+  const reason = allowed ? "" : "public_rate_limit_exceeded";
+  recordPublicRateLimitEvent({
+    route_type: routeType,
+    scope_hash: scopeHash,
+    window_started_at: windowStartedAt,
+    occurred_at: now,
+    decision: allowed ? "allow" : "reject",
+    limit_count: limit,
+    window_seconds: windowSeconds,
+    reason,
+    ip_hash: ipHash,
+    user_agent_hash: userAgentHash,
+    metadata: {
+      method: cleanString(req.method),
+      route_type: cleanString(routeType),
+      visit_id_present: Boolean(visitId)
+    }
+  });
+  if (!allowed) {
+    recordAuditLog("public", "anonymous", "public_rate_limit.reject", "public_route", cleanString(routeType), null, null, {
+      route_type: cleanString(routeType),
+      scope_hash: scopeHash,
+      window_started_at: windowStartedAt,
+      limit_count: limit,
+      window_seconds: windowSeconds,
+      ip_hash: ipHash,
+      user_agent_hash: userAgentHash
+    }, now);
+    throw requestError("Public rate limit exceeded", 429);
+  }
+}
+
+function recordPublicRateLimitEvent(event) {
+  db.prepare(`
+    INSERT INTO public_rate_limit_events (
+      public_rate_limit_event_id, route_type, scope_hash, window_started_at,
+      occurred_at, decision, limit_count, window_seconds, reason,
+      ip_hash, user_agent_hash, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    nextEntityId("prl", `${event.route_type}-${event.scope_hash}-${event.occurred_at}`),
+    cleanString(event.route_type).slice(0, 80),
+    cleanString(event.scope_hash),
+    cleanString(event.window_started_at),
+    cleanString(event.occurred_at),
+    cleanString(event.decision),
+    asInteger(event.limit_count) || 0,
+    asInteger(event.window_seconds) || 0,
+    cleanString(event.reason).slice(0, 200),
+    cleanString(event.ip_hash),
+    cleanString(event.user_agent_hash),
+    JSON.stringify(event.metadata || {})
+  );
+}
+
+function createCustomerAccessToken(tenantId, input, actor = {}) {
+  const tenant = db.prepare("SELECT * FROM tenants WHERE tenant_id = ?").get(cleanId(tenantId));
+  if (!tenant) throw requestError("Tenant not found", 404);
+  const pin = normalizeStoreStaffPin(input.pin, { label: "pin" });
+  const role = normalizeCustomerRole(input.role || "customer_viewer");
+  const storeIds = normalizeCustomerStoreIds(input.store_ids || input.storeIds || input.store_id || input.storeId, tenant.tenant_id);
+  const now = nowIso();
+  const token = generateCustomerAccessToken();
+  const tokenId = nextEntityId("cat", tenant.tenant_id);
+  const row = {
+    customer_access_token_id: tokenId,
+    tenant_id: tenant.tenant_id,
+    token_hash: hashCustomerAccessToken(token),
+    pin_hash: hashCustomerPin(tokenId, pin),
+    role,
+    store_ids_json: JSON.stringify(storeIds),
+    status: "active",
+    failed_attempts: 0,
+    locked_until: "",
+    rotated_at: "",
+    pin_rotated_at: now,
+    last_used_at: "",
+    notes: cleanString(input.notes).slice(0, 1000),
+    created_at: now,
+    updated_at: now
+  };
+  db.prepare(`
+    INSERT INTO customer_access_tokens (
+      customer_access_token_id, tenant_id, token_hash, pin_hash, role,
+      store_ids_json, status, failed_attempts, locked_until, rotated_at,
+      pin_rotated_at, last_used_at, notes, created_at, updated_at
+    ) VALUES (
+      @customer_access_token_id, @tenant_id, @token_hash, @pin_hash, @role,
+      @store_ids_json, @status, @failed_attempts, @locked_until, @rotated_at,
+      @pin_rotated_at, @last_used_at, @notes, @created_at, @updated_at
+    )
+  `).run(row);
+  const created = getCustomerAccessToken(tokenId);
+  recordAuditLog("admin", actor.actor_id || "admin", "customer_access_token.create", "customer_access_token", tokenId, null, created, {
+    tenant_id: tenant.tenant_id,
+    actor_role: actor.role || "",
+    role,
+    store_ids: storeIds
+  }, now);
+  return {
+    customer_access_token: created,
+    customer_admin_url: `/customer/admin/${tokenId}`
+  };
+}
+
+function listCustomerAccessTokens(query = {}) {
+  const tenantId = cleanId(query.tenant_id || query.tenantId);
+  const status = cleanString(query.status);
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT cat.*, t.name AS tenant_name
+    FROM customer_access_tokens cat
+    LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
+    WHERE (? = '' OR cat.tenant_id = ?)
+      AND (? = '' OR cat.status = ?)
+    ORDER BY cat.updated_at DESC, cat.id DESC
+    LIMIT ?
+  `).all(tenantId, tenantId, status, status, limit).map(publicCustomerAccessToken);
+}
+
+function getCustomerAccessToken(customerAccessTokenId) {
+  const row = db.prepare(`
+    SELECT cat.*, t.name AS tenant_name
+    FROM customer_access_tokens cat
+    LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
+    WHERE cat.customer_access_token_id = ?
+  `).get(cleanId(customerAccessTokenId));
+  return row ? publicCustomerAccessToken(row) : null;
+}
+
+function getCustomerAccessTokenForAuth(customerAccessTokenId) {
+  if (!customerAccessTokenId) return null;
+  const row = db.prepare(`
+    SELECT cat.*, t.name AS tenant_name
+    FROM customer_access_tokens cat
+    LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
+    WHERE cat.customer_access_token_id = ?
+  `).get(cleanId(customerAccessTokenId));
+  return row ? publicCustomerAccessToken(row, { includeHashFields: true }) : null;
+}
+
+function createCustomerSession(customerAccessTokenId, input, req) {
+  const access = getCustomerAccessTokenForAuth(customerAccessTokenId);
+  if (!access) throw requestError("Customer access token not found", 404);
+  const now = nowIso();
+  if (access.status !== "active") throw requestError("Customer access token is not active", 403);
+  if (access.locked_until && access.locked_until > now) {
+    recordCustomerLoginAudit(access, "customer.login_locked", req, { locked_until: access.locked_until }, now);
+    throw requestError("PIN is temporarily locked", 429);
+  }
+  const pin = normalizeStoreStaffPin(input.pin, { label: "pin", allowEmpty: false });
+  const expectedHash = hashCustomerPin(access.customer_access_token_id, pin);
+  if (!safeEqualHex(access.pin_hash, expectedHash)) {
+    const failedAttempts = (asInteger(access.failed_attempts) || 0) + 1;
+    const lockedUntil = failedAttempts >= CUSTOMER_PIN_MAX_ATTEMPTS
+      ? new Date(Date.now() + CUSTOMER_PIN_LOCK_SECONDS * 1000).toISOString()
+      : "";
+    db.prepare(`
+      UPDATE customer_access_tokens SET
+        failed_attempts = ?,
+        locked_until = ?,
+        updated_at = ?
+      WHERE customer_access_token_id = ?
+    `).run(failedAttempts, lockedUntil, now, access.customer_access_token_id);
+    recordCustomerLoginAudit(access, "customer.login_failed", req, { failed_attempts: failedAttempts, locked_until: lockedUntil }, now);
+    throw requestError(lockedUntil ? "PIN is temporarily locked" : "PIN is invalid", lockedUntil ? 429 : 401);
+  }
+
+  const sessionToken = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + CUSTOMER_SESSION_TTL_SECONDS * 1000).toISOString();
+  const sessionId = nextEntityId("cus", access.tenant_id);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO customer_sessions (
+        customer_session_id, customer_access_token_id, session_token_hash,
+        tenant_id, role, store_ids_json, status, created_at, expires_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `).run(
+      sessionId,
+      access.customer_access_token_id,
+      hashCustomerSessionToken(sessionToken),
+      access.tenant_id,
+      access.role,
+      JSON.stringify(access.store_ids || []),
+      now,
+      expiresAt,
+      now
+    );
+    db.prepare(`
+      UPDATE customer_access_tokens SET
+        failed_attempts = 0,
+        locked_until = '',
+        last_used_at = ?,
+        updated_at = ?
+      WHERE customer_access_token_id = ?
+    `).run(now, now, access.customer_access_token_id);
+  })();
+  const session = getCustomerSessionById(sessionId);
+  recordCustomerLoginAudit(access, "customer.login_success", req, { session_id: sessionId }, now);
+  return {
+    ...session,
+    session_token: sessionToken
+  };
+}
+
+function requireCustomerSession(req, res, next) {
+  try {
+    const token = getCustomerSessionToken(req);
+    if (!token) throw requestError("Customer session is required", 401);
+    const session = getCustomerSessionByRawToken(token);
+    if (!session) throw requestError("Customer session is invalid", 401);
+    const now = nowIso();
+    if (session.status !== "active" || session.expires_at <= now) {
+      throw requestError("Customer session has expired", 401);
+    }
+    if (session.access_token_status !== "active") {
+      throw requestError("Customer access token is not active", 403);
+    }
+    db.prepare("UPDATE customer_sessions SET last_used_at = ? WHERE customer_session_id = ?").run(now, session.customer_session_id);
+    req.customerSession = {
+      ...session,
+      last_used_at: now
+    };
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function requireCustomerEditor(req, res, next) {
+  if (!CUSTOMER_EDIT_ROLES.has(req.customerSession?.role)) {
+    res.status(403).json({ error: "Customer role cannot edit offers" });
+    return;
+  }
+  next();
+}
+
+function revokeCustomerSession(session) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE customer_sessions SET
+      status = 'revoked',
+      revoked_at = ?,
+      last_used_at = ?
+    WHERE customer_session_id = ?
+  `).run(now, now, session.customer_session_id);
+}
+
+function getCustomerSessionByRawToken(token) {
+  const row = db.prepare(`
+    SELECT
+      cs.*,
+      cat.status AS access_token_status,
+      cat.notes AS access_token_notes,
+      t.name AS tenant_name
+    FROM customer_sessions cs
+    JOIN customer_access_tokens cat ON cat.customer_access_token_id = cs.customer_access_token_id
+    LEFT JOIN tenants t ON t.tenant_id = cs.tenant_id
+    WHERE cs.session_token_hash = ?
+  `).get(hashCustomerSessionToken(token));
+  return row ? publicCustomerSessionRow(row) : null;
+}
+
+function getCustomerSessionById(sessionId) {
+  const row = db.prepare(`
+    SELECT
+      cs.*,
+      cat.status AS access_token_status,
+      cat.notes AS access_token_notes,
+      t.name AS tenant_name
+    FROM customer_sessions cs
+    JOIN customer_access_tokens cat ON cat.customer_access_token_id = cs.customer_access_token_id
+    LEFT JOIN tenants t ON t.tenant_id = cs.tenant_id
+    WHERE cs.customer_session_id = ?
+  `).get(cleanId(sessionId));
+  return row ? publicCustomerSessionRow(row) : null;
+}
+
+function publicCustomerSessionRow(row) {
+  return {
+    customer_session_id: cleanId(row.customer_session_id),
+    customer_access_token_id: cleanId(row.customer_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    tenant_name: cleanString(row.tenant_name || row.tenant_id),
+    role: normalizeCustomerRole(row.role || "customer_viewer"),
+    store_ids: parseStoreIdsJson(row.store_ids_json),
+    status: cleanString(row.status),
+    access_token_status: cleanString(row.access_token_status),
+    created_at: cleanString(row.created_at),
+    expires_at: cleanString(row.expires_at),
+    last_used_at: cleanString(row.last_used_at),
+    revoked_at: cleanString(row.revoked_at)
+  };
+}
+
+function publicCustomerSession(session) {
+  return {
+    customer_session_id: session.customer_session_id,
+    customer_access_token_id: session.customer_access_token_id,
+    tenant_id: session.tenant_id,
+    tenant_name: session.tenant_name,
+    role: session.role,
+    store_ids: session.store_ids || [],
+    status: session.status,
+    expires_at: session.expires_at,
+    last_used_at: session.last_used_at
+  };
+}
+
+function publicCustomerAccessToken(row, options = {}) {
+  const token = {
+    customer_access_token_id: cleanId(row.customer_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    tenant_name: cleanString(row.tenant_name || row.tenant_id),
+    role: normalizeCustomerRole(row.role || "customer_viewer"),
+    store_ids: parseStoreIdsJson(row.store_ids_json),
+    status: cleanString(row.status),
+    failed_attempts: asInteger(row.failed_attempts) || 0,
+    locked_until: cleanString(row.locked_until),
+    rotated_at: cleanString(row.rotated_at),
+    pin_rotated_at: cleanString(row.pin_rotated_at),
+    last_used_at: cleanString(row.last_used_at),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    customer_admin_path: "/customer/admin/:customer_access_token_id"
+  };
+  if (options.includeHashFields) {
+    token.token_hash = cleanString(row.token_hash);
+    token.pin_hash = cleanString(row.pin_hash);
+  }
+  return token;
+}
+
+function normalizeCustomerRole(value) {
+  const role = cleanString(value || "customer_viewer");
+  if (!CUSTOMER_ROLES.has(role)) throw requestError(`role must be one of: ${Array.from(CUSTOMER_ROLES).join(", ")}`, 400);
+  return role;
+}
+
+function normalizeCustomerStoreIds(value, tenantId) {
+  const raw = Array.isArray(value) ? value : cleanString(value).split(",");
+  const storeIds = Array.from(new Set(raw.map(cleanId).filter(Boolean)));
+  for (const storeId of storeIds) {
+    const store = db.prepare("SELECT tenant_id FROM stores WHERE store_id = ?").get(storeId);
+    if (!store) throw requestError(`store_id was not found: ${storeId}`, 400);
+    if (cleanId(store.tenant_id) !== cleanId(tenantId)) throw requestError(`store_id is outside tenant scope: ${storeId}`, 403);
+  }
+  return storeIds;
+}
+
+function parseStoreIdsJson(value) {
+  const parsed = parseJson(value || "[]", []);
+  return Array.isArray(parsed) ? parsed.map(cleanId).filter(Boolean) : [];
+}
+
+function assertCustomerStoreScope(session, storeId) {
+  const normalizedStoreId = cleanId(storeId);
+  if (!normalizedStoreId) return "";
+  const store = db.prepare("SELECT tenant_id FROM stores WHERE store_id = ?").get(normalizedStoreId);
+  if (!store) throw requestError("Store not found", 404);
+  if (cleanId(store.tenant_id) !== session.tenant_id) throw requestError("Store is outside tenant scope", 403);
+  if (session.store_ids?.length && !session.store_ids.includes(normalizedStoreId)) {
+    throw requestError("Store is outside customer scope", 403);
+  }
+  return normalizedStoreId;
+}
+
+function defaultCustomerStoreId(session, suppliedStoreId = "") {
+  const storeId = cleanId(suppliedStoreId);
+  if (storeId) return assertCustomerStoreScope(session, storeId);
+  if (session.store_ids?.length === 1) return session.store_ids[0];
+  if (session.store_ids?.length > 1) throw requestError("store_id is required for multi-store customer scope", 400);
+  return "";
+}
+
+function normalizeCustomerReportCriteria(input, session) {
+  const criteria = normalizeReportCriteria({
+    ...input,
+    tenant_id: session.tenant_id,
+    store_id: defaultCustomerStoreId(session, input.store_id || input.storeId || input.site_id || input.siteId)
+  });
+  return criteria;
+}
+
+function normalizeCustomerCounterOrderQuery(input, session) {
+  const storeId = defaultCustomerStoreId(session, input.store_id || input.storeId);
+  return {
+    ...input,
+    tenant_id: session.tenant_id,
+    store_id: storeId
+  };
+}
+
+function buildCustomerConversionReport(criteria, session) {
+  const summary = buildReportSummary(criteria);
+  const totals = summary.totals || {};
+  const issued = asInteger(totals.counter_orders_issued_count) || 0;
+  const redeemed = asInteger(totals.counter_orders_redeemed_count) || 0;
+  const scans = asInteger(totals.qr_scan_count) || 0;
+  const kpis = {
+    qr_scan_count: scans,
+    counter_orders_issued_count: issued,
+    counter_orders_redeemed_count: redeemed,
+    potential_sales_amount: asInteger(totals.counter_order_total_amount) || 0,
+    estimated_redeemed_amount: asInteger(totals.counter_order_redeemed_amount) || 0,
+    scan_to_order_rate: scans > 0 ? issued / scans : 0,
+    order_to_redeem_rate: issued > 0 ? redeemed / issued : 0,
+    amount_wording: {
+      potential_sales_amount: "受付発行額。POS決済済み売上ではありません。",
+      estimated_redeemed_amount: "引換済み推定額。現地会計の確定売上ではありません。"
+    }
+  };
+  return {
+    ...summary,
+    audience: "customer",
+    customer_scope: {
+      tenant_id: session.tenant_id,
+      role: session.role,
+      store_ids: session.store_ids || []
+    },
+    kpis
+  };
+}
+
+function listCustomerStoreSettings(session) {
+  return listStoreSettings().filter((store) => {
+    if (store.tenant_id !== session.tenant_id) return false;
+    return !session.store_ids?.length || session.store_ids.includes(store.store_id);
+  });
+}
+
+function listCustomerOffers(session) {
+  return db.prepare(`
+    SELECT * FROM offers
+    WHERE tenant_id = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 200
+  `).all(session.tenant_id)
+    .filter((offer) => !session.store_ids?.length || session.store_ids.includes(cleanId(offer.store_id)))
+    .map((row) => publicOffer(row, { includeCurrentRevision: true }));
+}
+
+function createCustomerOfferRevision(session, offerId, input) {
+  const offer = getOffer(offerId, { includeCurrentRevision: true });
+  if (!offer) throw requestError("Offer not found", 404);
+  if (offer.tenant_id !== session.tenant_id) throw requestError("Offer is outside tenant scope", 403);
+  assertCustomerStoreScope(session, offer.store_id);
+  const current = offer.current_revision || getOfferRevision(offer.current_offer_revision_id);
+  if (!current) throw requestError("Offer has no current revision to copy", 409);
+  const allowedStatus = cleanString(input.status || current.status || "draft");
+  const nextInput = {
+    title: cleanString(input.title ?? current.title),
+    description: cleanString(input.description ?? current.description),
+    pickup_location: cleanString(input.pickup_location ?? input.pickupLocation ?? current.pickup_location),
+    pickup_available_from: cleanString(input.pickup_available_from ?? input.pickupAvailableFrom ?? current.pickup_available_from),
+    pickup_available_until: cleanString(input.pickup_available_until ?? input.pickupAvailableUntil ?? current.pickup_available_until),
+    order_issue_cutoff_time: cleanString(input.order_issue_cutoff_time ?? input.orderIssueCutoffTime ?? current.order_issue_cutoff_time),
+    valid_from: cleanString(input.valid_from ?? input.validFrom ?? current.valid_from),
+    valid_until: cleanString(input.valid_until ?? input.validUntil ?? current.valid_until),
+    max_orders_total: input.max_orders_total ?? input.maxOrdersTotal ?? current.max_orders_total,
+    max_orders_per_day: input.max_orders_per_day ?? input.maxOrdersPerDay ?? current.max_orders_per_day,
+    max_orders_per_visit: input.max_orders_per_visit ?? input.maxOrdersPerVisit ?? current.max_orders_per_visit,
+    currency: normalizeCurrency(input.currency ?? current.currency),
+    tax_included: normalizeBooleanFlag(input.tax_included ?? current.tax_included ?? true),
+    tax_amount: input.tax_amount ?? current.tax_amount,
+    notes: cleanString(input.notes ?? current.notes),
+    status: allowedStatus,
+    created_by: session.customer_session_id,
+    items: Array.isArray(input.items) ? input.items : (current.items || []).map((item) => ({
+      item_id: item.item_id,
+      item_name: item.item_name_snapshot,
+      quantity: item.quantity,
+      unit_price: item.unit_price_snapshot,
+      currency: item.currency,
+      tax_included: item.tax_included
+    }))
+  };
+  const revision = createOfferRevision(offer.offer_id, nextInput);
+  recordAuditLog("customer", session.customer_session_id, "offer_revision.customer_create", "offer", offer.offer_id, current, revision, {
+    tenant_id: session.tenant_id,
+    store_id: offer.store_id,
+    role: session.role
+  }, nowIso());
+  return revision;
+}
+
+function recordCustomerLoginAudit(access, action, req, metadata = {}, createdAt = nowIso()) {
+  recordAuditLog("customer", access.customer_access_token_id, action, "customer_access_token", access.customer_access_token_id, null, null, {
+    tenant_id: access.tenant_id,
+    role: access.role,
+    store_ids: access.store_ids || [],
+    ip_hash: hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`),
+    user_agent: cleanString(req.get("user-agent")).slice(0, 500),
+    ...metadata
+  }, createdAt);
+}
+
+function generateCustomerAccessToken() {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function hashCustomerAccessToken(token) {
+  return hashCustomerSecret("customer-access-token", token);
+}
+
+function hashCustomerPin(customerAccessTokenId, pin) {
+  return hashCustomerSecret(`customer-pin:${customerAccessTokenId}`, pin);
+}
+
+function hashCustomerSessionToken(token) {
+  return hashCustomerSecret("customer-session", token);
+}
+
+function hashCustomerSecret(scope, value) {
+  return crypto
+    .createHmac("sha256", CUSTOMER_ACCESS_TOKEN_PEPPER)
+    .update(`${scope}:${value}`)
+    .digest("hex");
 }
 
 function generateStoreAccessToken() {
@@ -8050,6 +8820,12 @@ function getStoreStaffSessionToken(req) {
   return parseCookies(req.get("cookie")).misell_store_staff_session || "";
 }
 
+function getCustomerSessionToken(req) {
+  const bearer = getBearerToken(req);
+  if (bearer) return bearer;
+  return parseCookies(req.get("cookie")).misell_customer_session || "";
+}
+
 function parseCookies(cookieHeader) {
   const cookies = {};
   for (const part of cleanString(cookieHeader).split(";")) {
@@ -8073,6 +8849,20 @@ function clearStoreStaffSessionCookie(req, res) {
   const secure = requestIsHttps(req) ? "; Secure" : "";
   res.setHeader("Set-Cookie", [
     `misell_store_staff_session=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`
+  ]);
+}
+
+function setCustomerSessionCookie(req, res, token, expiresAt) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_customer_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${new Date(expiresAt).toUTCString()}`
+  ]);
+}
+
+function clearCustomerSessionCookie(req, res) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_customer_session=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`
   ]);
 }
 
@@ -8305,6 +9095,93 @@ function renderStoreOrdersNotFoundPage() {
         <div>
           <p class="order-kicker">Misell</p>
           <h1>店舗受付が見つかりません</h1>
+          <p>URLが正しいか、管理者に確認してください。</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function renderCustomerAdminPage(customerAccess, req) {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(customerAccess.tenant_name || customerAccess.tenant_id)} 顧客管理 | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="customer-admin-page">
+    <div class="shell">
+      <header class="topbar">
+        <h1>${escapeHtml(customerAccess.tenant_name || customerAccess.tenant_id)} 顧客管理</h1>
+        <button id="customer-refresh" type="button">更新</button>
+      </header>
+      <main>
+        <section id="customer-login" class="store-login-panel">
+          <h2>顧客PIN</h2>
+          <form id="customer-login-form" class="store-login-form">
+            <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password" placeholder="PIN" aria-label="顧客PIN" required>
+            <button type="submit">開始</button>
+          </form>
+        </section>
+        <section id="customer-admin-app" hidden>
+          <div class="store-orders-toolbar">
+            <input id="customer-report-month" type="month" aria-label="レポート月">
+            <select id="customer-store-filter" aria-label="店舗"></select>
+            <button id="customer-logout" class="secondary" type="button">終了</button>
+          </div>
+          <div id="customer-session-summary" class="notification-bar"></div>
+          <section class="section">
+            <h2>成果KPI</h2>
+            <div id="customer-kpis" class="metrics"></div>
+          </section>
+          <section class="section">
+            <h2>受付状況</h2>
+            <div id="customer-orders"></div>
+          </section>
+          <section class="section">
+            <h2>店舗運用設定</h2>
+            <div id="customer-store-settings"></div>
+          </section>
+          <section class="section">
+            <h2>オファー設定</h2>
+            <div id="customer-offers"></div>
+          </section>
+        </section>
+        <p id="customer-message" class="order-message" role="status"></p>
+      </main>
+    </div>
+    <script>
+      window.MISELL_CUSTOMER_ACCESS_ID = ${escapeJsonForScript(customerAccess.customer_access_token_id)};
+      window.MISELL_CUSTOMER_ACCESS = ${escapeJsonForScript({
+        tenant_id: customerAccess.tenant_id,
+        tenant_name: customerAccess.tenant_name,
+        role: customerAccess.role,
+        store_ids: customerAccess.store_ids || []
+      })};
+    </script>
+    <script src="/customer-admin.js"></script>
+  </body>
+</html>`;
+}
+
+function renderCustomerAdminNotFoundPage() {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>顧客管理が見つかりません | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="customer-admin-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">Misell</p>
+          <h1>顧客管理が見つかりません</h1>
           <p>URLが正しいか、管理者に確認してください。</p>
         </div>
       </section>

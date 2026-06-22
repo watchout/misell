@@ -151,6 +151,9 @@ jobs:
       - name: Smoke counter order UX
         run: npm --prefix apps/cloud run smoke:counter-order-ux
 
+      - name: Smoke customer reporting access
+        run: npm --prefix apps/cloud run smoke:customer-reporting-access
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
