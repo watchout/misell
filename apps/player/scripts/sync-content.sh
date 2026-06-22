@@ -10,18 +10,30 @@ DEVICE_TOKEN="${MISELL_DEVICE_TOKEN:-${DEVICE_TOKEN:-}}"
 DATA_DIR="${MISELL_DATA_DIR:-${APP_DIR}/data}"
 PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${DATA_DIR}/playlist.json}"
 ASSETS_DIR="${MISELL_ASSETS_DIR:-${APP_DIR}/assets}"
+RELEASES_DIR="${MISELL_CONTENT_RELEASES_DIR:-${DATA_DIR}/releases}"
+CURRENT_LINK="${MISELL_CONTENT_CURRENT_LINK:-${RELEASES_DIR}/current}"
 LOCK_FILE="${MISELL_CONTENT_SYNC_LOCK_FILE:-${HOME}/.local/share/misell-player/content-sync.lock}"
 APPLY=1
+ROLLBACK_TARGET=""
 PREVIOUS_PLAYLIST_VERSION=""
 CONTENT_APPLY_JOB_ID=""
+RELEASE_BUNDLE_JSON=""
+LOCAL_CONTENT_STATE_JSON=""
+STAGING_DIR=""
+RELEASE_DIR=""
+RELEASE_PLAYLIST_PATH=""
+RELEASE_PLAYLIST_SHA256=""
 
 usage() {
   cat <<'EOF'
 Usage:
   scripts/sync-content.sh [--dry-run]
+  scripts/sync-content.sh --rollback previous
+  scripts/sync-content.sh --rollback <release_id>
 
 Fetches the active Cloud content manifest for this terminal release channel and
-writes playlist.json when the playlist_version differs.
+writes a versioned release bundle when the playlist_version differs. Rollback
+switches the local current release pointer without downloading assets.
 EOF
 }
 
@@ -30,6 +42,14 @@ while [[ $# -gt 0 ]]; do
     --dry-run)
       APPLY=0
       shift
+      ;;
+    --rollback)
+      ROLLBACK_TARGET="${2:-}"
+      if [[ -z "${ROLLBACK_TARGET}" ]]; then
+        echo "--rollback requires previous or a release_id" >&2
+        exit 1
+      fi
+      shift 2
       ;;
     -h|--help)
       usage
@@ -56,6 +76,8 @@ if [[ -f "${ENV_FILE}" ]]; then
   PLAYLIST_PATH="${MISELL_PLAYLIST_PATH:-${PLAYLIST_PATH}}"
   ASSETS_DIR="${MISELL_ASSETS_DIR:-${ASSETS_DIR}}"
 fi
+RELEASES_DIR="${MISELL_CONTENT_RELEASES_DIR:-${DATA_DIR}/releases}"
+CURRENT_LINK="${MISELL_CONTENT_CURRENT_LINK:-${RELEASES_DIR}/current}"
 
 derive_content_urls() {
   if [[ -n "${CONTENT_URL}" && -n "${CONTENT_RESULT_URL}" ]]; then
@@ -79,21 +101,6 @@ json_content_value() {
     } else {
       process.stdout.write(String(content[field] || ""));
     }
-  '
-}
-
-write_playlist_from_policy() {
-  local output_path="$1"
-  POLICY_JSON="${policy}" OUTPUT_PATH="${output_path}" node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const data = JSON.parse(process.env.POLICY_JSON || "{}");
-    const playlist = data.content && data.content.playlist;
-    if (!playlist || !Array.isArray(playlist.items)) {
-      throw new Error("content.playlist.items is required");
-    }
-    fs.mkdirSync(path.dirname(process.env.OUTPUT_PATH), { recursive: true });
-    fs.writeFileSync(process.env.OUTPUT_PATH, `${JSON.stringify(playlist, null, 2)}\n`);
   '
 }
 
@@ -127,9 +134,16 @@ safe_content_event_id() {
   STATUS="${status}" \
   CONTENT_ID="${CONTENT_ID:-}" \
   PLAYLIST_VERSION="${PLAYLIST_VERSION:-}" \
+  SOURCE="${SOURCE:-}" \
   node -e '
     const crypto = require("crypto");
-    const raw = ["content-result", process.env.CONTENT_ID || "unknown", process.env.PLAYLIST_VERSION || "unknown", process.env.STATUS || "unknown"].join(":");
+    const raw = [
+      "content-result",
+      process.env.CONTENT_ID || "unknown",
+      process.env.PLAYLIST_VERSION || "unknown",
+      process.env.SOURCE || "unknown",
+      process.env.STATUS || "unknown"
+    ].join(":");
     const safe = raw.replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 140);
     const digest = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
     process.stdout.write(`${safe}:${digest}`.slice(0, 160));
@@ -139,9 +153,15 @@ safe_content_event_id() {
 safe_content_job_id() {
   CONTENT_ID="${CONTENT_ID:-}" \
   PLAYLIST_VERSION="${PLAYLIST_VERSION:-}" \
+  SOURCE="${SOURCE:-}" \
   node -e '
     const crypto = require("crypto");
-    const raw = ["content-apply", process.env.CONTENT_ID || "unknown", process.env.PLAYLIST_VERSION || "unknown"].join(":");
+    const raw = [
+      "content-apply",
+      process.env.CONTENT_ID || "unknown",
+      process.env.PLAYLIST_VERSION || "unknown",
+      process.env.SOURCE || "unknown"
+    ].join(":");
     const safe = raw.replace(/[^a-zA-Z0-9_.:-]/g, "-").slice(0, 140);
     const digest = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
     process.stdout.write(`${safe}:${digest}`.slice(0, 160));
@@ -164,6 +184,122 @@ playlist_version_for_file() {
   '
 }
 
+json_text_value() {
+  local json_text="$1"
+  local field="$2"
+  JSON_TEXT="${json_text}" FIELD="${field}" node -e '
+    const data = JSON.parse(process.env.JSON_TEXT || "{}");
+    const path = String(process.env.FIELD || "").split(".");
+    let value = data;
+    for (const key of path) value = value && Object.prototype.hasOwnProperty.call(value, key) ? value[key] : "";
+    if (value && typeof value === "object") {
+      process.stdout.write(JSON.stringify(value));
+    } else {
+      process.stdout.write(String(value || ""));
+    }
+  '
+}
+
+build_local_state_manifest() {
+  POLICY_JSON_INPUT="${policy:-}" RELEASE_BUNDLE_JSON_INPUT="${RELEASE_BUNDLE_JSON:-}" node -e '
+    const parse = (value, fallback) => {
+      try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
+    };
+    const policy = parse(process.env.POLICY_JSON_INPUT || "", {});
+    const bundle = parse(process.env.RELEASE_BUNDLE_JSON_INPUT || "", {});
+    if (bundle && Object.keys(bundle).length > 0) {
+      policy.release_bundle = {
+        release_id: bundle.release_id || "",
+        release_dir: bundle.release_dir || "",
+        current_link: bundle.current_link || "",
+        playlist_path: bundle.playlist_path || "",
+        playlist_sha256: bundle.playlist_sha256 || "",
+        manifest: bundle.manifest || {}
+      };
+    }
+    process.stdout.write(JSON.stringify(policy));
+  '
+}
+
+prepare_release_bundle() {
+  RELEASE_BUNDLE_JSON="$(
+    POLICY_JSON="${policy}" node "${APP_DIR}/scripts/release-bundle.js" write \
+      --releases-dir "${RELEASES_DIR}"
+  )"
+  STAGING_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "staging_dir")"
+  RELEASE_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "release_dir")"
+  RELEASE_PLAYLIST_PATH="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_path")"
+  RELEASE_PLAYLIST_SHA256="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_sha256")"
+  LOCAL_CONTENT_STATE_JSON="$(build_local_state_manifest)"
+}
+
+promote_release_bundle() {
+  RELEASE_BUNDLE_JSON="$(
+    node "${APP_DIR}/scripts/release-bundle.js" promote \
+      --staging-dir "${STAGING_DIR}" \
+      --release-dir "${RELEASE_DIR}" \
+      --current-link "${CURRENT_LINK}" \
+      --playlist-path "${PLAYLIST_PATH}"
+  )"
+  RELEASE_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "release_dir")"
+  RELEASE_PLAYLIST_PATH="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_path")"
+  RELEASE_PLAYLIST_SHA256="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_sha256")"
+  LOCAL_CONTENT_STATE_JSON="$(build_local_state_manifest)"
+}
+
+cleanup_staging_release() {
+  if [[ -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
+    rm -rf "${STAGING_DIR}"
+  fi
+}
+
+validate_playlist_file() {
+  local playlist_path="$1"
+  MISELL_PLAYLIST_PATH="${playlist_path}" MISELL_ASSETS_DIR="${ASSETS_DIR}" \
+    bash -c 'cd "$1" && npm run validate:playlist >/dev/null' bash "${APP_DIR}"
+}
+
+rollback_release_bundle() {
+  local target="$1"
+  if [[ "${APPLY}" != "1" ]]; then
+    echo "Dry-run rollback target=${target}"
+    return 0
+  fi
+  RELEASE_BUNDLE_JSON="$(
+    node "${APP_DIR}/scripts/release-bundle.js" resolve \
+      --target "${target}" \
+      --releases-dir "${RELEASES_DIR}" \
+      --current-link "${CURRENT_LINK}"
+  )"
+  RELEASE_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "release_dir")"
+  RELEASE_PLAYLIST_PATH="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_path")"
+  RELEASE_PLAYLIST_SHA256="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_sha256")"
+  CONTENT_ID="$(json_text_value "${RELEASE_BUNDLE_JSON}" "content_id")"
+  PLAYLIST_VERSION="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_version")"
+  SOURCE="release_bundle_rollback"
+  CONTENT_APPLY_JOB_ID="$(safe_content_job_id)"
+  PREVIOUS_PLAYLIST_VERSION="$(playlist_version_for_file "${PLAYLIST_PATH}")"
+  LOCAL_CONTENT_STATE_JSON="$(build_local_state_manifest)"
+
+  post_result "updating" "rollback started"
+  if ! validate_playlist_file "${RELEASE_PLAYLIST_PATH}"; then
+    post_result "failed" "rollback playlist validation failed"
+    return 1
+  fi
+  if ! RELEASE_BUNDLE_JSON="$(
+    node "${APP_DIR}/scripts/release-bundle.js" promote \
+      --release-dir "${RELEASE_DIR}" \
+      --current-link "${CURRENT_LINK}" \
+      --playlist-path "${PLAYLIST_PATH}"
+  )"; then
+    post_result "failed" "rollback promote failed"
+    return 1
+  fi
+  LOCAL_CONTENT_STATE_JSON="$(build_local_state_manifest)"
+  post_result "success" "rollback applied"
+  echo "Rollback applied: $(json_text_value "${RELEASE_BUNDLE_JSON}" "release_id")"
+}
+
 record_local_content_state() {
   local status="$1"
   local message="${2:-}"
@@ -174,7 +310,8 @@ record_local_content_state() {
   if [[ -z "${job_id}" ]]; then
     job_id="$(safe_content_job_id)"
   fi
-  POLICY_JSON="${policy:-}" node "${APP_DIR}/scripts/local-state.js" record-apply-job \
+  local manifest_json="${LOCAL_CONTENT_STATE_JSON:-${policy:-}}"
+  POLICY_JSON="${manifest_json}" node "${APP_DIR}/scripts/local-state.js" record-apply-job \
     --job-id "${job_id}" \
     --status "${status}" \
     --message "${message}" \
@@ -182,16 +319,18 @@ record_local_content_state() {
     --playlist-version "${PLAYLIST_VERSION:-}" \
     --source "${SOURCE:-}" \
     --previous-playlist-version "${PREVIOUS_PLAYLIST_VERSION:-}" \
+    --playlist-sha256 "${RELEASE_PLAYLIST_SHA256:-}" \
     --playlist-path "${PLAYLIST_PATH}" >/dev/null || {
       echo "Could not record local content apply job: ${status}" >&2
     }
-  POLICY_JSON="${policy:-}" node "${APP_DIR}/scripts/local-state.js" record-content \
+  POLICY_JSON="${manifest_json}" node "${APP_DIR}/scripts/local-state.js" record-content \
     --status "${status}" \
     --message "${message}" \
     --content-id "${CONTENT_ID:-}" \
     --playlist-version "${PLAYLIST_VERSION:-}" \
     --source "${SOURCE:-}" \
     --previous-playlist-version "${PREVIOUS_PLAYLIST_VERSION:-}" \
+    --playlist-sha256 "${RELEASE_PLAYLIST_SHA256:-}" \
     --playlist-path "${PLAYLIST_PATH}" >/dev/null || {
       echo "Could not record local content state: ${status}" >&2
       return 0
@@ -303,6 +442,16 @@ verify_assets_from_policy() {
     node "${APP_DIR}/scripts/verify-content-assets.js"
 }
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required for content sync" >&2
+  exit 1
+fi
+
+if [[ -n "${ROLLBACK_TARGET}" ]]; then
+  rollback_release_bundle "${ROLLBACK_TARGET}"
+  exit $?
+fi
+
 derive_content_urls
 
 if [[ -z "${CONTENT_URL}" ]]; then
@@ -317,10 +466,6 @@ fi
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required for content sync" >&2
-  exit 1
-fi
-if ! command -v node >/dev/null 2>&1; then
-  echo "node is required for content sync" >&2
   exit 1
 fi
 
@@ -378,32 +523,36 @@ if [[ "${APPLY}" != "1" ]]; then
   exit 0
 fi
 
-previous_playlist="$(mktemp)"
 if [[ -f "${PLAYLIST_PATH}" ]]; then
   PREVIOUS_PLAYLIST_VERSION="$(playlist_version_for_file "${PLAYLIST_PATH}")"
-  cp "${PLAYLIST_PATH}" "${previous_playlist}"
 fi
-temp_playlist="$(mktemp)"
 
-post_result "updating" "content sync started"
 "${APP_DIR}/scripts/backup-content.sh" --reason "before-content-sync" >/dev/null || true
 
-if ! write_playlist_from_policy "${temp_playlist}"; then
-  post_result "failed" "could not write playlist from content policy"
+if ! prepare_release_bundle; then
+  post_result "failed" "could not stage release bundle from content policy"
   exit 1
 fi
 
-mkdir -p "$(dirname "${PLAYLIST_PATH}")"
-mv "${temp_playlist}" "${PLAYLIST_PATH}"
+post_result "updating" "content sync staged"
 
-if ! (cd "${APP_DIR}" && npm run validate:playlist >/dev/null); then
-  if [[ -s "${previous_playlist}" ]]; then
-    cp "${previous_playlist}" "${PLAYLIST_PATH}"
-  fi
-  post_result "failed" "playlist validation failed after content sync"
+if ! validate_playlist_file "${RELEASE_PLAYLIST_PATH}"; then
+  post_result "failed" "release bundle playlist validation failed before promote"
+  cleanup_staging_release
   exit 1
 fi
 
-rm -f "${previous_playlist}"
+if [[ "${MISELL_CONTENT_SYNC_INTERRUPT_BEFORE_PROMOTE:-0}" == "1" ]]; then
+  post_result "failed" "content sync interrupted before promote"
+  cleanup_staging_release
+  exit 1
+fi
+
+if ! promote_release_bundle; then
+  post_result "failed" "release bundle promote failed"
+  cleanup_staging_release
+  exit 1
+fi
+
 post_result "success" "content applied"
 echo "Content sync applied."
