@@ -91,6 +91,14 @@ const CONTEXT_SOURCE_ASSET_MIME_TYPES = Object.freeze([
   "application/pdf"
 ]);
 
+const CONTEXT_SOURCE_ASSET_MIME_BY_EXTENSION = Object.freeze({
+  ".jpg": Object.freeze(["image/jpeg"]),
+  ".jpeg": Object.freeze(["image/jpeg"]),
+  ".png": Object.freeze(["image/png"]),
+  ".webp": Object.freeze(["image/webp"]),
+  ".pdf": Object.freeze(["application/pdf"])
+});
+
 function assertContextContract(input, options = {}) {
   const normalized = normalizeContextContract(input, options);
   assertEnum("context_category", normalized.context_category, CONTEXT_CATEGORIES);
@@ -135,6 +143,10 @@ function canCustomerReadContext(session, context) {
   if (cleanId(session.tenant_id) !== cleanId(context.tenant_id)) return false;
   const storeIds = Array.isArray(session.store_ids) ? session.store_ids.map(cleanId).filter(Boolean) : [];
   if (storeIds.length > 0 && !storeIds.includes(cleanId(context.store_id))) return false;
+  const contextScreenGroupId = cleanId(context.screen_group_id || context.screenGroupId);
+  if (!contextScreenGroupId) return false;
+  const screenGroupIds = normalizedSessionScreenGroupIds(session);
+  if (!screenGroupIds.includes(contextScreenGroupId)) return false;
   return cleanString(context.visibility_scope) === "customer_visible";
 }
 
@@ -145,8 +157,17 @@ function assertContextSourceAssetContract(input) {
   if (!CONTEXT_SOURCE_ASSET_EXTENSIONS.includes(extension)) {
     throw new Error(`context source asset extension is not allowed: ${extension || "missing"}`);
   }
-  if (mimeType && !CONTEXT_SOURCE_ASSET_MIME_TYPES.includes(mimeType)) {
-    throw new Error(`context source asset mime_type is not allowed: ${mimeType}`);
+  const allowedMimes = CONTEXT_SOURCE_ASSET_MIME_BY_EXTENSION[extension] || [];
+  if (!mimeType) {
+    throw new Error("context source asset mime_type is required");
+  }
+  if (!allowedMimes.includes(mimeType)) {
+    throw new Error(`context source asset mime_type must match ${extension}: ${mimeType}`);
+  }
+  assertNoAutomaticExternalAi(input);
+  const extractionStatus = cleanString(input?.extraction_status || input?.extractionStatus || "manual_no_ai");
+  if (extractionStatus !== "manual_no_ai") {
+    throw new Error("context source asset extraction_status must be manual_no_ai in the #145 context source slice");
   }
   const maxSizeBytes = maxContextSourceAssetBytes(extension, mimeType);
   if (sizeBytes > maxSizeBytes) {
@@ -161,7 +182,7 @@ function assertContextSourceAssetContract(input) {
     source_owner: cleanString(input?.source_owner || input?.sourceOwner || "customer"),
     visibility_scope: cleanString(input?.visibility_scope || input?.visibilityScope || "customer_visible"),
     usage_notes: cleanString(input?.usage_notes || input?.usageNotes).slice(0, 4000),
-    extraction_status: cleanString(input?.extraction_status || input?.extractionStatus || "manual_no_ai"),
+    extraction_status: extractionStatus,
     extension,
     mime_type: mimeType,
     size_bytes: sizeBytes,
@@ -232,6 +253,15 @@ function normalizeSizeBytes(value) {
   return number;
 }
 
+function normalizedSessionScreenGroupIds(session) {
+  const values = [];
+  if (Array.isArray(session?.screen_group_ids)) values.push(...session.screen_group_ids);
+  if (Array.isArray(session?.screenGroupIds)) values.push(...session.screenGroupIds);
+  if (session?.screen_group_id) values.push(session.screen_group_id);
+  if (session?.screenGroupId) values.push(session.screenGroupId);
+  return values.map(cleanId).filter(Boolean);
+}
+
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -253,6 +283,7 @@ module.exports = {
   CONTEXT_SOURCE_PDF_MAX_BYTES,
   CONTEXT_SOURCE_ASSET_EXTENSIONS,
   CONTEXT_SOURCE_ASSET_MIME_TYPES,
+  CONTEXT_SOURCE_ASSET_MIME_BY_EXTENSION,
   assertContextContract,
   normalizeContextContract,
   assertCustomerWritableContext,
