@@ -127,6 +127,7 @@ sed -n 's/^ADMIN_PASSWORD=//p' ~/.config/misell-cloud/env
 
 ```bash
 npm run check
+npm run smoke:counter-order-ux
 npm audit --audit-level=moderate
 ```
 
@@ -377,6 +378,20 @@ Offers use immutable revisions. `offers.current_offer_revision_id` points at the
 
 QR links can resolve to public QR pages or issue counter orders. Counter-order QR links track `offers.current_offer_revision_id` by default, so publishing a new active revision keeps existing displayed QR codes usable. Supplying `offer_revision_id` or `pin_offer_revision` creates an explicitly pinned QR link. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
 
+Opening `/order/:order_token` in a browser renders a reusable reception-number card with item name, unit price, quantity, subtotal, total, tax/currency, pickup location/window, and expiry snapshots. The page includes image save/share/copy controls, local previous-order recall, and an iPhone Safari image-preview fallback with long-press save guidance. API clients that do not request `text/html` keep the existing JSON response, and `/api/public/orders/:order_token` returns the same order payload with store profile and resolved receipt snapshot data. Public page actions are recorded in `order_page_events` with a hashed IP and bounded event names.
+
+Store staff redemption uses a separate store-scoped URL and PIN, not the Cloud admin login. Operators create or rotate a store access URL from the Admin UI or:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"pin":"1234","notes":"front counter"}' \
+  http://localhost:3200/api/admin/stores/STO-LOCAL/access-token
+```
+
+Staff open `/store/orders/:store_token`, enter the PIN, and can list only that store's orders. Marking an order `redeemed` requires the customer's `verify_code`; `issued` and `cancelled` updates remain store-scoped and audited. Store access tokens and staff sessions are hash-only in the DB. PIN failures lock temporarily using `MISELL_STORE_STAFF_PIN_MAX_ATTEMPTS` and `MISELL_STORE_STAFF_PIN_LOCK_SECONDS`; sessions expire with `MISELL_STORE_STAFF_SESSION_TTL_SECONDS`.
+
 Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
 
 ## Reporting Read Model and Monthly Snapshots
@@ -413,6 +428,10 @@ These endpoints are currently operator-admin APIs behind the existing Cloud admi
 - `GET /api/admin/stores/:store_id/settings` with Basic auth
 - `PUT /api/admin/stores/:store_id/settings` with Basic auth
 - `PATCH /api/admin/stores/:store_id/settings` with Basic auth
+- `GET /api/admin/store-access-tokens` with Basic auth
+- `POST /api/admin/stores/:store_id/access-token` with Basic auth
+- `POST /api/admin/store-access-tokens/:store_access_token_id/rotate` with Basic auth
+- `POST /api/admin/store-access-tokens/:store_access_token_id/pin` with Basic auth
 - `GET /api/admin/items` with Basic auth
 - `POST /api/admin/items` with Basic auth
 - `PATCH /api/admin/items/:item_id` with Basic auth
@@ -434,6 +453,14 @@ These endpoints are currently operator-admin APIs behind the existing Cloud admi
 - `GET /q/:qr_token`
 - `POST /q/:qr_token/orders`
 - `GET /order/:order_token`
+- `GET /api/public/orders/:order_token`
+- `POST /api/public/orders/:order_token/events`
+- `GET /store/orders/:store_token`
+- `POST /store/orders/:store_token/session`
+- `GET /api/store/orders/session`
+- `POST /api/store/orders/logout`
+- `GET /api/store/orders`
+- `PATCH /api/store/orders/:counter_order_id/status`
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth
