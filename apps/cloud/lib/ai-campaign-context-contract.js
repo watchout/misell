@@ -169,6 +169,10 @@ function assertContextSourceAssetContract(input) {
   if (extractionStatus !== "manual_no_ai") {
     throw new Error("context source asset extraction_status must be manual_no_ai in the #145 context source slice");
   }
+  const sourceOwner = cleanString(input?.source_owner || input?.sourceOwner || "customer");
+  const visibilityScope = cleanString(input?.visibility_scope || input?.visibilityScope || "customer_visible");
+  assertEnum("source_owner", sourceOwner, SOURCE_OWNERS);
+  assertEnum("visibility_scope", visibilityScope, VISIBILITY_SCOPES);
   const maxSizeBytes = maxContextSourceAssetBytes(extension, mimeType);
   if (sizeBytes > maxSizeBytes) {
     throw new Error(`context source asset size exceeds limit: ${sizeBytes} > ${maxSizeBytes}`);
@@ -179,8 +183,8 @@ function assertContextSourceAssetContract(input) {
     tenant_id: cleanId(input?.tenant_id || input?.tenantId),
     store_id: cleanId(input?.store_id || input?.storeId),
     screen_group_id: cleanId(input?.screen_group_id || input?.screenGroupId),
-    source_owner: cleanString(input?.source_owner || input?.sourceOwner || "customer"),
-    visibility_scope: cleanString(input?.visibility_scope || input?.visibilityScope || "customer_visible"),
+    source_owner: sourceOwner,
+    visibility_scope: visibilityScope,
     usage_notes: cleanString(input?.usage_notes || input?.usageNotes).slice(0, 4000),
     extraction_status: extractionStatus,
     extension,

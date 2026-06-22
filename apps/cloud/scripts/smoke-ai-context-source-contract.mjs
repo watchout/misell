@@ -114,6 +114,20 @@ const imageAsset = assertContextSourceAssetContract({
   extraction_status: "manual_no_ai"
 });
 
+const internalAsset = assertContextSourceAssetContract({
+  context_item_id: "ctx-internal-note",
+  asset_id: "asset-internal-note-pdf",
+  tenant_id: "TEN-CTX",
+  store_id: "STO-CTX",
+  screen_group_id: "SG-CTX",
+  filename: "internal-note.pdf",
+  mime_type: "application/pdf",
+  source_owner: "misell_operator",
+  visibility_scope: "operator_internal",
+  usage_notes: "社内確認用。AI処理なし。",
+  extraction_status: "manual_no_ai"
+});
+
 expectError(() => assertContextSourceAssetContract({ filename: "unsafe.exe", mime_type: "application/octet-stream" }), "extension");
 expectError(() => assertContextSourceAssetContract({ filename: "unsafe.svg", mime_type: "image/svg+xml" }), "extension");
 expectError(() => assertContextSourceAssetContract({ filename: "source.docx", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }), "extension");
@@ -128,6 +142,8 @@ expectError(() => assertContextSourceAssetContract({ filename: "external.pdf", m
 expectError(() => assertContextSourceAssetContract({ filename: "processing.pdf", mime_type: "application/pdf", extraction_status: "processing" }), "automatic document processing");
 expectError(() => assertContextSourceAssetContract({ filename: "completed.pdf", mime_type: "application/pdf", extraction_status: "completed" }), "manual_no_ai");
 expectError(() => assertContextSourceAssetContract({ filename: "not-requested.pdf", mime_type: "application/pdf", extraction_status: "not_requested" }), "manual_no_ai");
+expectError(() => assertContextSourceAssetContract({ filename: "bad-owner.pdf", mime_type: "application/pdf", source_owner: "unknown_owner" }), "source_owner");
+expectError(() => assertContextSourceAssetContract({ filename: "bad-scope.pdf", mime_type: "application/pdf", visibility_scope: "public" }), "visibility_scope");
 expectError(() => assertContextContract({
   context_category: "internal_notes",
   visibility_scope: "operator_internal",
@@ -168,6 +184,8 @@ const pdfSummary = snapshot.find((item) => item.customer_context_item_id === "ct
 assert(pdfSummary.source_assets.length === 1, "PDF source asset should be linked to the context snapshot summary");
 assert(pdfSummary.source_assets[0].extraction_status === "manual_no_ai", "source asset must remain manual_no_ai in this slice");
 assert(pdfSummary.source_assets[0].external_ai_used === false, "source asset must not use external AI in this slice");
+assert(internalAsset.source_owner === "misell_operator", "source asset source_owner should preserve validated operator owner");
+assert(internalAsset.visibility_scope === "operator_internal", "source asset visibility_scope should preserve validated internal scope");
 assert(CONTEXT_SOURCE_ASSET_EXTENSIONS.includes(".pdf"), "PDF extension must be part of context source asset contract");
 assert(!CONTEXT_SOURCE_ASSET_EXTENSIONS.includes(".docx"), "DOCX must not be part of the MVP context source asset contract");
 assert(CONTEXT_SOURCE_ASSET_MIME_TYPES.includes("application/pdf"), "PDF mime type must be part of context source asset contract");
@@ -187,6 +205,7 @@ console.log(JSON.stringify({
   pdf_context_source_asset: true,
   image_context_source_asset: true,
   mime_extension_guard: true,
+  source_asset_scope_vocabulary: true,
   upload_size_limits: true,
   mvp_forbidden_file_types: true,
   soft_delete_status_contract: true,
