@@ -2,8 +2,11 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const {
+  CONTEXT_RECORD_STATUSES,
   CONTEXT_SOURCE_ASSET_EXTENSIONS,
+  CONTEXT_SOURCE_IMAGE_MAX_BYTES,
   CONTEXT_SOURCE_ASSET_MIME_TYPES,
+  CONTEXT_SOURCE_PDF_MAX_BYTES,
   assertContextContract,
   assertContextSourceAssetContract,
   assertNoAutomaticExternalAi,
@@ -61,6 +64,7 @@ const pdfAsset = assertContextSourceAssetContract({
   screen_group_id: "SG-CTX",
   filename: "summer-menu.pdf",
   mime_type: "application/pdf",
+  size_bytes: CONTEXT_SOURCE_PDF_MAX_BYTES,
   source_owner: "customer",
   visibility_scope: "customer_visible",
   usage_notes: "夏メニューPDF。要約は手入力。",
@@ -75,11 +79,18 @@ const imageAsset = assertContextSourceAssetContract({
   screen_group_id: "SG-CTX",
   filename: "brand-logo.png",
   mime_type: "image/png",
+  size_bytes: CONTEXT_SOURCE_IMAGE_MAX_BYTES,
   usage_notes: "ロゴ利用可。余白を確保する。",
   extraction_status: "manual_no_ai"
 });
 
 expectError(() => assertContextSourceAssetContract({ filename: "unsafe.exe", mime_type: "application/octet-stream" }), "extension");
+expectError(() => assertContextSourceAssetContract({ filename: "unsafe.svg", mime_type: "image/svg+xml" }), "extension");
+expectError(() => assertContextSourceAssetContract({ filename: "source.docx", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }), "extension");
+expectError(() => assertContextSourceAssetContract({ filename: "deck.pptx", mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }), "extension");
+expectError(() => assertContextSourceAssetContract({ filename: "notes.txt", mime_type: "text/plain" }), "extension");
+expectError(() => assertContextSourceAssetContract({ filename: "too-large.pdf", mime_type: "application/pdf", size_bytes: CONTEXT_SOURCE_PDF_MAX_BYTES + 1 }), "size");
+expectError(() => assertContextSourceAssetContract({ filename: "too-large.png", mime_type: "image/png", size_bytes: CONTEXT_SOURCE_IMAGE_MAX_BYTES + 1 }), "size");
 expectError(() => assertContextContract({
   context_category: "internal_notes",
   visibility_scope: "operator_internal",
@@ -121,7 +132,10 @@ assert(pdfSummary.source_assets.length === 1, "PDF source asset should be linked
 assert(pdfSummary.source_assets[0].extraction_status === "manual_no_ai", "source asset must remain manual_no_ai in this slice");
 assert(pdfSummary.source_assets[0].external_ai_used === false, "source asset must not use external AI in this slice");
 assert(CONTEXT_SOURCE_ASSET_EXTENSIONS.includes(".pdf"), "PDF extension must be part of context source asset contract");
+assert(!CONTEXT_SOURCE_ASSET_EXTENSIONS.includes(".docx"), "DOCX must not be part of the MVP context source asset contract");
 assert(CONTEXT_SOURCE_ASSET_MIME_TYPES.includes("application/pdf"), "PDF mime type must be part of context source asset contract");
+assert(!CONTEXT_SOURCE_ASSET_MIME_TYPES.includes("text/plain"), "plain text upload must not be part of the MVP context source asset contract");
+assert(CONTEXT_RECORD_STATUSES.includes("deleted"), "context records should support soft-delete status");
 assert(normalizeCostOwner("manual_no_ai") === "manual_no_ai", "manual_no_ai cost owner should be accepted");
 
 console.log(JSON.stringify({
@@ -130,6 +144,9 @@ console.log(JSON.stringify({
   operator_internal_hidden: true,
   pdf_context_source_asset: true,
   image_context_source_asset: true,
+  upload_size_limits: true,
+  mvp_forbidden_file_types: true,
+  soft_delete_status_contract: true,
   manual_no_ai_only: true,
   cost_owner_contract: true,
   snapshot_source_summary: true

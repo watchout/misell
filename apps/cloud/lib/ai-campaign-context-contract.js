@@ -49,6 +49,12 @@ const CONFIDENCE_LEVELS = Object.freeze([
   "expired"
 ]);
 
+const CONTEXT_RECORD_STATUSES = Object.freeze([
+  "active",
+  "archived",
+  "deleted"
+]);
+
 const COST_OWNERS = Object.freeze([
   "included_monthly",
   "customer_credit",
@@ -67,29 +73,22 @@ const DOCUMENT_PROCESSING_STATUSES = Object.freeze([
   "blocked_external_ai"
 ]);
 
+const CONTEXT_SOURCE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+const CONTEXT_SOURCE_PDF_MAX_BYTES = 100 * 1024 * 1024;
+
 const CONTEXT_SOURCE_ASSET_EXTENSIONS = Object.freeze([
   ".jpg",
   ".jpeg",
   ".png",
   ".webp",
-  ".pdf",
-  ".txt",
-  ".md",
-  ".csv",
-  ".docx",
-  ".pptx"
+  ".pdf"
 ]);
 
 const CONTEXT_SOURCE_ASSET_MIME_TYPES = Object.freeze([
   "image/jpeg",
   "image/png",
   "image/webp",
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+  "application/pdf"
 ]);
 
 function assertContextContract(input, options = {}) {
@@ -99,6 +98,7 @@ function assertContextContract(input, options = {}) {
   assertEnum("source_owner", normalized.source_owner, SOURCE_OWNERS);
   assertEnum("source_type", normalized.source_type, SOURCE_TYPES);
   assertEnum("confidence", normalized.confidence, CONFIDENCE_LEVELS);
+  assertEnum("status", normalized.status, CONTEXT_RECORD_STATUSES);
   if (options.customerInput) assertCustomerWritableContext(normalized);
   return normalized;
 }
@@ -141,11 +141,16 @@ function canCustomerReadContext(session, context) {
 function assertContextSourceAssetContract(input) {
   const extension = normalizeExtension(input?.extension || input?.filename || input?.original_name || input?.originalName || input?.path);
   const mimeType = cleanString(input?.mime_type || input?.mimeType);
+  const sizeBytes = normalizeSizeBytes(input?.size_bytes ?? input?.sizeBytes ?? input?.size);
   if (!CONTEXT_SOURCE_ASSET_EXTENSIONS.includes(extension)) {
     throw new Error(`context source asset extension is not allowed: ${extension || "missing"}`);
   }
   if (mimeType && !CONTEXT_SOURCE_ASSET_MIME_TYPES.includes(mimeType)) {
     throw new Error(`context source asset mime_type is not allowed: ${mimeType}`);
+  }
+  const maxSizeBytes = maxContextSourceAssetBytes(extension, mimeType);
+  if (sizeBytes > maxSizeBytes) {
+    throw new Error(`context source asset size exceeds limit: ${sizeBytes} > ${maxSizeBytes}`);
   }
   return {
     asset_id: cleanId(input?.asset_id || input?.assetId),
@@ -158,7 +163,9 @@ function assertContextSourceAssetContract(input) {
     usage_notes: cleanString(input?.usage_notes || input?.usageNotes).slice(0, 4000),
     extraction_status: cleanString(input?.extraction_status || input?.extractionStatus || "manual_no_ai"),
     extension,
-    mime_type: mimeType
+    mime_type: mimeType,
+    size_bytes: sizeBytes,
+    max_size_bytes: maxSizeBytes
   };
 }
 
@@ -213,6 +220,18 @@ function normalizeExtension(value) {
   return last.replace(/[^a-z0-9.]/g, "");
 }
 
+function maxContextSourceAssetBytes(extension, mimeType = "") {
+  if (extension === ".pdf" || mimeType === "application/pdf") return CONTEXT_SOURCE_PDF_MAX_BYTES;
+  return CONTEXT_SOURCE_IMAGE_MAX_BYTES;
+}
+
+function normalizeSizeBytes(value) {
+  if (value === undefined || value === null || value === "") return 0;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0) throw new Error("context source asset size_bytes must be a non-negative safe integer");
+  return number;
+}
+
 function cleanString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -227,8 +246,11 @@ module.exports = {
   SOURCE_OWNERS,
   SOURCE_TYPES,
   CONFIDENCE_LEVELS,
+  CONTEXT_RECORD_STATUSES,
   COST_OWNERS,
   DOCUMENT_PROCESSING_STATUSES,
+  CONTEXT_SOURCE_IMAGE_MAX_BYTES,
+  CONTEXT_SOURCE_PDF_MAX_BYTES,
   CONTEXT_SOURCE_ASSET_EXTENSIONS,
   CONTEXT_SOURCE_ASSET_MIME_TYPES,
   assertContextContract,
@@ -238,5 +260,6 @@ module.exports = {
   assertContextSourceAssetContract,
   buildContextSnapshotSourceSummary,
   normalizeCostOwner,
-  assertNoAutomaticExternalAi
+  assertNoAutomaticExternalAi,
+  maxContextSourceAssetBytes
 };
