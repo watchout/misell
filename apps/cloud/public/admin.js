@@ -7,7 +7,11 @@
     releaseManifests: [],
     contentManifests: [],
     contentRollout: null,
-    issuedToken: null
+    storeSettings: [],
+    counterOrders: [],
+    storeAccessTokens: [],
+    issuedToken: null,
+    issuedStoreAccessToken: null
   };
 
   const STATUS_LABELS = {
@@ -91,6 +95,13 @@
     ["restart_kiosk", DEVICE_COMMAND_LABELS.restart_kiosk]
   ];
 
+  const COUNTER_ORDER_STATUS_LABELS = {
+    issued: "未引換",
+    redeemed: "引換済み",
+    expired: "期限切れ",
+    cancelled: "取消"
+  };
+
   const ROLLOUT_STATUS_LABELS = {
     ready: "反映済み",
     pending: "未反映",
@@ -107,6 +118,8 @@
     contentManifests: document.getElementById("content-manifests"),
     assets: document.getElementById("assets"),
     logBundles: document.getElementById("log-bundles"),
+    storeAccessTokens: document.getElementById("store-access-tokens"),
+    counterOrders: document.getElementById("counter-orders"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
   };
@@ -127,12 +140,15 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, deviceCommands, alerts, notifications, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/device-commands?limit=100").catch(() => ({ device_commands: [] })),
       fetchJson("/api/admin/alerts"),
       fetchJson("/api/admin/alert-notifications"),
+      fetchJson("/api/admin/store-settings").catch(() => ({ store_settings: [] })),
+      fetchJson("/api/admin/counter-orders?limit=100").catch(() => ({ counter_orders: [] })),
+      fetchJson("/api/admin/store-access-tokens?limit=100").catch(() => ({ store_access_tokens: [] })),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/assets"),
@@ -144,6 +160,9 @@
     state.summary = summary;
     state.devices = devices.devices || [];
     state.deviceCommands = deviceCommands.device_commands || [];
+    state.storeSettings = storeSettings.store_settings || [];
+    state.counterOrders = counterOrders.counter_orders || [];
+    state.storeAccessTokens = storeAccessTokens.store_access_tokens || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
@@ -152,6 +171,8 @@
     renderDevices(state.devices);
     renderAlerts(alerts.alerts || []);
     renderNotifications(notifications);
+    renderStoreAccessTokens(state.storeAccessTokens);
+    renderCounterOrders(state.counterOrders);
     renderReleaseManifests(state.releaseManifests);
     renderContentManifests(state.contentManifests);
     renderAssets(state.assets, assets.max_upload_mb);
@@ -1075,7 +1096,7 @@
 
   function renderTokenResult() {
     if (!els.tokenResult) return;
-    if (!state.issuedToken) {
+    if (!state.issuedToken && !state.issuedStoreAccessToken) {
       els.tokenResult.hidden = true;
       els.tokenResult.innerHTML = "";
       return;
@@ -1083,29 +1104,46 @@
 
     els.tokenResult.hidden = false;
     els.tokenResult.innerHTML = `
-      <h2>発行済み端末トークン</h2>
-      <div class="token-banner">
-        <div>
-          <strong>${escapeHtml(state.issuedToken.device_id)}</strong>
-          <small>${formatTime(state.issuedToken.issued_at)}</small>
+      <h2>発行済み認証情報</h2>
+      ${state.issuedToken ? `
+        <div class="token-banner">
+          <div>
+            <strong>端末 ${escapeHtml(state.issuedToken.device_id)}</strong>
+            <small>${formatTime(state.issuedToken.issued_at)}</small>
+          </div>
+          <input id="issued-token" class="token-value" type="text" readonly value="${escapeHtml(state.issuedToken.token)}" aria-label="発行済み端末トークン">
+          <button class="copy-issued-value" type="button" data-target-id="issued-token">コピー</button>
+          <button id="clear-issued-token" class="secondary" type="button">閉じる</button>
         </div>
-        <input id="issued-token" class="token-value" type="text" readonly value="${escapeHtml(state.issuedToken.token)}" aria-label="発行済み端末トークン">
-        <button id="copy-issued-token" type="button">コピー</button>
-        <button id="clear-issued-token" class="secondary" type="button">閉じる</button>
-      </div>
+      ` : ""}
+      ${state.issuedStoreAccessToken ? `
+        <div class="token-banner">
+          <div>
+            <strong>店舗受付 ${escapeHtml(state.issuedStoreAccessToken.store_id)}</strong>
+            <small>${formatTime(state.issuedStoreAccessToken.issued_at)}</small>
+          </div>
+          <input id="issued-store-url" class="token-value" type="text" readonly value="${escapeHtml(state.issuedStoreAccessToken.url)}" aria-label="発行済み店舗受付URL">
+          <button class="copy-issued-value" type="button" data-target-id="issued-store-url">URLコピー</button>
+          <button id="clear-issued-store-token" class="secondary" type="button">閉じる</button>
+        </div>
+      ` : ""}
     `;
 
-    const tokenInput = document.getElementById("issued-token");
-    const copyButton = document.getElementById("copy-issued-token");
-    const clearButton = document.getElementById("clear-issued-token");
-    copyButton?.addEventListener("click", async () => {
-      tokenInput?.select();
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(state.issuedToken.token).catch(() => {});
-      }
+    els.tokenResult.querySelectorAll(".copy-issued-value").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const input = document.getElementById(button.dataset.targetId);
+        input?.select();
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(input?.value || "").catch(() => {});
+        }
+      });
     });
-    clearButton?.addEventListener("click", () => {
+    document.getElementById("clear-issued-token")?.addEventListener("click", () => {
       state.issuedToken = null;
+      renderTokenResult();
+    });
+    document.getElementById("clear-issued-store-token")?.addEventListener("click", () => {
+      state.issuedStoreAccessToken = null;
       renderTokenResult();
     });
   }
@@ -1125,6 +1163,221 @@
       window.alert(error.message || "テスト送信に失敗しました。");
       button.disabled = false;
       button.textContent = "テスト送信";
+    }
+  }
+
+  function renderStoreAccessTokens(tokens) {
+    if (!els.storeAccessTokens) return;
+    const stores = state.storeSettings || [];
+    els.storeAccessTokens.innerHTML = `
+      <form class="store-access-create">
+        <select name="store_id" aria-label="店舗" required>
+          <option value="">店舗を選択</option>
+          ${stores.map((store) => (
+            `<option value="${escapeHtml(store.store_id || "")}">${escapeHtml(store.store_name || store.store_id || "")}</option>`
+          )).join("")}
+        </select>
+        <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="スタッフPIN" aria-label="スタッフPIN" required>
+        <input name="notes" type="text" placeholder="メモ" aria-label="メモ">
+        <button type="submit">URL発行</button>
+      </form>
+      ${tokens.length === 0 ? `<p class="empty">店舗受付URLはまだ発行されていません。</p>` : `
+        <table class="store-access-table">
+          <thead>
+            <tr>
+              <th>店舗</th>
+              <th>Status</th>
+              <th>PIN</th>
+              <th>最終利用</th>
+              <th>運用</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tokens.slice(0, 50).map(renderStoreAccessTokenRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+    els.storeAccessTokens.querySelector(".store-access-create")?.addEventListener("submit", handleStoreAccessTokenCreate);
+    els.storeAccessTokens.querySelectorAll(".store-access-rotate").forEach((button) => {
+      button.addEventListener("click", handleStoreAccessTokenRotate);
+    });
+    els.storeAccessTokens.querySelectorAll(".store-access-pin-reset").forEach((button) => {
+      button.addEventListener("click", handleStoreAccessTokenPinReset);
+    });
+  }
+
+  function renderStoreAccessTokenRow(token) {
+    return `
+      <tr>
+        <td>${escapeHtml(token.store_name || token.store_id || "")}<small>${escapeHtml(token.store_id || "")}</small></td>
+        <td>
+          <span class="update-status update-status-${token.status === "active" ? "success" : "failed"}">${escapeHtml(token.status || "")}</span>
+          ${token.locked_until ? `<small>lock ${formatTime(token.locked_until)}</small>` : ""}
+        </td>
+        <td>失敗 ${formatNumber(token.failed_attempts || 0)}<small>更新 ${formatTime(token.pin_rotated_at)}</small></td>
+        <td>${formatTime(token.last_used_at)}<small>${escapeHtml(token.notes || "")}</small></td>
+        <td>
+          <button class="secondary store-access-rotate" type="button" data-token-id="${escapeHtml(token.store_access_token_id || "")}">URL再発行</button>
+          <button class="secondary store-access-pin-reset" type="button" data-token-id="${escapeHtml(token.store_access_token_id || "")}">PIN変更</button>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function handleStoreAccessTokenCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const storeId = form.elements.store_id.value;
+    button.disabled = true;
+    button.textContent = "発行中";
+    try {
+      const result = await fetchJson(`/api/admin/stores/${encodeURIComponent(storeId)}/access-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pin: form.elements.pin.value,
+          notes: form.elements.notes.value
+        })
+      });
+      state.issuedStoreAccessToken = {
+        store_id: storeId,
+        token: result.store_token,
+        url: result.store_orders_url,
+        issued_at: new Date().toISOString()
+      };
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "店舗受付URLの発行に失敗しました。");
+      button.disabled = false;
+      button.textContent = "URL発行";
+    }
+  }
+
+  async function handleStoreAccessTokenRotate(event) {
+    const button = event.currentTarget;
+    const tokenId = button.dataset.tokenId;
+    if (!window.confirm("店舗受付URLを再発行します。旧URLのセッションは失効します。")) return;
+    button.disabled = true;
+    try {
+      const result = await fetchJson(`/api/admin/store-access-tokens/${encodeURIComponent(tokenId)}/rotate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      state.issuedStoreAccessToken = {
+        store_id: result.store_access_token?.store_id || "",
+        token: result.store_token,
+        url: result.store_orders_url,
+        issued_at: new Date().toISOString()
+      };
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "店舗受付URLの再発行に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleStoreAccessTokenPinReset(event) {
+    const button = event.currentTarget;
+    const tokenId = button.dataset.tokenId;
+    const pin = window.prompt("新しいスタッフPINを4〜12桁の数字で入力してください。");
+    if (pin === null) return;
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/admin/store-access-tokens/${encodeURIComponent(tokenId)}/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "PIN変更に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  function renderCounterOrders(orders) {
+    if (!els.counterOrders) return;
+    if (orders.length === 0) {
+      els.counterOrders.innerHTML = `<p class="empty">カウンター注文はまだありません。</p>`;
+      return;
+    }
+    els.counterOrders.innerHTML = `
+      <table class="counter-orders-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>受付</th>
+            <th>店舗</th>
+            <th>内容</th>
+            <th>合計</th>
+            <th>発行</th>
+            <th>運用</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orders.slice(0, 100).map(renderCounterOrderRow).join("")}
+        </tbody>
+      </table>
+    `;
+    els.counterOrders.querySelectorAll(".counter-order-action").forEach((form) => {
+      form.addEventListener("submit", handleCounterOrderStatusUpdate);
+    });
+  }
+
+  function renderCounterOrderRow(order) {
+    const items = Array.isArray(order.items) ? order.items : [];
+    return `
+      <tr>
+        <td>
+          <span class="update-status update-status-${escapeAttr(counterOrderStatusClass(order.status))}">
+            ${escapeHtml(COUNTER_ORDER_STATUS_LABELS[order.status] || order.status || "")}
+          </span>
+        </td>
+        <td>${escapeHtml(order.order_number || "")}<small>確認 ${escapeHtml(order.verify_code || "")}</small></td>
+        <td>${escapeHtml(order.store_id || "")}<small>${escapeHtml(order.business_date || "")}</small></td>
+        <td>${escapeHtml(items.map((item) => `${item.item_name_snapshot} x ${item.quantity}`).join(" / "))}</td>
+        <td>${formatCurrency(order.total_amount, order.currency)}</td>
+        <td>${formatTime(order.issued_at)}</td>
+        <td>
+          <form class="counter-order-action" data-order-id="${escapeHtml(order.counter_order_id || "")}">
+            <select name="status" aria-label="注文ステータス">
+              ${Object.entries(COUNTER_ORDER_STATUS_LABELS).map(([value, label]) => (
+                `<option value="${escapeAttr(value)}"${value === order.status ? " selected" : ""}>${escapeHtml(label)}</option>`
+              )).join("")}
+            </select>
+            <input name="reason" type="text" placeholder="理由" aria-label="理由">
+            <button type="submit">保存</button>
+          </form>
+        </td>
+      </tr>
+    `;
+  }
+
+  async function handleCounterOrderStatusUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const orderId = form.dataset.orderId;
+    button.disabled = true;
+    button.textContent = "保存中";
+    try {
+      await fetchJson(`/api/admin/counter-orders/${encodeURIComponent(orderId)}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: form.elements.status.value,
+          reason: form.elements.reason.value
+        })
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "カウンター注文の保存に失敗しました。");
+      button.disabled = false;
+      button.textContent = "保存";
     }
   }
 
@@ -1176,6 +1429,11 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  function formatCurrency(amount, currency) {
+    const value = Number(amount || 0).toLocaleString("ja-JP");
+    return (currency || "JPY") === "JPY" ? `${value}円` : `${value} ${currency || ""}`;
+  }
+
   function releaseManifestStatusClass(status) {
     if (status === "active") return "success";
     if (status === "retired") return "idle";
@@ -1186,6 +1444,13 @@
     if (status === "ready") return "success";
     if (status === "failed") return "failed";
     if (status === "updating") return "pending";
+    return "idle";
+  }
+
+  function counterOrderStatusClass(status) {
+    if (status === "issued") return "success";
+    if (status === "redeemed") return "succeeded";
+    if (status === "cancelled" || status === "expired") return "failed";
     return "idle";
   }
 

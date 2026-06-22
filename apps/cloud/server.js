@@ -94,6 +94,25 @@ const DEVICE_COMMAND_RETENTION_DAYS = normalizedLimit(
   1,
   3650
 );
+const STORE_ACCESS_TOKEN_PEPPER = process.env.MISELL_STORE_ACCESS_TOKEN_PEPPER || process.env.STORE_ACCESS_TOKEN_PEPPER || DEVICE_TOKEN_PEPPER;
+const STORE_STAFF_SESSION_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_STORE_STAFF_SESSION_TTL_SECONDS,
+  12 * 60 * 60,
+  60,
+  7 * 24 * 60 * 60
+);
+const STORE_STAFF_PIN_MAX_ATTEMPTS = normalizedLimit(
+  process.env.MISELL_STORE_STAFF_PIN_MAX_ATTEMPTS,
+  5,
+  1,
+  20
+);
+const STORE_STAFF_PIN_LOCK_SECONDS = normalizedLimit(
+  process.env.MISELL_STORE_STAFF_PIN_LOCK_SECONDS,
+  10 * 60,
+  60,
+  24 * 60 * 60
+);
 const QR_DESTINATION_TYPES = new Set([
   "external_url",
   "coupon",
@@ -103,6 +122,14 @@ const QR_DESTINATION_TYPES = new Set([
   "line",
   "reservation",
   "counter_order_offer"
+]);
+const ORDER_PAGE_EVENTS = new Set([
+  "view",
+  "save_image",
+  "share",
+  "copy_order_number",
+  "copy_url",
+  "open_previous_order"
 ]);
 const DEFAULT_TIMEZONE = "Asia/Tokyo";
 const DEFAULT_CURRENCY = "JPY";
@@ -384,6 +411,10 @@ app.get("/api/admin/store-settings", requireAdminAuth, (req, res) => {
   res.json({ ok: true, store_settings: listStoreSettings() });
 });
 
+app.get("/api/admin/store-access-tokens", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, store_access_tokens: listStoreAccessTokens(req.query || {}) });
+});
+
 app.get("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res) => {
   const settings = getStoreSettings(cleanId(req.params.store_id), { withDefaults: true });
   if (!settings) {
@@ -397,6 +428,33 @@ app.put("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res, nex
   try {
     const settings = upsertStoreSettings(cleanId(req.params.store_id), req.body || {});
     res.json({ ok: true, store_settings: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/stores/:store_id/access-token", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createStoreAccessToken(cleanId(req.params.store_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/store-access-tokens/:store_access_token_id/rotate", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = rotateStoreAccessToken(cleanId(req.params.store_access_token_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/store-access-tokens/:store_access_token_id/pin", requireAdminAuth, (req, res, next) => {
+  try {
+    const token = resetStoreAccessTokenPin(cleanId(req.params.store_access_token_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, store_access_token: token });
   } catch (error) {
     next(error);
   }
@@ -547,10 +605,84 @@ app.post("/q/:qr_token/orders", (req, res, next) => {
 app.get("/order/:order_token", (req, res) => {
   const order = getCounterOrderByToken(cleanString(req.params.order_token));
   if (!order) {
+    if (requestAcceptsHtml(req)) {
+      res.status(404).type("html").send(renderOrderNotFoundPage());
+      return;
+    }
     res.status(404).json({ error: "Order not found" });
     return;
   }
+  if (requestAcceptsHtml(req)) {
+    res.type("html").send(renderCounterOrderPage(order, cleanString(req.params.order_token), req));
+    return;
+  }
   res.json({ ok: true, counter_order: order });
+});
+
+app.get("/api/public/orders/:order_token", (req, res) => {
+  const order = getCounterOrderByToken(cleanString(req.params.order_token));
+  if (!order) {
+    res.status(404).json({ error: "Order not found" });
+    return;
+  }
+  res.json({ ok: true, counter_order: withCounterOrderStoreProfile(order) });
+});
+
+app.post("/api/public/orders/:order_token/events", (req, res, next) => {
+  try {
+    const event = recordOrderPageEvent(cleanString(req.params.order_token), req.body || {}, req);
+    res.status(201).json({ ok: true, event });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/store/orders/:store_token", (req, res) => {
+  const storeAccess = getStoreAccessTokenByRawToken(cleanString(req.params.store_token));
+  if (!storeAccess || storeAccess.status !== "active") {
+    res.status(404).type("html").send(renderStoreOrdersNotFoundPage());
+    return;
+  }
+  res.type("html").send(renderStoreOrdersPage(storeAccess, req));
+});
+
+app.post("/store/orders/:store_token/session", (req, res, next) => {
+  try {
+    const session = createStoreStaffSession(cleanString(req.params.store_token), req.body || {}, req);
+    setStoreStaffSessionCookie(req, res, session.session_token, session.expires_at);
+    res.status(201).json({ ok: true, session: publicStoreStaffSession(session), store: session.store });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/store/orders/session", requireStoreStaffSession, (req, res) => {
+  res.json({ ok: true, session: publicStoreStaffSession(req.storeStaffSession), store: req.storeStaffSession.store });
+});
+
+app.post("/api/store/orders/logout", requireStoreStaffSession, (req, res) => {
+  revokeStoreStaffSession(req.storeStaffSession);
+  clearStoreStaffSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/store/orders", requireStoreStaffSession, (req, res) => {
+  res.json({
+    ok: true,
+    counter_orders: listCounterOrders({
+      ...req.query,
+      store_id: req.storeStaffSession.store_id
+    })
+  });
+});
+
+app.patch("/api/store/orders/:counter_order_id/status", requireStoreStaffSession, (req, res, next) => {
+  try {
+    const order = updateStoreCounterOrderStatus(req.storeStaffSession, cleanId(req.params.counter_order_id), req.body || {});
+    res.json({ ok: true, counter_order: order });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/admin/counter-orders", requireAdminAuth, (req, res) => {
@@ -2736,6 +2868,55 @@ function schemaMigrations() {
             ON device_commands(requested_at DESC, device_id, command_type);
         `);
       }
+    },
+    {
+      version: 7,
+      name: "counter_order_customer_and_store_staff_ux",
+      up() {
+        addColumnIfMissing("store_access_tokens", "last_used_at", "TEXT");
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS store_staff_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_staff_session_id TEXT NOT NULL UNIQUE,
+            store_access_token_id TEXT NOT NULL,
+            session_token_hash TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT,
+            FOREIGN KEY(store_access_token_id) REFERENCES store_access_tokens(store_access_token_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS order_page_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_page_event_id TEXT NOT NULL UNIQUE,
+            counter_order_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            event_name TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            user_agent TEXT,
+            ip_hash TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(counter_order_id) REFERENCES counter_orders(counter_order_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_store_staff_sessions_token
+            ON store_staff_sessions(session_token_hash, status, expires_at);
+          CREATE INDEX IF NOT EXISTS idx_store_staff_sessions_store
+            ON store_staff_sessions(store_id, status, expires_at);
+          CREATE INDEX IF NOT EXISTS idx_order_page_events_order
+            ON order_page_events(counter_order_id, occurred_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_order_page_events_store
+            ON order_page_events(store_id, event_name, occurred_at DESC);
+        `);
+      }
     }
   ];
 }
@@ -3688,21 +3869,17 @@ function publicQrLink(row) {
 function listCounterOrders(query = {}) {
   const storeId = cleanId(query.store_id);
   const status = cleanString(query.status);
+  const q = cleanString(query.q || query.search || "").slice(0, 80);
   const boundedLimit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
-  const rows = storeId
-    ? db.prepare(`
-      SELECT * FROM counter_orders
-      WHERE store_id = ?
-        AND (? = '' OR status = ?)
-      ORDER BY issued_at DESC, id DESC
-      LIMIT ?
-    `).all(storeId, status, status, boundedLimit)
-    : db.prepare(`
-      SELECT * FROM counter_orders
-      WHERE (? = '' OR status = ?)
-      ORDER BY issued_at DESC, id DESC
-      LIMIT ?
-    `).all(status, status, boundedLimit);
+  const qLike = q ? `%${q}%` : "";
+  const rows = db.prepare(`
+    SELECT * FROM counter_orders
+    WHERE (? = '' OR store_id = ?)
+      AND (? = '' OR status = ?)
+      AND (? = '' OR order_number LIKE ? OR verify_code LIKE ? OR counter_order_id LIKE ?)
+    ORDER BY issued_at DESC, id DESC
+    LIMIT ?
+  `).all(storeId, storeId, status, status, q, qLike, qLike, qLike, boundedLimit);
   return rows.map(publicCounterOrder);
 }
 
@@ -3817,7 +3994,21 @@ function updateCounterOrderStatus(counterOrderId, input) {
     now,
     existing.counter_order_id
   );
-  recordAuditLog("admin", cleanString(input.actor_id || "admin"), "counter_order.status_update", "counter_order", existing.counter_order_id, existing, getCounterOrder(existing.counter_order_id), { status }, now);
+  recordAuditLog(
+    cleanString(input.actor_type || "admin"),
+    cleanString(input.actor_id || "admin"),
+    cleanString(input.audit_action || "counter_order.status_update"),
+    "counter_order",
+    existing.counter_order_id,
+    existing,
+    getCounterOrder(existing.counter_order_id),
+    {
+      status,
+      store_id: cleanId(existing.store_id),
+      reason: cleanString(input.reason || input.cancellation_reason).slice(0, 1000)
+    },
+    now
+  );
   return getCounterOrder(existing.counter_order_id);
 }
 
@@ -3880,6 +4071,471 @@ function publicCounterOrder(row) {
     created_at: cleanString(item.created_at)
   }));
   return order;
+}
+
+function withCounterOrderStoreProfile(order) {
+  const store = getStoreSettings(order.store_id, { withDefaults: true }) || {
+    tenant_id: order.tenant_id,
+    store_id: order.store_id,
+    store_name: order.store_id,
+    timezone: DEFAULT_TIMEZONE,
+    business_day_start_time: "00:00",
+    pickup_available_from: "",
+    pickup_available_until: "",
+    currency: order.currency,
+    tax_included: order.tax_included
+  };
+  return {
+    ...order,
+    store: {
+      tenant_id: cleanId(store.tenant_id || order.tenant_id),
+      store_id: cleanId(store.store_id || order.store_id),
+      store_name: cleanString(store.store_name || order.store_id),
+      timezone: cleanString(store.timezone || DEFAULT_TIMEZONE),
+      pickup_available_from: cleanString(store.pickup_available_from),
+      pickup_available_until: cleanString(store.pickup_available_until)
+    }
+  };
+}
+
+function recordOrderPageEvent(orderToken, input, req) {
+  const order = getCounterOrderByToken(orderToken);
+  if (!order) throw requestError("Order not found", 404);
+  const eventName = cleanString(input.event_name || input.eventName || input.name || "view").slice(0, 80);
+  if (!ORDER_PAGE_EVENTS.has(eventName)) {
+    throw requestError(`event_name must be one of: ${Array.from(ORDER_PAGE_EVENTS).join(", ")}`, 400);
+  }
+  const now = requestNowIso(input);
+  const metadata = {
+    source: cleanString(input.source || "order_page").slice(0, 80),
+    previous_order_token_present: Boolean(input.previous_order_token_present || input.previousOrderTokenPresent),
+    user_action: cleanString(input.user_action || input.userAction).slice(0, 120)
+  };
+  const eventId = nextEntityId("ope", `${order.counter_order_id}-${eventName}`);
+  db.prepare(`
+    INSERT INTO order_page_events (
+      order_page_event_id, counter_order_id, tenant_id, store_id, event_name,
+      occurred_at, user_agent, ip_hash, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    eventId,
+    order.counter_order_id,
+    order.tenant_id,
+    order.store_id,
+    eventName,
+    now,
+    cleanString(req.get("user-agent")).slice(0, 500),
+    hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`),
+    JSON.stringify(metadata)
+  );
+  return {
+    order_page_event_id: eventId,
+    counter_order_id: order.counter_order_id,
+    event_name: eventName,
+    occurred_at: now
+  };
+}
+
+function createStoreAccessToken(storeId, input, actor = {}) {
+  const store = db.prepare("SELECT * FROM stores WHERE store_id = ?").get(cleanId(storeId));
+  if (!store) throw requestError("Store not found", 404);
+  const pin = normalizeStoreStaffPin(input.pin);
+  const now = nowIso();
+  const token = generateStoreAccessToken();
+  const tokenId = nextEntityId("sat", store.store_id);
+  const row = {
+    store_access_token_id: tokenId,
+    tenant_id: store.tenant_id,
+    store_id: store.store_id,
+    token_hash: hashStoreAccessToken(token),
+    pin_hash: hashStoreStaffPin(tokenId, pin),
+    status: "active",
+    failed_attempts: 0,
+    locked_until: "",
+    rotated_at: "",
+    pin_rotated_at: now,
+    notes: cleanString(input.notes).slice(0, 1000),
+    created_at: now,
+    updated_at: now
+  };
+  db.prepare(`
+    INSERT INTO store_access_tokens (
+      store_access_token_id, tenant_id, store_id, token_hash, pin_hash, status,
+      failed_attempts, locked_until, rotated_at, pin_rotated_at, notes, created_at, updated_at
+    ) VALUES (
+      @store_access_token_id, @tenant_id, @store_id, @token_hash, @pin_hash, @status,
+      @failed_attempts, @locked_until, @rotated_at, @pin_rotated_at, @notes, @created_at, @updated_at
+    )
+  `).run(row);
+  const created = getStoreAccessToken(tokenId);
+  recordAuditLog("admin", actor.actor_id || "admin", "store_access_token.create", "store_access_token", tokenId, null, created, {
+    store_id: store.store_id,
+    actor_role: actor.role || ""
+  }, now);
+  return {
+    store_access_token: created,
+    store_token: token,
+    store_orders_url: `/store/orders/${token}`
+  };
+}
+
+function listStoreAccessTokens(query = {}) {
+  const storeId = cleanId(query.store_id || query.storeId);
+  const status = cleanString(query.status);
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT sat.*, s.name AS store_name
+    FROM store_access_tokens sat
+    LEFT JOIN stores s ON s.store_id = sat.store_id
+    WHERE (? = '' OR sat.store_id = ?)
+      AND (? = '' OR sat.status = ?)
+    ORDER BY sat.updated_at DESC, sat.id DESC
+    LIMIT ?
+  `).all(storeId, storeId, status, status, limit).map(publicStoreAccessToken);
+}
+
+function getStoreAccessToken(storeAccessTokenId) {
+  const row = db.prepare(`
+    SELECT sat.*, s.name AS store_name
+    FROM store_access_tokens sat
+    LEFT JOIN stores s ON s.store_id = sat.store_id
+    WHERE sat.store_access_token_id = ?
+  `).get(cleanId(storeAccessTokenId));
+  return row ? publicStoreAccessToken(row) : null;
+}
+
+function getStoreAccessTokenByRawToken(token) {
+  if (!token) return null;
+  const row = db.prepare(`
+    SELECT sat.*, s.name AS store_name
+    FROM store_access_tokens sat
+    LEFT JOIN stores s ON s.store_id = sat.store_id
+    WHERE sat.token_hash = ?
+  `).get(hashStoreAccessToken(token));
+  return row ? publicStoreAccessToken(row, { includeHashFields: true }) : null;
+}
+
+function rotateStoreAccessToken(storeAccessTokenId, input, actor = {}) {
+  const existing = db.prepare("SELECT * FROM store_access_tokens WHERE store_access_token_id = ?").get(cleanId(storeAccessTokenId));
+  if (!existing) throw requestError("Store access token not found", 404);
+  const now = nowIso();
+  const token = generateStoreAccessToken();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        token_hash = ?,
+        status = 'active',
+        failed_attempts = 0,
+        locked_until = '',
+        rotated_at = ?,
+        notes = COALESCE(NULLIF(?, ''), notes),
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(hashStoreAccessToken(token), now, cleanString(input.notes).slice(0, 1000), now, existing.store_access_token_id);
+    db.prepare(`
+      UPDATE store_staff_sessions SET
+        status = 'revoked',
+        revoked_at = ?
+      WHERE store_access_token_id = ?
+        AND status = 'active'
+    `).run(now, existing.store_access_token_id);
+  })();
+  const updated = getStoreAccessToken(existing.store_access_token_id);
+  recordAuditLog("admin", actor.actor_id || "admin", "store_access_token.rotate", "store_access_token", existing.store_access_token_id, publicStoreAccessToken(existing), updated, {
+    store_id: existing.store_id,
+    actor_role: actor.role || ""
+  }, now);
+  return {
+    store_access_token: updated,
+    store_token: token,
+    store_orders_url: `/store/orders/${token}`
+  };
+}
+
+function resetStoreAccessTokenPin(storeAccessTokenId, input, actor = {}) {
+  const existing = db.prepare("SELECT * FROM store_access_tokens WHERE store_access_token_id = ?").get(cleanId(storeAccessTokenId));
+  if (!existing) throw requestError("Store access token not found", 404);
+  const pin = normalizeStoreStaffPin(input.pin);
+  const now = nowIso();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        pin_hash = ?,
+        failed_attempts = 0,
+        locked_until = '',
+        pin_rotated_at = ?,
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(hashStoreStaffPin(existing.store_access_token_id, pin), now, now, existing.store_access_token_id);
+    db.prepare(`
+      UPDATE store_staff_sessions SET
+        status = 'revoked',
+        revoked_at = ?
+      WHERE store_access_token_id = ?
+        AND status = 'active'
+    `).run(now, existing.store_access_token_id);
+  })();
+  const updated = getStoreAccessToken(existing.store_access_token_id);
+  recordAuditLog("admin", actor.actor_id || "admin", "store_access_token.pin_reset", "store_access_token", existing.store_access_token_id, publicStoreAccessToken(existing), updated, {
+    store_id: existing.store_id,
+    actor_role: actor.role || ""
+  }, now);
+  return updated;
+}
+
+function createStoreStaffSession(storeToken, input, req) {
+  const access = getStoreAccessTokenByRawToken(storeToken);
+  if (!access) throw requestError("Store access token not found", 404);
+  const now = nowIso();
+  if (access.status !== "active") throw requestError("Store access token is not active", 403);
+  if (access.locked_until && access.locked_until > now) {
+    recordStoreStaffLoginAudit(access, "store_staff.login_locked", req, { locked_until: access.locked_until }, now);
+    throw requestError("PIN is temporarily locked", 429);
+  }
+  const pin = normalizeStoreStaffPin(input.pin, { label: "pin", allowEmpty: false });
+  const expectedHash = hashStoreStaffPin(access.store_access_token_id, pin);
+  if (!safeEqualHex(access.pin_hash, expectedHash)) {
+    const failedAttempts = (asInteger(access.failed_attempts) || 0) + 1;
+    const lockedUntil = failedAttempts >= STORE_STAFF_PIN_MAX_ATTEMPTS
+      ? new Date(Date.now() + STORE_STAFF_PIN_LOCK_SECONDS * 1000).toISOString()
+      : "";
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        failed_attempts = ?,
+        locked_until = ?,
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(failedAttempts, lockedUntil, now, access.store_access_token_id);
+    recordStoreStaffLoginAudit(access, "store_staff.login_failed", req, { failed_attempts: failedAttempts, locked_until: lockedUntil }, now);
+    throw requestError(lockedUntil ? "PIN is temporarily locked" : "PIN is invalid", lockedUntil ? 429 : 401);
+  }
+
+  const sessionToken = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + STORE_STAFF_SESSION_TTL_SECONDS * 1000).toISOString();
+  const sessionId = nextEntityId("sss", access.store_id);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO store_staff_sessions (
+        store_staff_session_id, store_access_token_id, session_token_hash,
+        tenant_id, store_id, status, created_at, expires_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `).run(
+      sessionId,
+      access.store_access_token_id,
+      hashStoreStaffSessionToken(sessionToken),
+      access.tenant_id,
+      access.store_id,
+      now,
+      expiresAt,
+      now
+    );
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        failed_attempts = 0,
+        locked_until = '',
+        last_used_at = ?,
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(now, now, access.store_access_token_id);
+  })();
+  const session = getStoreStaffSessionById(sessionId);
+  recordStoreStaffLoginAudit(access, "store_staff.login_success", req, { session_id: sessionId }, now);
+  return {
+    ...session,
+    session_token: sessionToken
+  };
+}
+
+function requireStoreStaffSession(req, res, next) {
+  try {
+    const token = getStoreStaffSessionToken(req);
+    if (!token) throw requestError("Store staff session is required", 401);
+    const session = getStoreStaffSessionByRawToken(token);
+    if (!session) throw requestError("Store staff session is invalid", 401);
+    const now = nowIso();
+    if (session.status !== "active" || session.expires_at <= now) {
+      throw requestError("Store staff session has expired", 401);
+    }
+    if (session.access_token_status !== "active") {
+      throw requestError("Store access token is not active", 403);
+    }
+    db.prepare("UPDATE store_staff_sessions SET last_used_at = ? WHERE store_staff_session_id = ?").run(now, session.store_staff_session_id);
+    req.storeStaffSession = {
+      ...session,
+      last_used_at: now
+    };
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function updateStoreCounterOrderStatus(session, counterOrderId, input) {
+  const order = getCounterOrder(counterOrderId);
+  if (!order) throw requestError("Counter order not found", 404);
+  if (order.store_id !== session.store_id) throw requestError("Counter order is outside this store", 403);
+  const status = cleanString(input.status);
+  if (!["issued", "redeemed", "cancelled"].includes(status)) {
+    throw requestError("status must be one of: issued, redeemed, cancelled", 400);
+  }
+  if (status === "redeemed") {
+    const suppliedVerifyCode = cleanString(input.verify_code || input.verifyCode);
+    if (!suppliedVerifyCode) throw requestError("verify_code is required to redeem", 400);
+    if (!safeEqualString(order.verify_code, suppliedVerifyCode)) {
+      throw requestError("verify_code does not match", 403);
+    }
+  }
+  return updateCounterOrderStatus(order.counter_order_id, {
+    ...input,
+    actor_type: "store_staff",
+    actor_id: session.store_staff_session_id,
+    audit_action: "counter_order.staff_status_update"
+  });
+}
+
+function revokeStoreStaffSession(session) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE store_staff_sessions SET
+      status = 'revoked',
+      revoked_at = ?,
+      last_used_at = ?
+    WHERE store_staff_session_id = ?
+  `).run(now, now, session.store_staff_session_id);
+}
+
+function getStoreStaffSessionByRawToken(token) {
+  const row = db.prepare(`
+    SELECT
+      sss.*,
+      sat.status AS access_token_status,
+      sat.notes AS access_token_notes,
+      st.name AS store_name
+    FROM store_staff_sessions sss
+    JOIN store_access_tokens sat ON sat.store_access_token_id = sss.store_access_token_id
+    LEFT JOIN stores st ON st.store_id = sss.store_id
+    WHERE sss.session_token_hash = ?
+  `).get(hashStoreStaffSessionToken(token));
+  return row ? publicStoreStaffSessionRow(row) : null;
+}
+
+function getStoreStaffSessionById(sessionId) {
+  const row = db.prepare(`
+    SELECT
+      sss.*,
+      sat.status AS access_token_status,
+      sat.notes AS access_token_notes,
+      st.name AS store_name
+    FROM store_staff_sessions sss
+    JOIN store_access_tokens sat ON sat.store_access_token_id = sss.store_access_token_id
+    LEFT JOIN stores st ON st.store_id = sss.store_id
+    WHERE sss.store_staff_session_id = ?
+  `).get(cleanId(sessionId));
+  return row ? publicStoreStaffSessionRow(row) : null;
+}
+
+function publicStoreStaffSessionRow(row) {
+  const store = getStoreSettings(row.store_id, { withDefaults: true }) || {
+    tenant_id: row.tenant_id,
+    store_id: row.store_id,
+    store_name: row.store_name || row.store_id
+  };
+  return {
+    store_staff_session_id: cleanId(row.store_staff_session_id),
+    store_access_token_id: cleanId(row.store_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    status: cleanString(row.status),
+    access_token_status: cleanString(row.access_token_status),
+    created_at: cleanString(row.created_at),
+    expires_at: cleanString(row.expires_at),
+    last_used_at: cleanString(row.last_used_at),
+    revoked_at: cleanString(row.revoked_at),
+    store: {
+      tenant_id: cleanId(store.tenant_id || row.tenant_id),
+      store_id: cleanId(store.store_id || row.store_id),
+      store_name: cleanString(store.store_name || row.store_name || row.store_id),
+      timezone: cleanString(store.timezone || DEFAULT_TIMEZONE),
+      pickup_available_from: cleanString(store.pickup_available_from),
+      pickup_available_until: cleanString(store.pickup_available_until)
+    }
+  };
+}
+
+function publicStoreStaffSession(session) {
+  return {
+    store_staff_session_id: session.store_staff_session_id,
+    store_access_token_id: session.store_access_token_id,
+    tenant_id: session.tenant_id,
+    store_id: session.store_id,
+    status: session.status,
+    expires_at: session.expires_at,
+    last_used_at: session.last_used_at
+  };
+}
+
+function publicStoreAccessToken(row, options = {}) {
+  const token = {
+    store_access_token_id: cleanId(row.store_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    store_name: cleanString(row.store_name),
+    status: cleanString(row.status),
+    failed_attempts: asInteger(row.failed_attempts) || 0,
+    locked_until: cleanString(row.locked_until),
+    rotated_at: cleanString(row.rotated_at),
+    pin_rotated_at: cleanString(row.pin_rotated_at),
+    last_used_at: cleanString(row.last_used_at),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    store_orders_path: `/store/orders/:store_token`
+  };
+  if (options.includeHashFields) {
+    token.token_hash = cleanString(row.token_hash);
+    token.pin_hash = cleanString(row.pin_hash);
+  }
+  return token;
+}
+
+function recordStoreStaffLoginAudit(access, action, req, metadata = {}, createdAt = nowIso()) {
+  recordAuditLog("store_staff", access.store_access_token_id, action, "store_access_token", access.store_access_token_id, null, null, {
+    store_id: access.store_id,
+    tenant_id: access.tenant_id,
+    ip_hash: hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`),
+    user_agent: cleanString(req.get("user-agent")).slice(0, 500),
+    ...metadata
+  }, createdAt);
+}
+
+function normalizeStoreStaffPin(value, options = {}) {
+  const pin = cleanString(value);
+  if (!pin && options.allowEmpty !== true) throw requestError(`${options.label || "pin"} is required`, 400);
+  if (!/^\d{4,12}$/.test(pin)) throw requestError(`${options.label || "pin"} must be 4 to 12 digits`, 400);
+  return pin;
+}
+
+function generateStoreAccessToken() {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function hashStoreAccessToken(token) {
+  return hashStoreSecret("store-access-token", token);
+}
+
+function hashStoreStaffPin(storeAccessTokenId, pin) {
+  return hashStoreSecret(`store-staff-pin:${storeAccessTokenId}`, pin);
+}
+
+function hashStoreStaffSessionToken(token) {
+  return hashStoreSecret("store-staff-session", token);
+}
+
+function hashStoreSecret(scope, value) {
+  return crypto
+    .createHmac("sha256", STORE_ACCESS_TOKEN_PEPPER)
+    .update(`${scope}:${value}`)
+    .digest("hex");
 }
 
 function normalizeReportCriteria(input = {}) {
@@ -7358,6 +8014,60 @@ function compactTimestamp(date = new Date()) {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
+function requestAcceptsHtml(req) {
+  const accept = cleanString(req.get("accept")).toLowerCase();
+  return accept.includes("text/html");
+}
+
+function getStoreStaffSessionToken(req) {
+  const bearer = getBearerToken(req);
+  if (bearer) return bearer;
+  return parseCookies(req.get("cookie")).misell_store_staff_session || "";
+}
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  for (const part of cleanString(cookieHeader).split(";")) {
+    const index = part.indexOf("=");
+    if (index <= 0) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (key) cookies[key] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+function setStoreStaffSessionCookie(req, res, token, expiresAt) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_store_staff_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${new Date(expiresAt).toUTCString()}`
+  ]);
+}
+
+function clearStoreStaffSessionCookie(req, res) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_store_staff_session=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`
+  ]);
+}
+
+function requestIsHttps(req) {
+  return Boolean(req.secure || cleanString(req.get("x-forwarded-proto")).split(",")[0].trim().toLowerCase() === "https");
+}
+
+function safeEqualString(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""), "utf8");
+  const rightBuffer = Buffer.from(String(right || ""), "utf8");
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function safeEqualHex(left, right) {
+  const leftText = cleanString(left);
+  const rightText = cleanString(right);
+  if (!/^[a-f0-9]{64}$/i.test(leftText) || !/^[a-f0-9]{64}$/i.test(rightText)) return false;
+  return crypto.timingSafeEqual(Buffer.from(leftText, "hex"), Buffer.from(rightText, "hex"));
+}
+
 function parseJson(value, fallback) {
   try {
     return JSON.parse(value);
@@ -7374,6 +8084,207 @@ function escapeHtml(value) {
     "\"": "&quot;",
     "'": "&#39;"
   }[char]));
+}
+
+function escapeJsonForScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function renderCounterOrderPage(order, orderToken, req) {
+  const payload = withCounterOrderStoreProfile(order);
+  const absoluteUrl = `${req.protocol}://${req.get("host")}/order/${encodeURIComponent(orderToken)}`;
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>受付番号 ${escapeHtml(order.order_number)} | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="order-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">${escapeHtml(payload.store.store_name || "店舗")}</p>
+          <h1>受付番号を発行しました</h1>
+          <p>商品を受け取るときに、この番号と確認コードをスタッフに見せてください。</p>
+        </div>
+        <span class="update-status update-status-${escapeHtml(order.status === "issued" ? "success" : order.status)}">${escapeHtml(counterOrderStatusLabel(order.status))}</span>
+      </section>
+      <section id="order-card" class="order-card" aria-label="受付番号カード">
+        <div class="order-card-head">
+          <span>${escapeHtml(payload.store.store_name || "Misell")}</span>
+          <strong>${escapeHtml(counterOrderStatusLabel(order.status))}</strong>
+        </div>
+        <p class="order-number-label">受付番号</p>
+        <div class="order-number">${escapeHtml(order.order_number)}</div>
+        <div class="verify-code">確認コード <strong>${escapeHtml(order.verify_code)}</strong></div>
+        <div class="order-items">
+          ${order.items.map((item) => `
+            <div>
+              <span>${escapeHtml(item.item_name_snapshot)}</span>
+              <strong>${escapeHtml(item.quantity)}点</strong>
+            </div>
+          `).join("")}
+        </div>
+        <div class="order-card-foot">
+          <span>合計 ${escapeHtml(formatCurrency(order.total_amount, order.currency))}</span>
+          <span>${escapeHtml(formatOrderDate(order.issued_at))}</span>
+        </div>
+      </section>
+      <section id="previous-order" class="order-previous" hidden></section>
+      <section class="order-actions" aria-label="受付番号操作">
+        <button id="save-order-image" type="button">画像で保存</button>
+        <button id="share-order" class="secondary" type="button">共有</button>
+        <button id="copy-order-number" class="secondary" type="button">番号をコピー</button>
+        <button id="copy-order-url" class="secondary" type="button">URLをコピー</button>
+      </section>
+      <p id="order-message" class="order-message" role="status"></p>
+      <canvas id="order-card-canvas" width="1200" height="1600" hidden></canvas>
+    </main>
+    <script>
+      window.MISELL_COUNTER_ORDER = ${escapeJsonForScript(payload)};
+      window.MISELL_ORDER_TOKEN = ${escapeJsonForScript(orderToken)};
+      window.MISELL_ORDER_URL = ${escapeJsonForScript(absoluteUrl)};
+    </script>
+    <script src="/order-card.js"></script>
+  </body>
+</html>`;
+}
+
+function renderOrderNotFoundPage() {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>受付番号が見つかりません | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="order-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">Misell</p>
+          <h1>受付番号が見つかりません</h1>
+          <p>URLが正しいか、もう一度確認してください。</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function renderStoreOrdersPage(storeAccess, req) {
+  const store = getStoreSettings(storeAccess.store_id, { withDefaults: true }) || {
+    store_id: storeAccess.store_id,
+    store_name: storeAccess.store_name || storeAccess.store_id
+  };
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(store.store_name || store.store_id)} 受付確認 | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="store-orders-page">
+    <div class="shell">
+      <header class="topbar">
+        <h1>${escapeHtml(store.store_name || store.store_id)} 受付確認</h1>
+        <button id="store-refresh" type="button">更新</button>
+      </header>
+      <main>
+        <section id="store-login" class="store-login-panel">
+          <h2>スタッフPIN</h2>
+          <form id="store-login-form" class="store-login-form">
+            <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password" placeholder="PIN" aria-label="スタッフPIN" required>
+            <button type="submit">開始</button>
+          </form>
+        </section>
+        <section id="store-orders-app" hidden>
+          <div class="store-orders-toolbar">
+            <select id="store-order-status" aria-label="受付ステータス">
+              <option value="issued">未引換</option>
+              <option value="redeemed">引換済み</option>
+              <option value="cancelled">取消</option>
+              <option value="">すべて</option>
+            </select>
+            <input id="store-order-search" type="search" placeholder="受付番号/確認コード" aria-label="受付検索">
+            <button id="store-order-search-button" type="button">検索</button>
+            <button id="store-logout" class="secondary" type="button">終了</button>
+          </div>
+          <div id="store-session-summary" class="notification-bar"></div>
+          <div id="store-orders-list"></div>
+        </section>
+        <p id="store-orders-message" class="order-message" role="status"></p>
+      </main>
+    </div>
+    <script>
+      window.MISELL_STORE_TOKEN = ${escapeJsonForScript(cleanString(req.params.store_token))};
+      window.MISELL_STORE = ${escapeJsonForScript({
+        store_id: store.store_id,
+        store_name: store.store_name || store.store_id
+      })};
+    </script>
+    <script src="/store-orders.js"></script>
+  </body>
+</html>`;
+}
+
+function renderStoreOrdersNotFoundPage() {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>店舗受付が見つかりません | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="store-orders-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">Misell</p>
+          <h1>店舗受付が見つかりません</h1>
+          <p>URLが正しいか、管理者に確認してください。</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function counterOrderStatusLabel(status) {
+  return {
+    issued: "未引換",
+    redeemed: "引換済み",
+    expired: "期限切れ",
+    cancelled: "取消"
+  }[status] || status || "";
+}
+
+function formatCurrency(amount, currency) {
+  if (normalizeCurrency(currency) === "JPY") return `${asInteger(amount) || 0}円`;
+  return `${asInteger(amount) || 0} ${normalizeCurrency(currency)}`;
+}
+
+function formatOrderDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function renderDeviceDetailPage(device) {

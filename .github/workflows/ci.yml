@@ -148,6 +148,9 @@ jobs:
       - name: Smoke device command queue
         run: npm --prefix apps/cloud run smoke:device-commands
 
+      - name: Smoke counter order UX
+        run: npm --prefix apps/cloud run smoke:counter-order-ux
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest
