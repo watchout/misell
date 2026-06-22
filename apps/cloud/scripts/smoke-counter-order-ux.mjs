@@ -42,13 +42,40 @@ async function main() {
     if (!htmlResponse.ok || !html.includes("受付番号を発行しました") || !html.includes("order-card.js")) {
       throw new Error(`order card HTML did not render: ${htmlResponse.status} ${html.slice(0, 200)}`);
     }
+    for (const requiredText of ["単価", "小計", "引換場所", "引換時間", "有効期限", "500円", "counter", "10:00 - 22:00", "画像プレビュー", "長押し"]) {
+      if (!html.includes(requiredText)) {
+        throw new Error(`order card HTML missing required snapshot/fallback text: ${requiredText}`);
+      }
+    }
+    const forcedFallback = await fetch(`${baseUrl}/order/${primary.order_token}?force_image_fallback=1`, {
+      headers: { accept: "text/html" }
+    });
+    const forcedFallbackHtml = await forcedFallback.text();
+    if (!forcedFallbackHtml.includes("window.MISELL_FORCE_IMAGE_FALLBACK = true")) {
+      throw new Error("forced image fallback path was not reachable from order page HTML");
+    }
 
     const publicOrder = await request("GET", `/api/public/orders/${primary.order_token}`);
     if (publicOrder.data.counter_order.store.store_id !== primary.store_id) {
       throw new Error("public order payload did not include scoped store profile");
     }
+    const publicCounterOrder = publicOrder.data.counter_order;
+    if (publicCounterOrder.items[0]?.unit_price_snapshot !== 500 || publicCounterOrder.items[0]?.subtotal_amount !== 500) {
+      throw new Error("public order payload did not include item price/subtotal snapshot");
+    }
+    if (
+      publicCounterOrder.receipt_snapshot?.pickup_location !== "counter" ||
+      publicCounterOrder.receipt_snapshot?.pickup_window !== "10:00 - 22:00" ||
+      publicCounterOrder.receipt_snapshot?.valid_until !== "2030-01-01T00:00:00.000Z"
+    ) {
+      throw new Error(`public order payload did not include resolved receipt snapshot: ${JSON.stringify(publicCounterOrder.receipt_snapshot)}`);
+    }
+    const orderCardJs = await fetch(`${baseUrl}/order-card.js`).then((response) => response.text());
+    if (!orderCardJs.includes("showImagePreviewFallback") || !orderCardJs.includes("shouldShowImagePreviewFallback")) {
+      throw new Error("order card JS does not expose the image preview fallback path");
+    }
     await request("POST", `/api/public/orders/${primary.order_token}/events`, {
-      event_name: "save_image",
+      event_name: "preview_image",
       user_action: "smoke"
     });
     if (tableCount("order_page_events", "counter_order_id = ?", [primary.counter_order.counter_order_id]) !== 1) {
@@ -136,6 +163,8 @@ async function main() {
       ok: true,
       base_url: baseUrl,
       order_html: true,
+      order_snapshot_card: true,
+      iphone_image_fallback: true,
       order_json_compatible: true,
       order_page_event: true,
       store_staff_login: true,
@@ -194,6 +223,7 @@ async function seedCounterOrder(suffix) {
       title: `Counter UX set ${suffix}`,
       status: "active",
       pickup_location: "counter",
+      valid_until: "2030-01-01T00:00:00.000Z",
       order_issue_cutoff_time: "23:30",
       max_orders_total: 10,
       max_orders_per_day: 10,

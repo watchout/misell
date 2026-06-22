@@ -6,11 +6,14 @@
   const els = {
     previous: document.getElementById("previous-order"),
     saveImage: document.getElementById("save-order-image"),
+    previewImage: document.getElementById("preview-order-image"),
     share: document.getElementById("share-order"),
     copyNumber: document.getElementById("copy-order-number"),
     copyUrl: document.getElementById("copy-order-url"),
     message: document.getElementById("order-message"),
-    canvas: document.getElementById("order-card-canvas")
+    canvas: document.getElementById("order-card-canvas"),
+    imageFallback: document.getElementById("order-image-fallback"),
+    imagePreview: document.getElementById("order-image-preview")
   };
 
   rememberOrder();
@@ -20,6 +23,10 @@
   els.saveImage?.addEventListener("click", async () => {
     await saveOrderImage();
     await recordEvent("save_image").catch(() => {});
+  });
+  els.previewImage?.addEventListener("click", async () => {
+    await previewOrderImage();
+    await recordEvent("preview_image").catch(() => {});
   });
   els.share?.addEventListener("click", async () => {
     await shareOrder();
@@ -77,15 +84,29 @@
 
   async function saveOrderImage() {
     const blob = await renderOrderCardBlob();
+    if (shouldShowImagePreviewFallback()) {
+      showImagePreviewFallback(blob, "画像を表示しました。画像を長押しして保存してください。");
+      return;
+    }
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `misell-order-${safeFilePart(order.order_number || "card")}.png`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    setMessage("受付番号カードを画像として保存しました。");
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `misell-order-${safeFilePart(order.order_number || "card")}.png`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+      setMessage("受付番号カードを画像として保存しました。");
+    } catch {
+      URL.revokeObjectURL(url);
+      showImagePreviewFallback(blob, "画像保存を開始できませんでした。画像を長押しして保存してください。");
+    }
+  }
+
+  async function previewOrderImage() {
+    const blob = await renderOrderCardBlob();
+    showImagePreviewFallback(blob, "画像を表示しました。iPhone Safariでは画像を長押しして保存してください。");
   }
 
   async function shareOrder() {
@@ -99,8 +120,17 @@
         setMessage("受付番号カードを共有しました。");
         return;
       }
-    } catch {
-      // Fall back to URL/text share below.
+    } catch (error) {
+      if (shouldShowImagePreviewFallback()) {
+        const blob = await renderOrderCardBlob();
+        showImagePreviewFallback(blob, "共有を開始できませんでした。画像を長押しして保存してください。");
+        return;
+      }
+    }
+    if (shouldShowImagePreviewFallback()) {
+      const blob = await renderOrderCardBlob();
+      showImagePreviewFallback(blob, "画像を表示しました。画像を長押しして保存、または共有してください。");
+      return;
     }
     if (navigator.share) {
       await navigator.share({ title, text, url: orderUrl });
@@ -117,6 +147,7 @@
     const ctx = canvas.getContext("2d");
     const width = canvas.width;
     const height = canvas.height;
+    const receipt = order.receipt_snapshot || {};
     ctx.fillStyle = "#f4f6f8";
     ctx.fillRect(0, 0, width, height);
     roundRect(ctx, 90, 90, width - 180, height - 180, 42, "#ffffff", "#d8dee4");
@@ -132,17 +163,35 @@
     ctx.fillStyle = "#135f8c";
     ctx.font = "700 54px system-ui, sans-serif";
     ctx.fillText(`確認コード ${order.verify_code || ""}`, 150, 600);
+
+    ctx.fillStyle = "#52616f";
+    ctx.font = "600 30px system-ui, sans-serif";
+    ctx.fillText(`引換場所: ${receipt.pickup_location || "店頭"}`, 150, 680);
+    ctx.fillText(`引換時間: ${receipt.pickup_window || "店舗営業時間に準じます"}`, 150, 725);
+    ctx.fillText(`有効期限: ${formatDate(receipt.valid_until) || "なし"}`, 150, 770);
+
     ctx.fillStyle = "#1f2933";
-    ctx.font = "600 38px system-ui, sans-serif";
-    let y = 750;
+    let y = 875;
     for (const item of (order.items || []).slice(0, 6)) {
-      ctx.fillText(`${item.item_name_snapshot || ""} x ${item.quantity || 1}`, 150, y);
-      y += 62;
+      ctx.font = "600 34px system-ui, sans-serif";
+      drawClampedText(ctx, item.item_name_snapshot || "", 150, y, 590);
+      ctx.fillText(`${item.quantity || 1}点`, 790, y);
+      ctx.fillText(formatCurrency(item.subtotal_amount, item.currency), 930, y);
+      ctx.fillStyle = "#697986";
+      ctx.font = "500 28px system-ui, sans-serif";
+      ctx.fillText(`単価 ${formatCurrency(item.unit_price_snapshot, item.currency)}`, 150, y + 38);
+      ctx.fillStyle = "#1f2933";
+      y += 88;
+    }
+    if ((order.items || []).length > 6) {
+      ctx.fillStyle = "#697986";
+      ctx.font = "500 28px system-ui, sans-serif";
+      ctx.fillText(`他 ${(order.items || []).length - 6} 件`, 150, y);
     }
     ctx.fillStyle = "#52616f";
     ctx.font = "500 34px system-ui, sans-serif";
-    ctx.fillText(`合計 ${formatCurrency(order.total_amount, order.currency)}`, 150, height - 270);
-    ctx.fillText(formatDate(order.issued_at), 150, height - 210);
+    ctx.fillText(`合計 ${formatCurrency(order.total_amount, order.currency)} / ${order.tax_included === false ? "税別" : "税込"}`, 150, height - 270);
+    ctx.fillText(`発行 ${formatDate(order.issued_at)}`, 150, height - 210);
     ctx.fillText("受け取り時にこの画面または画像を提示してください", 150, height - 150);
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
@@ -150,6 +199,27 @@
         else reject(new Error("image export failed"));
       }, "image/png");
     });
+  }
+
+  function showImagePreviewFallback(blob, message) {
+    if (!els.imageFallback || !els.imagePreview) return;
+    const previousUrl = els.imagePreview.dataset.blobUrl;
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    const url = URL.createObjectURL(blob);
+    els.imagePreview.src = url;
+    els.imagePreview.dataset.blobUrl = url;
+    els.imageFallback.hidden = false;
+    els.imageFallback.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    setMessage(message);
+  }
+
+  function shouldShowImagePreviewFallback() {
+    return window.MISELL_FORCE_IMAGE_FALLBACK === true || isIphoneSafari() || !("download" in HTMLAnchorElement.prototype);
+  }
+
+  function isIphoneSafari() {
+    const ua = navigator.userAgent || "";
+    return /iPhone|iPod/.test(ua) && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
   }
 
   function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
@@ -165,6 +235,19 @@
     ctx.strokeStyle = stroke;
     ctx.lineWidth = 3;
     ctx.stroke();
+  }
+
+  function drawClampedText(ctx, text, x, y, maxWidth) {
+    const value = String(text || "");
+    if (ctx.measureText(value).width <= maxWidth) {
+      ctx.fillText(value, x, y);
+      return;
+    }
+    let output = value;
+    while (output.length > 1 && ctx.measureText(`${output}...`).width > maxWidth) {
+      output = output.slice(0, -1);
+    }
+    ctx.fillText(`${output}...`, x, y);
   }
 
   async function copyText(text) {

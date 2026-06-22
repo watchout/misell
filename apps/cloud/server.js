@@ -126,6 +126,7 @@ const QR_DESTINATION_TYPES = new Set([
 const ORDER_PAGE_EVENTS = new Set([
   "view",
   "save_image",
+  "preview_image",
   "share",
   "copy_order_number",
   "copy_url",
@@ -4085,6 +4086,10 @@ function withCounterOrderStoreProfile(order) {
     currency: order.currency,
     tax_included: order.tax_included
   };
+  const revision = order.offer_revision_id ? getOfferRevision(order.offer_revision_id) : null;
+  const pickupAvailableFrom = cleanString(revision?.pickup_available_from || store.pickup_available_from);
+  const pickupAvailableUntil = cleanString(revision?.pickup_available_until || store.pickup_available_until);
+  const validUntil = cleanString(order.expires_at || revision?.valid_until);
   return {
     ...order,
     store: {
@@ -4094,6 +4099,26 @@ function withCounterOrderStoreProfile(order) {
       timezone: cleanString(store.timezone || DEFAULT_TIMEZONE),
       pickup_available_from: cleanString(store.pickup_available_from),
       pickup_available_until: cleanString(store.pickup_available_until)
+    },
+    offer_revision: revision ? {
+      offer_revision_id: revision.offer_revision_id,
+      title: revision.title,
+      pickup_location: revision.pickup_location,
+      pickup_available_from: revision.pickup_available_from,
+      pickup_available_until: revision.pickup_available_until,
+      valid_until: revision.valid_until
+    } : null,
+    receipt_snapshot: {
+      offer_title: cleanString(revision?.title),
+      pickup_location: cleanString(revision?.pickup_location),
+      pickup_available_from: pickupAvailableFrom,
+      pickup_available_until: pickupAvailableUntil,
+      pickup_window: formatPickupWindow(pickupAvailableFrom, pickupAvailableUntil),
+      valid_until: validUntil,
+      currency: normalizeCurrency(order.currency),
+      tax_included: order.tax_included !== false,
+      tax_amount: asInteger(order.tax_amount),
+      total_amount: asInteger(order.total_amount) || 0
     }
   };
 }
@@ -8097,6 +8122,7 @@ function escapeJsonForScript(value) {
 
 function renderCounterOrderPage(order, orderToken, req) {
   const payload = withCounterOrderStoreProfile(order);
+  const receipt = payload.receipt_snapshot || {};
   const absoluteUrl = `${req.protocol}://${req.get("host")}/order/${encodeURIComponent(orderToken)}`;
   return `<!doctype html>
 <html lang="ja">
@@ -8124,25 +8150,51 @@ function renderCounterOrderPage(order, orderToken, req) {
         <p class="order-number-label">受付番号</p>
         <div class="order-number">${escapeHtml(order.order_number)}</div>
         <div class="verify-code">確認コード <strong>${escapeHtml(order.verify_code)}</strong></div>
+        <dl class="order-receipt-meta">
+          <div>
+            <dt>引換場所</dt>
+            <dd>${escapeHtml(receipt.pickup_location || "店頭")}</dd>
+          </div>
+          <div>
+            <dt>引換時間</dt>
+            <dd>${escapeHtml(receipt.pickup_window || "店舗営業時間に準じます")}</dd>
+          </div>
+          <div>
+            <dt>有効期限</dt>
+            <dd>${escapeHtml(formatOrderDate(receipt.valid_until) || "なし")}</dd>
+          </div>
+        </dl>
         <div class="order-items">
-          ${order.items.map((item) => `
-            <div>
-              <span>${escapeHtml(item.item_name_snapshot)}</span>
-              <strong>${escapeHtml(item.quantity)}点</strong>
+          ${payload.items.map((item) => `
+            <div class="order-item-row">
+              <span>
+                <strong>${escapeHtml(item.item_name_snapshot)}</strong>
+                <small>単価 ${escapeHtml(formatCurrency(item.unit_price_snapshot, item.currency))} / ${escapeHtml(item.quantity)}点</small>
+              </span>
+              <strong>小計 ${escapeHtml(formatCurrency(item.subtotal_amount, item.currency))}</strong>
             </div>
           `).join("")}
         </div>
         <div class="order-card-foot">
           <span>合計 ${escapeHtml(formatCurrency(order.total_amount, order.currency))}</span>
+          <span>${order.tax_included ? "税込" : "税別"}</span>
           <span>${escapeHtml(formatOrderDate(order.issued_at))}</span>
         </div>
       </section>
       <section id="previous-order" class="order-previous" hidden></section>
       <section class="order-actions" aria-label="受付番号操作">
         <button id="save-order-image" type="button">画像で保存</button>
+        <button id="preview-order-image" class="secondary" type="button">画像プレビュー</button>
         <button id="share-order" class="secondary" type="button">共有</button>
         <button id="copy-order-number" class="secondary" type="button">番号をコピー</button>
         <button id="copy-order-url" class="secondary" type="button">URLをコピー</button>
+      </section>
+      <section id="order-image-fallback" class="order-image-fallback" hidden>
+        <div>
+          <strong>画像プレビュー</strong>
+          <p>iPhone Safariでは、この画像を長押しして「写真に保存」または「画像を保存」を選択してください。</p>
+        </div>
+        <img id="order-image-preview" alt="受付番号カード画像">
       </section>
       <p id="order-message" class="order-message" role="status"></p>
       <canvas id="order-card-canvas" width="1200" height="1600" hidden></canvas>
@@ -8151,6 +8203,7 @@ function renderCounterOrderPage(order, orderToken, req) {
       window.MISELL_COUNTER_ORDER = ${escapeJsonForScript(payload)};
       window.MISELL_ORDER_TOKEN = ${escapeJsonForScript(orderToken)};
       window.MISELL_ORDER_URL = ${escapeJsonForScript(absoluteUrl)};
+      window.MISELL_FORCE_IMAGE_FALLBACK = ${req.query?.force_image_fallback === "1" ? "true" : "false"};
     </script>
     <script src="/order-card.js"></script>
   </body>
@@ -8272,6 +8325,13 @@ function counterOrderStatusLabel(status) {
 function formatCurrency(amount, currency) {
   if (normalizeCurrency(currency) === "JPY") return `${asInteger(amount) || 0}円`;
   return `${asInteger(amount) || 0} ${normalizeCurrency(currency)}`;
+}
+
+function formatPickupWindow(from, until) {
+  const start = cleanString(from);
+  const end = cleanString(until);
+  if (start && end) return `${start} - ${end}`;
+  return start || end || "";
 }
 
 function formatOrderDate(value) {
