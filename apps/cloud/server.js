@@ -138,21 +138,27 @@ const CAMPAIGN_PROPOSAL_STATUS = new Set(["draft", "proposed", "selected", "held
 const CUSTOMER_CAMPAIGN_PROPOSAL_STATUS = new Set(["selected", "held", "rejected"]);
 const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["proposed", "selected", "held", "rejected"]);
 const CUSTOMER_CONTEXT_CATEGORIES = new Set([
-  "facility_profile",
-  "brand_profile",
-  "products_services",
-  "campaign_history",
-  "performance_summary",
-  "selected_preferences",
-  "rejected_patterns",
-  "asset_library",
-  "seasonal_calendar",
-  "operation_rules"
+  "customer_profile",
+  "internal_notes",
+  "market_signal",
+  "operation_summary",
+  "proposal_feedback",
+  "asset_source",
+  "collaboration_signal"
 ]);
-const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(["customer_visible", "operator_internal", "ai_context"]);
-const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(["customer", "misell", "system", "partner"]);
+const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(["customer_visible", "operator_internal", "system_internal", "partner_limited"]);
+const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(["customer", "misell_operator", "system", "partner", "external_reference"]);
 const CUSTOMER_CONTEXT_SOURCE_TYPES = new Set(["operator_input", "customer_input", "imported", "report_summary", "system_generated"]);
-const CUSTOMER_CONTEXT_CONFIDENCE = new Set(["low", "medium", "high", "confirmed"]);
+const CUSTOMER_CONTEXT_CONFIDENCE = new Set([
+  "customer_confirmed",
+  "operator_confirmed",
+  "operator_observed",
+  "market_reference",
+  "system_aggregated",
+  "inferred",
+  "stale",
+  "expired"
+]);
 const PUBLIC_QR_VIEW_LIMIT = normalizedLimit(
   process.env.MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE,
   120,
@@ -5573,7 +5579,7 @@ function listCustomerContextItems(query = {}) {
 
 function upsertCustomerContextItem(input, actor = {}) {
   const scope = normalizeCampaignScope(input, { requireStore: true, requireScreenGroup: true });
-  const itemType = cleanId(input.item_type || input.itemType || "facility_profile");
+  const itemType = cleanId(input.item_type || input.itemType || "context_note");
   const itemKey = cleanId(input.item_key || input.itemKey || input.key);
   if (!itemType) throw requestError("item_type is required", 400);
   if (!itemKey) throw requestError("item_key is required", 400);

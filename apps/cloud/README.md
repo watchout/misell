@@ -114,8 +114,20 @@ for a later scope.
 
 Customer context items require explicit classification/source fields:
 `context_category`, `visibility_scope`, `source_owner`, `source_type`, and
-`confidence`. These fields are enum-validated so context snapshots remain
-auditable and stable.
+`confidence`. These fields are enum-validated against the #145 Campaign
+Intelligence Context vocabulary so context snapshots remain auditable and
+stable:
+
+- `context_category`: `customer_profile`, `internal_notes`, `market_signal`,
+  `operation_summary`, `proposal_feedback`, `asset_source`,
+  `collaboration_signal`
+- `visibility_scope`: `customer_visible`, `operator_internal`,
+  `system_internal`, `partner_limited`
+- `source_owner`: `customer`, `misell_operator`, `system`, `partner`,
+  `external_reference`
+- `confidence`: `customer_confirmed`, `operator_confirmed`,
+  `operator_observed`, `market_reference`, `system_aggregated`, `inferred`,
+  `stale`, `expired`
 
 Campaign proposal status is one of `draft`, `proposed`, `selected`, `held`,
 `rejected`, or `expired`. Customer Admin only sees customer-visible proposals;

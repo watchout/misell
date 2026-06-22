@@ -42,12 +42,12 @@ async function main() {
     }
 
     await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
-      context_category: "brand_profile",
+      context_category: "customer_profile",
       visibility_scope: "customer_visible",
       source_owner: "customer",
       source_type: "customer_input",
-      confidence: "confirmed",
-      item_type: "brand_profile",
+      confidence: "customer_confirmed",
+      item_type: "brand_tone",
       item_key: "tone",
       value: { tone: "updated after snapshot" }
     }));
@@ -110,6 +110,10 @@ async function main() {
       screen_group_id: "",
       item_key: "missing-screen-group"
     }), 400, "screen_group_id");
+    await expectAdminError("POST", "/api/admin/customer-context-items", contextInput(records, {
+      context_category: "facility_profile",
+      item_key: "legacy-context-category"
+    }), 400, "context_category");
     await expectAdminError("POST", "/api/admin/campaign-proposals", {
       ...proposalInput(records, {
         campaign_proposal_id: `cpr-${runId}-missing-sg`
@@ -182,11 +186,11 @@ async function main() {
       throw new Error(`proposal generation runs should be local stub only: ${JSON.stringify(runs)}`);
     }
     const contextItems = db().prepare("SELECT * FROM customer_context_items").all();
-    const allowedContextCategories = new Set(["facility_profile", "brand_profile", "seasonal_calendar"]);
-    const allowedVisibilityScopes = new Set(["customer_visible"]);
-    const allowedSourceOwners = new Set(["customer", "misell"]);
+    const allowedContextCategories = new Set(["customer_profile", "internal_notes", "market_signal", "operation_summary", "proposal_feedback", "asset_source", "collaboration_signal"]);
+    const allowedVisibilityScopes = new Set(["customer_visible", "operator_internal", "system_internal", "partner_limited"]);
+    const allowedSourceOwners = new Set(["customer", "misell_operator", "system", "partner", "external_reference"]);
     const allowedSourceTypes = new Set(["operator_input", "customer_input", "imported"]);
-    const allowedConfidence = new Set(["confirmed", "high"]);
+    const allowedConfidence = new Set(["customer_confirmed", "operator_confirmed", "operator_observed", "market_reference", "system_aggregated", "inferred", "stale", "expired"]);
     for (const item of contextItems) {
       if (!item.store_id || !item.screen_group_id) throw new Error(`context item missing required screen scope: ${JSON.stringify(item)}`);
       if (!item.context_category || !item.visibility_scope || !item.source_owner || !item.source_type || !item.confidence) {
@@ -206,6 +210,7 @@ async function main() {
       status_transition: true,
       screen_group_required: true,
       context_classification: true,
+      legacy_context_category_rejected: true,
       rejected_reason_optional: true,
       rejected_reason_persisted_when_supplied: true,
       immutable_context_snapshot: true,
@@ -255,24 +260,27 @@ async function seedDevice(tenantId, storeId, screenGroupId, deviceId) {
 
 async function seedContext(records) {
   await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
-    context_category: "facility_profile",
-    item_type: "facility_profile",
+    context_category: "customer_profile",
+    confidence: "customer_confirmed",
+    item_type: "industry_profile",
     item_key: "industry",
     value: { industry: "karaoke", audience: "weekday families" }
   }));
   await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
-    context_category: "seasonal_calendar",
+    context_category: "market_signal",
+    source_owner: "external_reference",
     source_type: "imported",
-    confidence: "high",
+    confidence: "market_reference",
     item_type: "seasonal_calendar",
     item_key: "2026-07",
     value: { theme: "summer rain", local_event: "station festival" }
   }));
   await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
-    context_category: "brand_profile",
+    context_category: "customer_profile",
     source_owner: "customer",
     source_type: "customer_input",
-    item_type: "brand_profile",
+    confidence: "customer_confirmed",
+    item_type: "brand_tone",
     item_key: "tone",
     value: { tone: "friendly", ng_words: ["guaranteed results"] }
   }));
@@ -283,12 +291,12 @@ function contextInput(records, overrides = {}) {
     tenant_id: records.tenantId,
     store_id: records.storeId,
     screen_group_id: records.screenGroupId,
-    context_category: "facility_profile",
+    context_category: "customer_profile",
     visibility_scope: "customer_visible",
-    source_owner: "misell",
+    source_owner: "misell_operator",
     source_type: "operator_input",
-    confidence: "confirmed",
-    item_type: "facility_profile",
+    confidence: "operator_confirmed",
+    item_type: "context_note",
     item_key: "default",
     value: {},
     ...overrides
