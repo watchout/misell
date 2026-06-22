@@ -89,6 +89,11 @@ async function main() {
         throw new Error(`playlist was not applied: ${JSON.stringify(goodPlaylist)}`);
       }
       await fs.access(path.join(assetsDir, "videos", "good.mp4"));
+      const goodRelease = await assertActiveRelease(dataDir, playlistPath, "pl-good");
+      const restartValidate = await runValidatePlaylist(tmpDir, playlistPath, assetsDir, localStatePath);
+      if (restartValidate.status !== 0) {
+        throw new Error(`active release did not validate after restart:\n${restartValidate.stdout}\n${restartValidate.stderr}`);
+      }
 
       const dryRunBytes = mp4Bytes("dry run video bytes");
       policy = buildPolicy({
@@ -106,6 +111,99 @@ async function main() {
       const afterDryRunPlaylist = await readPlaylist(playlistPath);
       if (afterDryRunPlaylist.playlist_version !== "pl-good") {
         throw new Error(`dry-run changed playlist: ${JSON.stringify(afterDryRunPlaylist)}`);
+      }
+
+      const nextBytes = mp4Bytes("next video bytes");
+      policy = buildPolicy({
+        contentId: "content-next",
+        playlistVersion: "pl-next",
+        assetId: "asset-next",
+        targetPath: "/assets/videos/next.mp4",
+        expectedBytes: nextBytes
+      });
+      assetBytes = new Map([["asset-next", nextBytes]]);
+      const next = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath);
+      if (next.status !== 0) {
+        throw new Error(`content sync next release failed:\n${next.stdout}\n${next.stderr}`);
+      }
+      const nextRelease = await assertActiveRelease(dataDir, playlistPath, "pl-next");
+      if (nextRelease.release_id === goodRelease.release_id) {
+        throw new Error(`release id did not change between releases: ${JSON.stringify(nextRelease)}`);
+      }
+
+      const interruptBytes = mp4Bytes("interrupted video bytes");
+      policy = buildPolicy({
+        contentId: "content-interrupt",
+        playlistVersion: "pl-interrupt",
+        assetId: "asset-interrupt",
+        targetPath: "/assets/videos/interrupt.mp4",
+        expectedBytes: interruptBytes
+      });
+      assetBytes = new Map([["asset-interrupt", interruptBytes]]);
+      const interrupted = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, [], {
+        MISELL_CONTENT_SYNC_INTERRUPT_BEFORE_PROMOTE: "1"
+      });
+      if (interrupted.status === 0) {
+        throw new Error(`interrupted content sync unexpectedly succeeded:\n${interrupted.stdout}\n${interrupted.stderr}`);
+      }
+      const afterInterruptPlaylist = await readPlaylist(playlistPath);
+      if (afterInterruptPlaylist.playlist_version !== "pl-next") {
+        throw new Error(`interrupted apply changed playlist: ${JSON.stringify(afterInterruptPlaylist)}`);
+      }
+      const afterInterruptRelease = await assertActiveRelease(dataDir, playlistPath, "pl-next");
+      if (afterInterruptRelease.release_id !== nextRelease.release_id) {
+        throw new Error(`interrupted apply changed current release: ${JSON.stringify(afterInterruptRelease)}`);
+      }
+
+      const promoteFailBytes = mp4Bytes("promote failure video bytes");
+      policy = buildPolicy({
+        contentId: "content-promote-fail",
+        playlistVersion: "pl-promote-fail",
+        assetId: "asset-promote-fail",
+        targetPath: "/assets/videos/promote-fail.mp4",
+        expectedBytes: promoteFailBytes
+      });
+      assetBytes = new Map([["asset-promote-fail", promoteFailBytes]]);
+      const promoteFailed = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, [], {
+        MISELL_RELEASE_BUNDLE_FAIL_AFTER_CURRENT: "1"
+      });
+      if (promoteFailed.status === 0) {
+        throw new Error(`promote failure injection unexpectedly succeeded:\n${promoteFailed.stdout}\n${promoteFailed.stderr}`);
+      }
+      const afterPromoteFailurePlaylist = await readPlaylist(playlistPath);
+      if (afterPromoteFailurePlaylist.playlist_version !== "pl-next") {
+        throw new Error(`promote failure changed playlist pointer: ${JSON.stringify(afterPromoteFailurePlaylist)}`);
+      }
+      const afterPromoteFailureRelease = await assertActiveRelease(dataDir, playlistPath, "pl-next");
+      if (afterPromoteFailureRelease.release_id !== nextRelease.release_id) {
+        throw new Error(`promote failure changed current release: ${JSON.stringify(afterPromoteFailureRelease)}`);
+      }
+
+      const assetResultCountBeforeRollback = requests.assetResults.length;
+      const rollback = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, ["--rollback", "previous"]);
+      if (rollback.status !== 0) {
+        throw new Error(`rollback to previous release failed:\n${rollback.stdout}\n${rollback.stderr}`);
+      }
+      const afterRollbackPlaylist = await readPlaylist(playlistPath);
+      if (afterRollbackPlaylist.playlist_version !== "pl-good") {
+        throw new Error(`rollback did not restore previous playlist: ${JSON.stringify(afterRollbackPlaylist)}`);
+      }
+      const rollbackRelease = await assertActiveRelease(dataDir, playlistPath, "pl-good");
+      if (rollbackRelease.release_id !== goodRelease.release_id) {
+        throw new Error(`rollback selected the wrong release: ${JSON.stringify({ rollbackRelease, goodRelease })}`);
+      }
+      if (requests.assetResults.length !== assetResultCountBeforeRollback) {
+        throw new Error("rollback downloaded or re-synced assets unexpectedly");
+      }
+      const rollbackState = openLocalState(localStatePath);
+      const rollbackSummary = rollbackState.summary({ include_db_path: false });
+      rollbackState.close();
+      if (
+        rollbackSummary.latest_content?.playlist_version !== "pl-good" ||
+        rollbackSummary.latest_content?.source !== "release_bundle_rollback" ||
+        !rollbackSummary.latest_content?.manifest?.release_bundle?.release_id
+      ) {
+        throw new Error(`rollback release bundle evidence was not recorded: ${JSON.stringify(rollbackSummary.latest_content)}`);
       }
 
       const expectedBadBytes = mp4Bytes("expected video bytes");
@@ -190,6 +288,12 @@ async function main() {
       console.log(JSON.stringify({
         ok: true,
         content_apply_success: true,
+        release_bundle_current_symlink: true,
+        restart_uses_current_release: true,
+        interrupted_apply_keeps_current_release: true,
+        promote_failure_keeps_current_release: true,
+        rollback_previous_release: true,
+        rollback_without_asset_download: true,
         dry_run_skips_apply_verification: true,
         asset_verification_blocks_apply: true,
         hash_mismatch_quarantine: true,
@@ -270,6 +374,20 @@ function runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath
   });
 }
 
+function runValidatePlaylist(tmpDir, playlistPath, assetsDir, localStatePath) {
+  return runCommand("npm", ["run", "validate:playlist"], {
+    cwd: appDir,
+    env: {
+      ...process.env,
+      MISELL_ENV_FILE: path.join(tmpDir, "missing-env"),
+      MISELL_DATA_DIR: path.dirname(playlistPath),
+      MISELL_PLAYLIST_PATH: playlistPath,
+      MISELL_ASSETS_DIR: assetsDir,
+      MISELL_LOCAL_STATE_DB_PATH: localStatePath
+    }
+  });
+}
+
 function runCommand(command, args, options) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -311,6 +429,30 @@ async function writePlaylist(playlistPath, playlistVersion, wide) {
 
 async function readPlaylist(playlistPath) {
   return JSON.parse(await fs.readFile(playlistPath, "utf8"));
+}
+
+async function assertActiveRelease(dataDir, playlistPath, playlistVersion) {
+  const releasesDir = path.join(dataDir, "releases");
+  const currentLink = path.join(releasesDir, "current");
+  const playlistStat = await fs.lstat(playlistPath);
+  if (!playlistStat.isSymbolicLink()) {
+    throw new Error(`playlist path is not a symlink: ${playlistPath}`);
+  }
+  const currentStat = await fs.lstat(currentLink);
+  if (!currentStat.isSymbolicLink()) {
+    throw new Error(`current release is not a symlink: ${currentLink}`);
+  }
+  const currentTarget = await fs.realpath(currentLink);
+  const manifest = JSON.parse(await fs.readFile(path.join(currentTarget, "manifest.json"), "utf8"));
+  const playlist = JSON.parse(await fs.readFile(path.join(currentTarget, "playlist.json"), "utf8"));
+  if (playlist.playlist_version !== playlistVersion || manifest.playlist_version !== playlistVersion) {
+    throw new Error(`active release mismatch: ${JSON.stringify({ manifest, playlist })}`);
+  }
+  return {
+    release_id: manifest.release_id,
+    release_dir: currentTarget,
+    playlist_version: playlist.playlist_version
+  };
 }
 
 async function readJson(req) {

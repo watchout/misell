@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development node server.js",
-    "check": "node --check server.js && node --check lib/local-state.js && node --check scripts/local-state.js && node --check scripts/sync-playlogs.js && node --check scripts/sync-local-events.js && node --check scripts/sync-commands.js && node --check scripts/verify-content-assets.js && node --check scripts/smoke-local-state.js && node --check scripts/smoke-content-apply.js && node --check public/player.js && node --check public/admin.js && node --check public/demo/industry-demo.js",
+    "check": "node --check server.js && node --check lib/local-state.js && node --check scripts/local-state.js && node --check scripts/sync-playlogs.js && node --check scripts/sync-local-events.js && node --check scripts/sync-commands.js && node --check scripts/release-bundle.js && node --check scripts/verify-content-assets.js && node --check scripts/smoke-local-state.js && node --check scripts/smoke-content-apply.js && node --check public/player.js && node --check public/admin.js && node --check public/demo/industry-demo.js",
     "validate:playlist": "node server.js --validate-playlist",
     "local-state:summary": "node scripts/local-state.js summary",
     "heartbeat": "scripts/emit-heartbeat.sh",

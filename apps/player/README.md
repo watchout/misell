@@ -334,7 +334,8 @@ scripts/check-update.sh --dry-run
 
 `scripts/check-update.sh` accepts both per-device update targets and active Cloud release manifests. When a manifest is returned, the script reports `target_manifest_id` back to Cloud with the update result.
 
-Commercial deployments should move from direct Git refs to release bundles with symlink rollback.
+Commercial deployments use content release bundles for playlist rollback. App
+binary updates are still handled by release manifests and `check-update.sh`.
 
 ## Cloud Content Sync
 
@@ -350,7 +351,21 @@ Dry-run:
 scripts/sync-content.sh --dry-run
 ```
 
-The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud. If a downloaded asset does not match the manifest sha256, or if media validation rejects the downloaded image/video, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
+The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist into a staging release directory, validates it, promotes it by atomically updating `${MISELL_CONTENT_RELEASES_DIR}/current`, and points `MISELL_PLAYLIST_PATH` at the active release playlist. If staging, validation, or promote fails, the previous active release remains playable. If a downloaded asset does not match the manifest sha256, or if media validation rejects the downloaded image/video, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
+
+Rollback switches to an already-downloaded release without re-downloading assets:
+
+```bash
+scripts/sync-content.sh --rollback previous
+scripts/sync-content.sh --rollback <release_id>
+```
+
+Release bundles default to `${MISELL_DATA_DIR}/releases`, with the active pointer at `${MISELL_DATA_DIR}/releases/current`. Override with:
+
+```bash
+MISELL_CONTENT_RELEASES_DIR=/path/to/releases
+MISELL_CONTENT_CURRENT_LINK=/path/to/releases/current
+```
 
 Dry-run lists the asset work without requiring new files to already exist locally. Set `MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=1` only when you explicitly want dry-run to fail on missing or mismatched local assets.
 
