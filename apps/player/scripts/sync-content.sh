@@ -222,10 +222,12 @@ build_local_state_manifest() {
 }
 
 prepare_release_bundle() {
-  RELEASE_BUNDLE_JSON="$(
+  if ! RELEASE_BUNDLE_JSON="$(
     POLICY_JSON="${policy}" node "${APP_DIR}/scripts/release-bundle.js" write \
       --releases-dir "${RELEASES_DIR}"
-  )"
+  )"; then
+    return 1
+  fi
   STAGING_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "staging_dir")"
   RELEASE_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "release_dir")"
   RELEASE_PLAYLIST_PATH="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_path")"
@@ -234,13 +236,15 @@ prepare_release_bundle() {
 }
 
 promote_release_bundle() {
-  RELEASE_BUNDLE_JSON="$(
+  if ! RELEASE_BUNDLE_JSON="$(
     node "${APP_DIR}/scripts/release-bundle.js" promote \
       --staging-dir "${STAGING_DIR}" \
       --release-dir "${RELEASE_DIR}" \
       --current-link "${CURRENT_LINK}" \
       --playlist-path "${PLAYLIST_PATH}"
-  )"
+  )"; then
+    return 1
+  fi
   RELEASE_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "release_dir")"
   RELEASE_PLAYLIST_PATH="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_path")"
   RELEASE_PLAYLIST_SHA256="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_sha256")"
@@ -265,12 +269,14 @@ rollback_release_bundle() {
     echo "Dry-run rollback target=${target}"
     return 0
   fi
-  RELEASE_BUNDLE_JSON="$(
+  if ! RELEASE_BUNDLE_JSON="$(
     node "${APP_DIR}/scripts/release-bundle.js" resolve \
       --target "${target}" \
       --releases-dir "${RELEASES_DIR}" \
       --current-link "${CURRENT_LINK}"
-  )"
+  )"; then
+    return 1
+  fi
   RELEASE_DIR="$(json_text_value "${RELEASE_BUNDLE_JSON}" "release_dir")"
   RELEASE_PLAYLIST_PATH="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_path")"
   RELEASE_PLAYLIST_SHA256="$(json_text_value "${RELEASE_BUNDLE_JSON}" "playlist_sha256")"

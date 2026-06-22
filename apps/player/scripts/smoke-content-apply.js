@@ -155,6 +155,30 @@ async function main() {
         throw new Error(`interrupted apply changed current release: ${JSON.stringify(afterInterruptRelease)}`);
       }
 
+      const promoteFailBytes = mp4Bytes("promote failure video bytes");
+      policy = buildPolicy({
+        contentId: "content-promote-fail",
+        playlistVersion: "pl-promote-fail",
+        assetId: "asset-promote-fail",
+        targetPath: "/assets/videos/promote-fail.mp4",
+        expectedBytes: promoteFailBytes
+      });
+      assetBytes = new Map([["asset-promote-fail", promoteFailBytes]]);
+      const promoteFailed = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, [], {
+        MISELL_RELEASE_BUNDLE_FAIL_AFTER_CURRENT: "1"
+      });
+      if (promoteFailed.status === 0) {
+        throw new Error(`promote failure injection unexpectedly succeeded:\n${promoteFailed.stdout}\n${promoteFailed.stderr}`);
+      }
+      const afterPromoteFailurePlaylist = await readPlaylist(playlistPath);
+      if (afterPromoteFailurePlaylist.playlist_version !== "pl-next") {
+        throw new Error(`promote failure changed playlist pointer: ${JSON.stringify(afterPromoteFailurePlaylist)}`);
+      }
+      const afterPromoteFailureRelease = await assertActiveRelease(dataDir, playlistPath, "pl-next");
+      if (afterPromoteFailureRelease.release_id !== nextRelease.release_id) {
+        throw new Error(`promote failure changed current release: ${JSON.stringify(afterPromoteFailureRelease)}`);
+      }
+
       const assetResultCountBeforeRollback = requests.assetResults.length;
       const rollback = await runContentSync(tmpDir, baseUrl, playlistPath, assetsDir, localStatePath, ["--rollback", "previous"]);
       if (rollback.status !== 0) {
@@ -267,6 +291,7 @@ async function main() {
         release_bundle_current_symlink: true,
         restart_uses_current_release: true,
         interrupted_apply_keeps_current_release: true,
+        promote_failure_keeps_current_release: true,
         rollback_previous_release: true,
         rollback_without_asset_download: true,
         dry_run_skips_apply_verification: true,

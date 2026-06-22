@@ -75,36 +75,52 @@ function promoteRelease() {
   const releaseDir = requiredPath(args.release_dir, "release-dir");
   const currentLink = requiredPath(args.current_link, "current-link");
   const playlistPath = requiredPath(args.playlist_path, "playlist-path");
+  const previousCurrent = capturePathState(currentLink);
+  const previousPlaylist = capturePathState(playlistPath);
+  let movedStaging = false;
 
-  if (stagingDir) {
-    assertInside(path.dirname(path.dirname(stagingDir)), stagingDir, "staging dir");
-    if (fs.existsSync(releaseDir)) {
-      throw new Error(`release already exists: ${releaseDir}`);
+  try {
+    if (stagingDir) {
+      assertInside(path.dirname(path.dirname(stagingDir)), stagingDir, "staging dir");
+      if (fs.existsSync(releaseDir)) {
+        throw new Error(`release already exists: ${releaseDir}`);
+      }
+      fs.mkdirSync(path.dirname(releaseDir), { recursive: true });
+      fs.renameSync(stagingDir, releaseDir);
+      movedStaging = true;
     }
-    fs.mkdirSync(path.dirname(releaseDir), { recursive: true });
-    fs.renameSync(stagingDir, releaseDir);
-  }
 
-  const releasePlaylistPath = path.join(releaseDir, "playlist.json");
-  if (!fs.existsSync(releasePlaylistPath)) {
-    throw new Error(`release playlist is missing: ${releasePlaylistPath}`);
-  }
-  fs.mkdirSync(path.dirname(currentLink), { recursive: true });
-  fs.mkdirSync(path.dirname(playlistPath), { recursive: true });
-  atomicSymlink(releaseDir, currentLink, "dir");
-  atomicSymlink(path.join(currentLink, "playlist.json"), playlistPath, "file");
+    const releasePlaylistPath = path.join(releaseDir, "playlist.json");
+    if (!fs.existsSync(releasePlaylistPath)) {
+      throw new Error(`release playlist is missing: ${releasePlaylistPath}`);
+    }
+    fs.mkdirSync(path.dirname(currentLink), { recursive: true });
+    fs.mkdirSync(path.dirname(playlistPath), { recursive: true });
+    atomicSymlink(releaseDir, currentLink, "dir");
+    if (process.env.MISELL_RELEASE_BUNDLE_FAIL_AFTER_CURRENT === "1") {
+      throw new Error("injected promote failure after current pointer update");
+    }
+    atomicSymlink(path.join(currentLink, "playlist.json"), playlistPath, "file");
 
-  const manifest = readManifest(releaseDir);
-  print({
-    release_id: manifest.release_id || path.basename(releaseDir),
-    release_dir: releaseDir,
-    current_link: currentLink,
-    playlist_path: playlistPath,
-    content_id: manifest.content_id || "",
-    playlist_version: manifest.playlist_version || playlistVersionFor(releasePlaylistPath),
-    playlist_sha256: manifest.playlist_sha256 || sha256File(releasePlaylistPath),
-    manifest
-  });
+    const manifest = readManifest(releaseDir);
+    print({
+      release_id: manifest.release_id || path.basename(releaseDir),
+      release_dir: releaseDir,
+      current_link: currentLink,
+      playlist_path: playlistPath,
+      content_id: manifest.content_id || "",
+      playlist_version: manifest.playlist_version || playlistVersionFor(releasePlaylistPath),
+      playlist_sha256: manifest.playlist_sha256 || sha256File(releasePlaylistPath),
+      manifest
+    });
+  } catch (error) {
+    restorePathState(currentLink, previousCurrent);
+    restorePathState(playlistPath, previousPlaylist);
+    if (movedStaging) {
+      fs.rmSync(releaseDir, { recursive: true, force: true });
+    }
+    throw error;
+  }
 }
 
 function resolveRelease() {
@@ -198,6 +214,34 @@ function atomicSymlink(target, linkPath, type) {
   fs.rmSync(tempLink, { recursive: true, force: true });
   fs.symlinkSync(target, tempLink, type);
   fs.renameSync(tempLink, linkPath);
+}
+
+function capturePathState(filePath) {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isSymbolicLink()) {
+      return { exists: true, kind: "non_symlink" };
+    }
+    const linkTarget = fs.readlinkSync(filePath);
+    let linkType = "file";
+    try {
+      linkType = fs.statSync(filePath).isDirectory() ? "dir" : "file";
+    } catch {
+      linkType = "file";
+    }
+    return { exists: true, kind: "symlink", linkTarget, linkType };
+  } catch {
+    return { exists: false, kind: "absent" };
+  }
+}
+
+function restorePathState(filePath, state) {
+  if (!state || state.kind === "non_symlink") return;
+  if (!state.exists) {
+    fs.rmSync(filePath, { recursive: true, force: true });
+    return;
+  }
+  atomicSymlink(state.linkTarget, filePath, state.linkType || "file");
 }
 
 function readManifest(releaseDir) {
