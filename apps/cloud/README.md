@@ -54,6 +54,51 @@ curl -u admin:change-me \
   http://localhost:3200/api/admin/alert-notifications/test
 ```
 
+## Device Commands
+
+Remote device operations use a pull-based command queue. Cloud stores an
+allowlisted command, and the device polls, claims, executes, and posts a bounded
+result. Cloud never opens inbound SSH to the terminal for these MVP commands.
+
+Command issuance is fail-closed unless the admin process has an explicit role:
+
+```bash
+MISELL_CLOUD_ADMIN_ROLE=device_ops
+```
+
+Allowed roles are `misell_owner`, `misell_operator`, and `device_ops`. The MVP
+command allowlist is:
+
+- `reload_player_content`
+- `sync_content_now`
+- `collect_logs`
+- `restart_player`
+- `restart_kiosk`
+
+`restart_device`, arbitrary shell commands, script paths, command arguments, and
+maintenance tunnels are intentionally not part of this runtime API. Command
+params accept only bounded metadata (`reason`, `label`) and are not expanded
+into shell commands. Device results reject raw `stdout`/`stderr` and store only a
+bounded summary.
+
+Command hardening settings:
+
+```bash
+MISELL_DEVICE_COMMAND_CLAIM_LEASE_SECONDS=300
+MISELL_DEVICE_COMMAND_RETENTION_DAYS=90
+```
+
+Claimed commands are not requeued automatically. If a device runner crashes or
+loses network and does not post a result before the claim lease expires, Cloud
+marks the command terminal `stale` and requires an operator to create a fresh
+command. This avoids accidental double execution.
+
+Operators with an allowed issuer role can force-cancel a non-terminal command
+from the Admin UI or API. Force-cancel writes an audit event with the actor,
+reason, previous status, and command scope. Terminal commands are retained for
+the configured retention window and then purged; active `queued` / `claimed`
+work is never purged by retention.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
@@ -82,6 +127,8 @@ sed -n 's/^ADMIN_PASSWORD=//p' ~/.config/misell-cloud/env
 
 ```bash
 npm run check
+npm run smoke:counter-order-ux
+npm run smoke:customer-reporting-access
 npm audit --audit-level=moderate
 ```
 
@@ -93,6 +140,19 @@ Create a manual SQLite backup:
 scripts/backup-sqlite.sh
 ```
 
+The backup job uses SQLite's online backup API through `better-sqlite3`, so it does not depend on an external `sqlite3` binary. Each run writes a timestamped backup and a JSON manifest with `integrity_check`, raw SQLite hash, final artifact hash, size, compression flag, and retention metadata.
+
+Useful options:
+
+```bash
+scripts/backup-sqlite.sh --backup-dir /secure/backups --retention-days 30
+scripts/backup-sqlite.sh --backup-dir /secure/backups --no-gzip --json
+scripts/backup-sqlite.sh --encryption age --age-recipients age1examplepublicrecipient --require-encryption
+scripts/backup-sqlite.sh --audit-dir /secure/backup-ops-audit --operator ops --context daily-backup
+scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-endpoint-url https://s3.example.com
+scripts/backup-sqlite.sh --s3-uri s3://example-bucket/misell-cloud --s3-timeout-ms 300000
+```
+
 Install a macOS LaunchAgent for daily backups:
 
 ```bash
@@ -100,7 +160,137 @@ scripts/setup-macos-backup-launchagent.sh
 scripts/setup-macos-backup-launchagent.sh --apply
 ```
 
-Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days.
+Backups are stored under `~/.local/share/misell-cloud/backups` by default. The default retention is 30 days. Local verified backups are the MVP baseline; commercial deployments should copy encrypted backups to separate storage and run scheduled restore drills.
+
+Backup operations are intentionally CLI / host-ops only for MVP+/paid PoC.
+Do not expose backup list, download, delete, decrypt, restore, or artifact URL
+operations through the Cloud Admin API/UI or any customer/store/admin web role.
+Emergency access should use approved operator access to the host or backup
+storage, not a product web surface. If a future PR adds backup web access, it
+must first add server-side RBAC and DB-backed audit logs for that surface.
+
+Each backup and restore drill writes structured operation evidence to
+`MISELL_CLOUD_BACKUP_OPS_AUDIT_DIR`, defaulting to
+`~/.local/share/misell-cloud/backup-ops-audit`. The audit directory is hardened
+to `0700`, JSONL files are `0600`, and old audit files are retained for
+`MISELL_CLOUD_BACKUP_OPS_AUDIT_RETENTION_DAYS`, defaulting to 400 days. The
+backup job records backup creation, manifest write, offsite upload
+success/failure/skipped, retention purge count, orphan scan results, and backup
+failures. Restore drill records success/failure evidence, manifest presence,
+encryption/decrypt status, warning/failure counts, and evidence file name.
+This is local ops evidence only; no backup audit table is required while backup
+access remains CLI-only.
+
+For paid/product offsite backups, enable client-side encryption before the
+backup leaves the host. The approved mode is `age` public-key encryption:
+
+```bash
+MISELL_CLOUD_BACKUP_ENCRYPTION=age
+MISELL_CLOUD_BACKUP_REQUIRE_ENCRYPTION=1
+MISELL_CLOUD_BACKUP_AGE_RECIPIENTS=age1examplepublicrecipient
+MISELL_CLOUD_BACKUP_AGE_CLI=age
+```
+
+When encryption is enabled, the job writes a `.sqlite(.gz).age` artifact and a
+manifest. The plaintext `.sqlite` or `.sqlite.gz` artifact is removed after
+encryption succeeds or fails. The manifest records only encryption metadata,
+recipient fingerprints, and artifact hashes; it must not contain private keys,
+identity file paths, passphrases, or decrypted file paths.
+
+The Cloud backup host should store only public recipient strings. Private age
+identity keys are ops/security custody material and must not be stored on the
+Cloud host, in Git, in Cloud DB dumps, in backup archives, in manifests, or in
+restore drill evidence. Losing the private identity key can make encrypted
+backups unrecoverable. Restore/decrypt remains an ops-only process; do not add
+customer/admin self-service backup download, decrypt, delete, or restore flows.
+
+For key rotation, configure both old and new recipients during an overlap
+period:
+
+```bash
+MISELL_CLOUD_BACKUP_AGE_RECIPIENTS=age1oldrecipient,age1newrecipient
+```
+
+Create a new encrypted backup, run a restore drill with the new identity, then
+retire the old recipient only after the new backup set is proven restorable and
+retention requirements for old encrypted backups are understood.
+
+For product operation, keep a second copy outside the VPS or Mac mini. The
+script can upload each backup and manifest to S3-compatible storage when the
+AWS CLI is installed and these values are set in `~/.config/misell-cloud/env`:
+
+```bash
+MISELL_CLOUD_BACKUP_S3_URI=s3://example-bucket/misell-cloud
+MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL=https://s3.example.com
+MISELL_CLOUD_BACKUP_S3_SSE=AES256
+MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS=300000
+AWS_ACCESS_KEY_ID=replace-with-access-key
+AWS_SECRET_ACCESS_KEY=replace-with-secret-key
+AWS_DEFAULT_REGION=ap-northeast-1
+```
+
+`MISELL_CLOUD_BACKUP_S3_ENDPOINT_URL` is optional for AWS S3 and required for
+many S3-compatible providers. `MISELL_CLOUD_BACKUP_S3_TIMEOUT_MS` defaults to
+300000 ms per artifact upload. Use a bucket policy or access key that can write
+only to the backup prefix. Do not put broad bucket-admin credentials in the app
+or backup job environment. Where practical, use separate read/download
+credentials for approved restore drill / DR operators rather than reusing the
+normal upload credentials. S3 server-side encryption can remain enabled as
+defense-in-depth, but it is not a substitute for client-side `age` encryption.
+When backup encryption is enabled, S3 upload sends the encrypted `.age` artifact
+and its manifest, not the plaintext SQLite/gzip artifact.
+
+Run a restore drill without mutating the live DB:
+
+```bash
+scripts/restore-drill.sh \
+  --backup /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz \
+  --manifest /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.manifest.json \
+  --assets-dir /path/to/cloud/assets \
+  --operator ops \
+  --context monthly-drill \
+  --require-manifest
+```
+
+For encrypted backups, supply the identity file explicitly from an ops-controlled
+location:
+
+```bash
+scripts/restore-drill.sh \
+  --backup /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.age \
+  --manifest /secure/backups/misell-cloud-YYYYMMDD-HHMMSS-SSS.sqlite.gz.age.manifest.json \
+  --age-identity-file /secure/offhost/age-identity.txt \
+  --assets-dir /path/to/cloud/assets \
+  --operator ops \
+  --context encrypted-monthly-drill
+```
+
+The drill decrypts encrypted artifacts only when an identity file is explicitly
+provided, then decompresses or copies the artifact into a temporary SQLite file.
+It opens the restored SQLite file read-only, runs `PRAGMA integrity_check`,
+verifies the backup manifest hashes, checks `cloud_assets` and
+`content_manifest_assets` consistency, checks asset file presence/size/sha256
+when `--assets-dir` is supplied, and validates report snapshot JSON/hash evidence
+plus daily metrics key uniqueness. It writes an auditable JSON result under
+`MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_DIR`,
+defaulting to `~/.local/share/misell-cloud/restore-drills`, with file mode 0600.
+Old restore drill evidence files are retained for
+`MISELL_CLOUD_RESTORE_DRILL_EVIDENCE_RETENTION_DAYS`, defaulting to 400 days.
+
+A backup artifact without a manifest is not valid product/commercial readiness
+evidence. Use `--require-manifest` or `MISELL_RESTORE_DRILL_REQUIRE_MANIFEST=1`
+for product/commercial restore drills so manifest-missing artifacts fail the
+drill. Local/manual drills may inspect such artifacts without this flag, but the
+evidence will show that the manifest was missing. Orphan artifacts,
+manifest-missing artifacts, and orphan manifests are reported by the backup
+operation audit scan and follow the normal backup/audit retention policy; they
+must not be treated as successful backups.
+
+Recommended cadence:
+
+- MVP/test introduction: run a restore drill after backup configuration changes and before any paid PoC.
+- Commercial deployment: run at least monthly, plus after DB migration releases and after backup storage provider changes.
+- Failure handling: treat a failed drill as a release/ops blocker, keep the failed evidence JSON, create an incident or maintenance issue, and run a successful drill before relying on that backup set.
 
 ## Register a Device
 
@@ -189,7 +379,74 @@ Offers use immutable revisions. `offers.current_offer_revision_id` points at the
 
 QR links can resolve to public QR pages or issue counter orders. Counter-order QR links track `offers.current_offer_revision_id` by default, so publishing a new active revision keeps existing displayed QR codes usable. Supplying `offer_revision_id` or `pin_offer_revision` creates an explicitly pinned QR link. Counter orders receive a one-time public `order_token` for lookup and a short `verify_code` for counter redemption. Admin status updates currently support `issued`, `redeemed`, `expired`, and `cancelled`.
 
+Public QR and order routes are unauthenticated by design, but bounded by hash-only rate-limit evidence:
+
+- `GET /q/:qr_token`
+- `POST /q/:qr_token/orders`
+- `GET /order/:order_token`
+- `GET /api/public/orders/:order_token`
+
+Configuration:
+
+```bash
+MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE=120
+MISELL_PUBLIC_ORDER_CREATE_LIMIT_PER_MINUTE=8
+MISELL_PUBLIC_ORDER_VIEW_LIMIT_PER_MINUTE=120
+MISELL_PUBLIC_RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+Rejected bursts return HTTP 429 and write `public_rate_limit_events` plus an audit event. The table stores route type, hashed scope, hashed IP, hashed user agent, and window evidence only; raw IP addresses and public tokens are not persisted.
+
+Opening `/order/:order_token` in a browser renders a reusable reception-number card with item name, unit price, quantity, subtotal, total, tax/currency, pickup location/window, and expiry snapshots. The page includes image save/share/copy controls, local previous-order recall, and an iPhone Safari image-preview fallback with long-press save guidance. API clients that do not request `text/html` keep the existing JSON response, and `/api/public/orders/:order_token` returns the same order payload with store profile and resolved receipt snapshot data. Public page actions are recorded in `order_page_events` with a hashed IP and bounded event names.
+
+Store staff redemption uses a separate store-scoped URL and PIN, not the Cloud admin login. Operators create or rotate a store access URL from the Admin UI or:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"pin":"1234","notes":"front counter"}' \
+  http://localhost:3200/api/admin/stores/STO-LOCAL/access-token
+```
+
+Staff open `/store/orders/:store_token`, enter the PIN, and can list only that store's orders. Marking an order `redeemed` requires the customer's `verify_code`; `issued` and `cancelled` updates remain store-scoped and audited. Store access tokens and staff sessions are hash-only in the DB. PIN failures lock temporarily using `MISELL_STORE_STAFF_PIN_MAX_ATTEMPTS` and `MISELL_STORE_STAFF_PIN_LOCK_SECONDS`; sessions expire with `MISELL_STORE_STAFF_SESSION_TTL_SECONDS`.
+
+Customer management access is separate from staff access. Operators can issue a tenant-scoped customer URL from the Admin UI or API:
+
+```bash
+curl -u admin:change-me \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"role":"customer_viewer","store_ids":["STO-LOCAL"],"pin":"2468"}' \
+  http://localhost:3200/api/admin/tenants/TEN-LOCAL/customer-access-token
+```
+
+Customers open `/customer/admin/:customer_access_token_id`, enter the PIN, and can only read data inside the server-side tenant/store scope. The URL identifier is not a raw secret; the PIN and session token remain hash-only server-side and are not returned in JSON or HTML bootstrap responses. `customer_viewer` can view KPI reports, counter-order status, store settings, and offers. `customer_editor` / `customer_admin` can create a new `offer_revision` for allowed offers; published order snapshots remain immutable.
+
 Device playlogs should send stable `event_id` values. Legacy payloads without `event_id` are still accepted; Cloud derives a `legacy-*` event id from the device and playback fields. Reposting the same `(tenant_id, device_id, event_id)` returns `duplicate: true` without inserting another row.
+
+## Reporting Read Model and Monthly Snapshots
+
+Cloud can aggregate the existing heartbeat, playlog, QR scan, counter-order, and error-log tables into a store/day reporting read model.
+
+- `POST /api/admin/reports/read-model/rebuild` materializes `report_daily_store_metrics` for a requested month or date range.
+- `GET /api/admin/reports/summary` returns the same summary shape from live event tables.
+- `GET /api/admin/reports/daily-metrics` returns persisted read-model rows.
+- `POST /api/admin/reports/monthly-snapshots` rebuilds the read model for a full month and stores an immutable monthly report payload in `report_snapshots`.
+- `GET /api/admin/reports/monthly-snapshots` and `GET /api/admin/reports/monthly-snapshots/:snapshot_id` retrieve saved report snapshots.
+
+Report periods are local business days. Bucketing uses each store's `timezone` and `business_day_start_time`, so after-midnight activity can still count toward the previous business day. Monthly snapshots are keyed by report type, period, tenant, store, campaign, and content scope to avoid accidental duplicate monthly reports.
+
+`metrics_sha256` is calculated from a stable normalized report payload with generation timestamps removed. Replacing a monthly snapshot with the same underlying data keeps the same metrics hash while still updating `generated_at` in the saved payload.
+
+Customer scoped conversion reporting is exposed through:
+
+- `GET /api/customer/reports/conversion`
+- `GET /api/customer/counter-orders`
+- `GET /api/customer/store-settings`
+- `GET /api/customer/offers`
+
+The customer conversion report includes QR scans, issued orders, redeemed orders, `scan_to_order_rate`, `order_to_redeem_rate`, issued amount, and redeemed amount. Amount labels are intentionally `potential_sales_amount` and `estimated_redeemed_amount`; they are not POS-settled sales.
 
 ## API
 
@@ -209,6 +466,10 @@ Device playlogs should send stable `event_id` values. Legacy payloads without `e
 - `GET /api/admin/stores/:store_id/settings` with Basic auth
 - `PUT /api/admin/stores/:store_id/settings` with Basic auth
 - `PATCH /api/admin/stores/:store_id/settings` with Basic auth
+- `GET /api/admin/store-access-tokens` with Basic auth
+- `POST /api/admin/stores/:store_id/access-token` with Basic auth
+- `POST /api/admin/store-access-tokens/:store_access_token_id/rotate` with Basic auth
+- `POST /api/admin/store-access-tokens/:store_access_token_id/pin` with Basic auth
 - `GET /api/admin/items` with Basic auth
 - `POST /api/admin/items` with Basic auth
 - `PATCH /api/admin/items/:item_id` with Basic auth
@@ -221,9 +482,23 @@ Device playlogs should send stable `event_id` values. Legacy payloads without `e
 - `GET /api/admin/counter-orders` with Basic auth
 - `POST /api/admin/counter-orders` with Basic auth
 - `PATCH /api/admin/counter-orders/:counter_order_id/status` with Basic auth
+- `GET /api/admin/reports/summary` with Basic auth
+- `GET /api/admin/reports/daily-metrics` with Basic auth
+- `POST /api/admin/reports/read-model/rebuild` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots` with Basic auth
+- `POST /api/admin/reports/monthly-snapshots` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots/:snapshot_id` with Basic auth
 - `GET /q/:qr_token`
 - `POST /q/:qr_token/orders`
 - `GET /order/:order_token`
+- `GET /api/public/orders/:order_token`
+- `POST /api/public/orders/:order_token/events`
+- `GET /store/orders/:store_token`
+- `POST /store/orders/:store_token/session`
+- `GET /api/store/orders/session`
+- `POST /api/store/orders/logout`
+- `GET /api/store/orders`
+- `PATCH /api/store/orders/:counter_order_id/status`
 - `PATCH /api/admin/devices/:device_id` with Basic auth
 - `PATCH /api/admin/devices/:device_id/update` with Basic auth
 - `POST /api/admin/devices/:device_id/token/revoke` with Basic auth

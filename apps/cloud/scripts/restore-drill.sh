@@ -11,4 +11,4 @@ if [[ -f "${ENV_FILE}" ]]; then
   set +a
 fi
 
-exec node "${APP_DIR}/scripts/backup-sqlite.mjs" "$@"
+exec node "${APP_DIR}/scripts/restore-drill.mjs" "$@"

@@ -8,6 +8,7 @@ const Database = require("better-sqlite3");
 const express = require("express");
 const basicAuth = require("express-basic-auth");
 const multer = require("multer");
+const { buildManifestContract } = require("./lib/studio-phase1-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -42,6 +43,121 @@ const ITEM_STATUS = new Set(["active", "archived"]);
 const OFFER_STATUS = new Set(["draft", "active", "retired", "archived"]);
 const OFFER_REVISION_STATUS = new Set(["draft", "active", "retired"]);
 const COUNTER_ORDER_STATUS = new Set(["issued", "redeemed", "expired", "cancelled"]);
+const REPORT_SNAPSHOT_STATUS = new Set(["draft", "published", "archived"]);
+const DEVICE_COMMAND_TYPES = new Set([
+  "reload_player_content",
+  "restart_player",
+  "restart_kiosk",
+  "collect_logs",
+  "sync_content_now"
+]);
+const DEVICE_COMMAND_STATUS = new Set([
+  "queued",
+  "claimed",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "expired",
+  "stale",
+  "force_cancelled"
+]);
+const DEVICE_COMMAND_TERMINAL_STATUS = new Set(["succeeded", "failed", "cancelled", "expired", "stale", "force_cancelled"]);
+const DEVICE_COMMAND_ISSUER_ROLES = new Set(["misell_owner", "misell_operator", "device_ops"]);
+const DEVICE_COMMAND_DEFAULT_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_DEFAULT_TTL_SECONDS,
+  300,
+  1,
+  3600
+);
+const DEVICE_COMMAND_MAX_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_MAX_TTL_SECONDS,
+  3600,
+  60,
+  86400
+);
+const DEVICE_COMMAND_RESULT_MAX_BYTES = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_RESULT_MAX_BYTES,
+  2000,
+  256,
+  8000
+);
+const DEVICE_COMMAND_CLAIM_LEASE_SECONDS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_CLAIM_LEASE_SECONDS,
+  300,
+  1,
+  86400
+);
+const DEVICE_COMMAND_RETENTION_DAYS = normalizedLimit(
+  process.env.MISELL_DEVICE_COMMAND_RETENTION_DAYS,
+  90,
+  1,
+  3650
+);
+const STORE_ACCESS_TOKEN_PEPPER = process.env.MISELL_STORE_ACCESS_TOKEN_PEPPER || process.env.STORE_ACCESS_TOKEN_PEPPER || DEVICE_TOKEN_PEPPER;
+const STORE_STAFF_SESSION_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_STORE_STAFF_SESSION_TTL_SECONDS,
+  12 * 60 * 60,
+  60,
+  7 * 24 * 60 * 60
+);
+const STORE_STAFF_PIN_MAX_ATTEMPTS = normalizedLimit(
+  process.env.MISELL_STORE_STAFF_PIN_MAX_ATTEMPTS,
+  5,
+  1,
+  20
+);
+const STORE_STAFF_PIN_LOCK_SECONDS = normalizedLimit(
+  process.env.MISELL_STORE_STAFF_PIN_LOCK_SECONDS,
+  10 * 60,
+  60,
+  24 * 60 * 60
+);
+const CUSTOMER_ACCESS_TOKEN_PEPPER = process.env.MISELL_CUSTOMER_ACCESS_TOKEN_PEPPER || process.env.CUSTOMER_ACCESS_TOKEN_PEPPER || DEVICE_TOKEN_PEPPER;
+const CUSTOMER_SESSION_TTL_SECONDS = normalizedLimit(
+  process.env.MISELL_CUSTOMER_SESSION_TTL_SECONDS,
+  12 * 60 * 60,
+  60,
+  7 * 24 * 60 * 60
+);
+const CUSTOMER_PIN_MAX_ATTEMPTS = normalizedLimit(
+  process.env.MISELL_CUSTOMER_PIN_MAX_ATTEMPTS,
+  5,
+  1,
+  20
+);
+const CUSTOMER_PIN_LOCK_SECONDS = normalizedLimit(
+  process.env.MISELL_CUSTOMER_PIN_LOCK_SECONDS,
+  10 * 60,
+  60,
+  24 * 60 * 60
+);
+const CUSTOMER_ROLES = new Set(["customer_admin", "customer_editor", "customer_viewer"]);
+const CUSTOMER_EDIT_ROLES = new Set(["customer_admin", "customer_editor"]);
+const PUBLIC_QR_VIEW_LIMIT = normalizedLimit(
+  process.env.MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE,
+  120,
+  1,
+  10000
+);
+const PUBLIC_ORDER_CREATE_LIMIT = normalizedLimit(
+  process.env.MISELL_PUBLIC_ORDER_CREATE_LIMIT_PER_MINUTE,
+  8,
+  1,
+  10000
+);
+const PUBLIC_ORDER_VIEW_LIMIT = normalizedLimit(
+  process.env.MISELL_PUBLIC_ORDER_VIEW_LIMIT_PER_MINUTE,
+  120,
+  1,
+  10000
+);
+const PUBLIC_RATE_LIMIT_WINDOW_SECONDS = normalizedLimit(
+  process.env.MISELL_PUBLIC_RATE_LIMIT_WINDOW_SECONDS,
+  60,
+  10,
+  3600
+);
 const QR_DESTINATION_TYPES = new Set([
   "external_url",
   "coupon",
@@ -51,6 +167,15 @@ const QR_DESTINATION_TYPES = new Set([
   "line",
   "reservation",
   "counter_order_offer"
+]);
+const ORDER_PAGE_EVENTS = new Set([
+  "view",
+  "save_image",
+  "preview_image",
+  "share",
+  "copy_order_number",
+  "copy_url",
+  "open_previous_order"
 ]);
 const DEFAULT_TIMEZONE = "Asia/Tokyo";
 const DEFAULT_CURRENCY = "JPY";
@@ -79,6 +204,12 @@ const CLOUD_ASSET_MIME_BY_EXTENSION = new Map([
   [".mp4", new Set(["video/mp4"])],
   [".webm", new Set(["video/webm", "video/x-matroska"])]
 ]);
+const REPORT_HEARTBEAT_INTERVAL_MINUTES = normalizedLimit(
+  process.env.REPORT_HEARTBEAT_INTERVAL_MINUTES || process.env.MISELL_REPORT_HEARTBEAT_INTERVAL_MINUTES,
+  5,
+  1,
+  60
+);
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(CLOUD_ASSETS_DIR, { recursive: true });
@@ -117,7 +248,34 @@ const adminAuth = basicAuth({
 });
 
 function requireAdminAuth(req, res, next) {
-  adminAuth(req, res, next);
+  adminAuth(req, res, (error) => {
+    if (error) {
+      next(error);
+      return;
+    }
+    req.adminActor = adminActorFromRequest(req);
+    next();
+  });
+}
+
+function adminActorFromRequest(req) {
+  return {
+    actor_id: cleanString(req?.auth?.user || process.env.MISELL_CLOUD_ADMIN_ID || ADMIN_USER || "admin").slice(0, 120) || "admin",
+    role: cleanString(process.env.MISELL_CLOUD_ADMIN_ROLE || process.env.ADMIN_ROLE || "").slice(0, 80)
+  };
+}
+
+function requireDeviceCommandIssuer(req, res, next) {
+  const actor = req.adminActor || adminActorFromRequest(req);
+  if (!DEVICE_COMMAND_ISSUER_ROLES.has(actor.role)) {
+    res.status(403).json({
+      error: "Admin role is not allowed to issue device commands",
+      required_roles: Array.from(DEVICE_COMMAND_ISSUER_ROLES)
+    });
+    return;
+  }
+  req.adminActor = actor;
+  next();
 }
 
 function requireDeviceAuth(req, res, next) {
@@ -224,8 +382,87 @@ app.get("/api/admin/devices/:device_id", requireAdminAuth, (req, res) => {
   res.json({ ok: true, device });
 });
 
+app.get("/api/admin/device-commands", requireAdminAuth, (req, res, next) => {
+  try {
+    maintainDeviceCommands();
+    res.json({
+      ok: true,
+      device_commands: listDeviceCommands({
+        tenant_id: req.query.tenant_id,
+        store_id: req.query.store_id,
+        screen_group_id: req.query.screen_group_id,
+        device_id: req.query.device_id,
+        status: req.query.status,
+        limit: req.query.limit
+      })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/devices/:device_id/commands", requireAdminAuth, (req, res, next) => {
+  try {
+    const deviceId = cleanId(req.params.device_id);
+    const device = db.prepare("SELECT device_id FROM devices WHERE device_id = ?").get(deviceId);
+    if (!device) {
+      res.status(404).json({ error: "Device not found" });
+      return;
+    }
+    maintainDeviceCommands();
+    res.json({
+      ok: true,
+      device_commands: listDeviceCommands({
+        tenant_id: req.query.tenant_id,
+        store_id: req.query.store_id,
+        screen_group_id: req.query.screen_group_id,
+        device_id: deviceId,
+        status: req.query.status,
+        limit: req.query.limit
+      })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/devices/:device_id/commands", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
+  try {
+    const command = createDeviceCommand(cleanId(req.params.device_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/device-commands/:device_command_id/cancel", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
+  try {
+    const command = cancelDeviceCommand(cleanId(req.params.device_command_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/device-commands/:device_command_id/force-cancel", requireAdminAuth, requireDeviceCommandIssuer, (req, res, next) => {
+  try {
+    const command = forceCancelDeviceCommand(cleanId(req.params.device_command_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/store-settings", requireAdminAuth, (req, res) => {
   res.json({ ok: true, store_settings: listStoreSettings() });
+});
+
+app.get("/api/admin/store-access-tokens", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, store_access_tokens: listStoreAccessTokens(req.query || {}) });
+});
+
+app.get("/api/admin/customer-access-tokens", requireAdminAuth, (req, res) => {
+  res.json({ ok: true, customer_access_tokens: listCustomerAccessTokens(req.query || {}) });
 });
 
 app.get("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res) => {
@@ -241,6 +478,42 @@ app.put("/api/admin/stores/:store_id/settings", requireAdminAuth, (req, res, nex
   try {
     const settings = upsertStoreSettings(cleanId(req.params.store_id), req.body || {});
     res.json({ ok: true, store_settings: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/stores/:store_id/access-token", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createStoreAccessToken(cleanId(req.params.store_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/tenants/:tenant_id/customer-access-token", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createCustomerAccessToken(cleanId(req.params.tenant_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/store-access-tokens/:store_access_token_id/rotate", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = rotateStoreAccessToken(cleanId(req.params.store_access_token_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/store-access-tokens/:store_access_token_id/pin", requireAdminAuth, (req, res, next) => {
+  try {
+    const token = resetStoreAccessTokenPin(cleanId(req.params.store_access_token_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, store_access_token: token });
   } catch (error) {
     next(error);
   }
@@ -333,6 +606,10 @@ app.get("/q/:qr_token", (req, res, next) => {
       return;
     }
     assertQrLinkUsable(qrLink);
+    enforcePublicRateLimit(req, "qr_view", qrLink.qr_token || req.params.qr_token, {
+      limit: PUBLIC_QR_VIEW_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
     const offerRevision = resolveQrLinkOfferRevision(qrLink);
     if (qrLink.destination_type === "counter_order_offer" && !offerRevision) {
       throw requestError("QR link has no active offer revision", 409);
@@ -364,6 +641,10 @@ app.post("/q/:qr_token/orders", (req, res, next) => {
     if (qrLink.destination_type !== "counter_order_offer") {
       throw requestError("QR link does not issue counter orders", 400);
     }
+    enforcePublicRateLimit(req, "counter_order_create", qrLink.qr_token || req.params.qr_token, {
+      limit: PUBLIC_ORDER_CREATE_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
     const qrScan = resolveQrScanForOrder(qrLink, req);
     const offerRevision = resolveQrLinkOfferRevision(qrLink);
     if (!offerRevision) {
@@ -388,13 +669,171 @@ app.post("/q/:qr_token/orders", (req, res, next) => {
   }
 });
 
-app.get("/order/:order_token", (req, res) => {
-  const order = getCounterOrderByToken(cleanString(req.params.order_token));
-  if (!order) {
-    res.status(404).json({ error: "Order not found" });
+app.get("/order/:order_token", (req, res, next) => {
+  try {
+    enforcePublicRateLimit(req, "order_view", cleanString(req.params.order_token), {
+      limit: PUBLIC_ORDER_VIEW_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
+    const order = getCounterOrderByToken(cleanString(req.params.order_token));
+    if (!order) {
+      if (requestAcceptsHtml(req)) {
+        res.status(404).type("html").send(renderOrderNotFoundPage());
+        return;
+      }
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    if (requestAcceptsHtml(req)) {
+      res.type("html").send(renderCounterOrderPage(order, cleanString(req.params.order_token), req));
+      return;
+    }
+    res.json({ ok: true, counter_order: order });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/public/orders/:order_token", (req, res, next) => {
+  try {
+    enforcePublicRateLimit(req, "order_view", cleanString(req.params.order_token), {
+      limit: PUBLIC_ORDER_VIEW_LIMIT,
+      windowSeconds: PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    });
+    const order = getCounterOrderByToken(cleanString(req.params.order_token));
+    if (!order) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    res.json({ ok: true, counter_order: withCounterOrderStoreProfile(order) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/public/orders/:order_token/events", (req, res, next) => {
+  try {
+    const event = recordOrderPageEvent(cleanString(req.params.order_token), req.body || {}, req);
+    res.status(201).json({ ok: true, event });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/store/orders/:store_token", (req, res) => {
+  const storeAccess = getStoreAccessTokenByRawToken(cleanString(req.params.store_token));
+  if (!storeAccess || storeAccess.status !== "active") {
+    res.status(404).type("html").send(renderStoreOrdersNotFoundPage());
     return;
   }
-  res.json({ ok: true, counter_order: order });
+  res.type("html").send(renderStoreOrdersPage(storeAccess, req));
+});
+
+app.post("/store/orders/:store_token/session", (req, res, next) => {
+  try {
+    const session = createStoreStaffSession(cleanString(req.params.store_token), req.body || {}, req);
+    setStoreStaffSessionCookie(req, res, session.session_token, session.expires_at);
+    res.status(201).json({ ok: true, session: publicStoreStaffSession(session), store: session.store });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/store/orders/session", requireStoreStaffSession, (req, res) => {
+  res.json({ ok: true, session: publicStoreStaffSession(req.storeStaffSession), store: req.storeStaffSession.store });
+});
+
+app.post("/api/store/orders/logout", requireStoreStaffSession, (req, res) => {
+  revokeStoreStaffSession(req.storeStaffSession);
+  clearStoreStaffSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/store/orders", requireStoreStaffSession, (req, res) => {
+  res.json({
+    ok: true,
+    counter_orders: listCounterOrders({
+      ...req.query,
+      store_id: req.storeStaffSession.store_id
+    })
+  });
+});
+
+app.patch("/api/store/orders/:counter_order_id/status", requireStoreStaffSession, (req, res, next) => {
+  try {
+    const order = updateStoreCounterOrderStatus(req.storeStaffSession, cleanId(req.params.counter_order_id), req.body || {});
+    res.json({ ok: true, counter_order: order });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/customer/admin", (req, res) => {
+  res.type("html").send(renderCustomerAdminNotFoundPage());
+});
+
+app.get("/customer/admin/:customer_access_token_id", (req, res) => {
+  const customerAccess = getCustomerAccessToken(cleanId(req.params.customer_access_token_id));
+  if (!customerAccess || customerAccess.status !== "active") {
+    res.status(404).type("html").send(renderCustomerAdminNotFoundPage());
+    return;
+  }
+  res.type("html").send(renderCustomerAdminPage(customerAccess, req));
+});
+
+app.post("/customer/admin/:customer_access_token_id/session", (req, res, next) => {
+  try {
+    const session = createCustomerSession(cleanId(req.params.customer_access_token_id), req.body || {}, req);
+    setCustomerSessionCookie(req, res, session.session_token, session.expires_at);
+    res.status(201).json({ ok: true, session: publicCustomerSession(session) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/customer/session", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, session: publicCustomerSession(req.customerSession) });
+});
+
+app.post("/api/customer/logout", requireCustomerSession, (req, res) => {
+  revokeCustomerSession(req.customerSession);
+  clearCustomerSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/customer/reports/conversion", requireCustomerSession, (req, res, next) => {
+  try {
+    const criteria = normalizeCustomerReportCriteria(req.query || {}, req.customerSession);
+    res.json({ ok: true, report: buildCustomerConversionReport(criteria, req.customerSession) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/customer/counter-orders", requireCustomerSession, (req, res, next) => {
+  try {
+    const query = normalizeCustomerCounterOrderQuery(req.query || {}, req.customerSession);
+    res.json({ ok: true, counter_orders: listCounterOrders(query) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/customer/store-settings", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, store_settings: listCustomerStoreSettings(req.customerSession) });
+});
+
+app.get("/api/customer/offers", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, offers: listCustomerOffers(req.customerSession) });
+});
+
+app.post("/api/customer/offers/:offer_id/revisions", requireCustomerSession, requireCustomerEditor, (req, res, next) => {
+  try {
+    const revision = createCustomerOfferRevision(req.customerSession, cleanId(req.params.offer_id), req.body || {});
+    res.status(201).json({ ok: true, offer_revision: revision, offer: getOffer(cleanId(req.params.offer_id), { includeRevisions: true }) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/admin/counter-orders", requireAdminAuth, (req, res) => {
@@ -421,6 +860,65 @@ app.patch("/api/admin/counter-orders/:counter_order_id/status", requireAdminAuth
   } catch (error) {
     next(error);
   }
+});
+
+app.get("/api/admin/reports/summary", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeReportCriteria(req.query || {});
+    res.json({ ok: true, report: buildReportSummary(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/daily-metrics", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeReportCriteria(req.query || {});
+    res.json({ ok: true, metrics: listReportDailyStoreMetrics(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/reports/read-model/rebuild", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeReportCriteria(req.body || {});
+    const result = rebuildReportDailyStoreMetrics(criteria);
+    res.status(201).json({
+      ok: true,
+      rebuilt: result.rows.length,
+      report: buildReportSummary(criteria, { dailyRows: result.rows, generatedAt: result.generated_at })
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/monthly-snapshots", requireAdminAuth, (req, res, next) => {
+  try {
+    const filters = normalizeReportSnapshotListFilters(req.query || {});
+    res.json({ ok: true, report_snapshots: listReportSnapshots(filters) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/reports/monthly-snapshots", requireAdminAuth, (req, res, next) => {
+  try {
+    const snapshot = createMonthlyReportSnapshot(req.body || {});
+    res.status(201).json({ ok: true, report_snapshot: snapshot });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/monthly-snapshots/:snapshot_id", requireAdminAuth, (req, res) => {
+  const snapshot = getReportSnapshot(cleanId(req.params.snapshot_id));
+  if (!snapshot) {
+    res.status(404).json({ error: "Report snapshot not found" });
+    return;
+  }
+  res.json({ ok: true, report_snapshot: snapshot });
 });
 
 app.get("/api/admin/device-log-bundles", requireAdminAuth, (req, res) => {
@@ -619,8 +1117,10 @@ app.post("/api/admin/content-manifests", requireAdminAuth, (req, res, next) => {
       db.prepare(`
         INSERT INTO content_manifests (
           content_id, playlist_version, release_channel, status, title, notes,
+          tenant_id, store_id, screen_group_id, screen_slot_id,
+          manifest_schema_version, manifest_version, content_hash, lifecycle_status,
           playlist_json, created_at, updated_at, published_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.content_id,
         input.playlist_version,
@@ -628,6 +1128,14 @@ app.post("/api/admin/content-manifests", requireAdminAuth, (req, res, next) => {
         input.status,
         input.title,
         input.notes,
+        input.tenant_id,
+        input.store_id,
+        input.screen_group_id,
+        input.screen_slot_id,
+        input.manifest_schema_version,
+        input.manifest_version,
+        input.content_hash,
+        input.lifecycle_status,
         JSON.stringify(input.playlist),
         now,
         now,
@@ -672,6 +1180,14 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
           status = ?,
           title = ?,
           notes = ?,
+          tenant_id = ?,
+          store_id = ?,
+          screen_group_id = ?,
+          screen_slot_id = ?,
+          manifest_schema_version = ?,
+          manifest_version = ?,
+          content_hash = ?,
+          lifecycle_status = ?,
           playlist_json = ?,
           updated_at = ?,
           published_at = ?
@@ -682,6 +1198,14 @@ app.patch("/api/admin/content-manifests/:content_id", requireAdminAuth, (req, re
         input.status,
         input.title,
         input.notes,
+        input.tenant_id,
+        input.store_id,
+        input.screen_group_id,
+        input.screen_slot_id,
+        input.manifest_schema_version,
+        input.manifest_version,
+        input.content_hash,
+        input.lifecycle_status,
         JSON.stringify(input.playlist),
         now,
         publishedAt,
@@ -1036,11 +1560,42 @@ app.post("/api/admin/devices", requireAdminAuth, (req, res, next) => {
   }
 });
 
+app.get("/api/device/commands", requireDeviceAuth, (req, res, next) => {
+  try {
+    maintainDeviceCommands();
+    const limit = normalizedLimit(req.query.limit, 5, 1, 20);
+    res.json({
+      ok: true,
+      commands: listPendingDeviceCommands(req.device, limit)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/device/commands/:device_command_id/claim", requireDeviceAuth, (req, res, next) => {
+  try {
+    const command = claimDeviceCommand(req.device, cleanId(req.params.device_command_id), req.body || {});
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/device/commands/:device_command_id/result", requireDeviceAuth, (req, res, next) => {
+  try {
+    const command = completeDeviceCommand(req.device, cleanId(req.params.device_command_id), req.body || {});
+    res.json({ ok: true, device_command: command });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/device/heartbeat", requireDeviceAuth, (req, res, next) => {
   try {
     const payload = req.body || {};
     assertPayloadDeviceMatches(req.device, payload);
-    const receivedAt = nowIso();
+    const receivedAt = requestNowIso(payload);
     const normalized = normalizeHeartbeatPayload(req.device, payload, receivedAt);
 
     const result = db.prepare(`
@@ -1371,20 +1926,41 @@ app.post("/api/device/error", requireDeviceAuth, (req, res, next) => {
     const now = nowIso();
     const severity = cleanString(payload.severity) || "error";
     const message = cleanString(payload.message || payload.error || payload.last_error) || "Device error";
+    const occurredAt = cleanString(payload.occurred_at || payload.timestamp) || now;
+    const resolvedEvent = resolveDeviceErrorEventId(payload, req.device, occurredAt, severity, message);
+    const eventId = resolvedEvent.event_id;
+    const existing = db.prepare(`
+      SELECT id, received_at FROM error_logs
+      WHERE tenant_id = ? AND device_id = ? AND event_id = ?
+    `).get(req.device.tenant_id, req.device.device_id, eventId);
+    if (existing) {
+      res.status(200).json({
+        ok: true,
+        duplicate: true,
+        event_id: eventId,
+        event_id_generated: resolvedEvent.generated,
+        received_at: existing.received_at
+      });
+      return;
+    }
 
     db.prepare(`
       INSERT INTO error_logs (
-        device_id, tenant_id, store_id, received_at, occurred_at, severity, message, path, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        device_id, tenant_id, store_id, screen_group_id, received_at, occurred_at,
+        severity, message, path, event_id, event_type, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.device.device_id,
       req.device.tenant_id,
       req.device.store_id,
+      req.device.screen_group_id,
       now,
-      cleanString(payload.timestamp),
+      occurredAt,
       severity,
       message,
       cleanString(payload.path),
+      eventId,
+      cleanString(payload.event_type || payload.eventType || "device_error"),
       JSON.stringify(payload)
     );
 
@@ -1392,7 +1968,7 @@ app.post("/api/device/error", requireDeviceAuth, (req, res, next) => {
     db.prepare("UPDATE devices SET last_error = ?, status = ?, updated_at = ? WHERE device_id = ?")
       .run(message, severity === "critical" ? "critical" : "degraded", now, req.device.device_id);
 
-    res.status(201).json({ ok: true, received_at: now });
+    res.status(201).json({ ok: true, event_id: eventId, event_id_generated: resolvedEvent.generated, received_at: now });
   } catch (error) {
     next(error);
   }
@@ -2230,6 +2806,339 @@ function schemaMigrations() {
           CREATE INDEX IF NOT EXISTS idx_device_commands_status ON device_commands(status, ttl_expires_at);
         `);
       }
+    },
+    {
+      version: 4,
+      name: "reporting_read_model_monthly_snapshots",
+      up() {
+        addColumnIfMissing("report_snapshots", "tenant_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "store_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "screen_group_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "content_id", "TEXT");
+        addColumnIfMissing("report_snapshots", "report_type", "TEXT");
+        addColumnIfMissing("report_snapshots", "status", "TEXT NOT NULL DEFAULT 'draft'");
+        addColumnIfMissing("report_snapshots", "title", "TEXT");
+        addColumnIfMissing("report_snapshots", "summary_json", "TEXT");
+        addColumnIfMissing("report_snapshots", "generated_at", "TEXT");
+        addColumnIfMissing("report_snapshots", "published_at", "TEXT");
+        addColumnIfMissing("report_snapshots", "snapshot_key", "TEXT");
+        addColumnIfMissing("report_snapshots", "metrics_sha256", "TEXT");
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS report_daily_store_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric_key TEXT NOT NULL UNIQUE,
+            metric_date TEXT NOT NULL,
+            period_start TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            campaign_id TEXT,
+            content_id TEXT,
+            device_count INTEGER NOT NULL DEFAULT 0,
+            active_device_count INTEGER NOT NULL DEFAULT 0,
+            heartbeat_count INTEGER NOT NULL DEFAULT 0,
+            expected_heartbeat_count INTEGER NOT NULL DEFAULT 0,
+            uptime_sample_rate REAL NOT NULL DEFAULT 0,
+            play_event_count INTEGER NOT NULL DEFAULT 0,
+            play_started_count INTEGER NOT NULL DEFAULT 0,
+            play_completed_count INTEGER NOT NULL DEFAULT 0,
+            play_failed_count INTEGER NOT NULL DEFAULT 0,
+            play_duration_seconds INTEGER NOT NULL DEFAULT 0,
+            qr_scan_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_issued_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_redeemed_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_cancelled_count INTEGER NOT NULL DEFAULT 0,
+            counter_orders_expired_count INTEGER NOT NULL DEFAULT 0,
+            counter_order_total_amount INTEGER NOT NULL DEFAULT 0,
+            counter_order_redeemed_amount INTEGER NOT NULL DEFAULT 0,
+            error_count INTEGER NOT NULL DEFAULT 0,
+            generated_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source_from TEXT NOT NULL,
+            source_to TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_report_daily_metrics_period
+            ON report_daily_store_metrics(period_start, period_end, metric_date, tenant_id, store_id);
+          CREATE INDEX IF NOT EXISTS idx_report_daily_metrics_scope
+            ON report_daily_store_metrics(tenant_id, store_id, campaign_id, content_id, metric_date);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_report_snapshots_snapshot_key
+            ON report_snapshots(snapshot_key)
+            WHERE snapshot_key IS NOT NULL AND snapshot_key != '';
+          CREATE INDEX IF NOT EXISTS idx_report_snapshots_scope
+            ON report_snapshots(report_type, period_start, period_end, tenant_id, store_id, campaign_id, content_id, status);
+        `);
+
+        db.prepare(`
+          UPDATE report_snapshots
+          SET
+            report_type = COALESCE(NULLIF(report_type, ''), snapshot_type, 'monthly_summary'),
+            status = COALESCE(NULLIF(status, ''), 'draft'),
+            summary_json = COALESCE(NULLIF(summary_json, ''), metrics_json),
+            generated_at = COALESCE(NULLIF(generated_at, ''), created_at)
+        `).run();
+      }
+    },
+    {
+      version: 5,
+      name: "studio_phase1_domain_publish_and_approval_contracts",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS screen_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            screen_slot_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            position TEXT NOT NULL,
+            display_order INTEGER NOT NULL,
+            name TEXT,
+            orientation TEXT NOT NULL DEFAULT 'landscape',
+            resolution_width INTEGER NOT NULL DEFAULT 1920,
+            resolution_height INTEGER NOT NULL DEFAULT 1080,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(screen_group_id, position),
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE,
+            FOREIGN KEY(screen_group_id) REFERENCES screen_groups(screen_group_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS screen_device_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            binding_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            screen_slot_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            bound_at TEXT NOT NULL,
+            unbound_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(screen_slot_id) REFERENCES screen_slots(screen_slot_id) ON DELETE CASCADE,
+            FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS content_approvals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT,
+            screen_group_id TEXT,
+            screen_slot_id TEXT,
+            content_type TEXT NOT NULL,
+            subject_type TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            subject_hash TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL DEFAULT '',
+            approval_status TEXT NOT NULL DEFAULT 'draft',
+            requested_by TEXT,
+            requested_at TEXT,
+            decided_by TEXT,
+            decided_at TEXT,
+            expires_at TEXT,
+            rejection_reason TEXT,
+            revoked_reason TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS publish_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            publish_history_id TEXT NOT NULL UNIQUE,
+            content_id TEXT NOT NULL,
+            tenant_id TEXT,
+            store_id TEXT,
+            screen_group_id TEXT,
+            screen_slot_id TEXT,
+            action TEXT NOT NULL,
+            manifest_version INTEGER NOT NULL,
+            manifest_schema_version INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            previous_content_id TEXT,
+            rollback_from_content_id TEXT,
+            actor_role TEXT,
+            actor_id TEXT,
+            approval_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            approval_hash TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(content_id) REFERENCES content_manifests(content_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_screen_slots_group_order ON screen_slots(screen_group_id, display_order);
+          CREATE INDEX IF NOT EXISTS idx_screen_slots_tenant_store ON screen_slots(tenant_id, store_id, status);
+          CREATE INDEX IF NOT EXISTS idx_screen_device_bindings_slot ON screen_device_bindings(screen_slot_id, status);
+          CREATE INDEX IF NOT EXISTS idx_screen_device_bindings_device ON screen_device_bindings(device_id, status);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_screen_device_bindings_active_slot ON screen_device_bindings(screen_slot_id) WHERE status = 'active';
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_screen_device_bindings_active_device ON screen_device_bindings(device_id) WHERE status = 'active';
+          CREATE INDEX IF NOT EXISTS idx_content_approvals_subject ON content_approvals(subject_type, subject_id, approval_status);
+          CREATE INDEX IF NOT EXISTS idx_content_approvals_tenant_type ON content_approvals(tenant_id, content_type, approval_status);
+          CREATE INDEX IF NOT EXISTS idx_content_approvals_scope_hash ON content_approvals(tenant_id, store_id, screen_group_id, content_hash, approval_status);
+          CREATE INDEX IF NOT EXISTS idx_publish_history_content ON publish_history(content_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_publish_history_scope ON publish_history(tenant_id, store_id, screen_group_id, created_at DESC);
+        `);
+
+        addColumnIfMissing("content_manifests", "tenant_id", "TEXT");
+        addColumnIfMissing("content_manifests", "store_id", "TEXT");
+        addColumnIfMissing("content_manifests", "screen_group_id", "TEXT");
+        addColumnIfMissing("content_manifests", "screen_slot_id", "TEXT");
+        addColumnIfMissing("content_manifests", "manifest_schema_version", "INTEGER NOT NULL DEFAULT 1");
+        addColumnIfMissing("content_manifests", "manifest_version", "INTEGER NOT NULL DEFAULT 1");
+        addColumnIfMissing("content_manifests", "content_hash", "TEXT NOT NULL DEFAULT ''");
+        addColumnIfMissing("content_manifests", "lifecycle_status", "TEXT NOT NULL DEFAULT 'draft'");
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_content_manifests_scope ON content_manifests(tenant_id, store_id, screen_group_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_content_manifests_hash ON content_manifests(content_hash);
+        `);
+      }
+    },
+    {
+      version: 6,
+      name: "device_command_queue_runtime",
+      up() {
+        addColumnIfMissing("device_commands", "claim_token", "TEXT");
+        addColumnIfMissing("device_commands", "claimed_by_runner_id", "TEXT");
+        addColumnIfMissing("device_commands", "started_at", "TEXT");
+        addColumnIfMissing("device_commands", "cancelled_at", "TEXT");
+        addColumnIfMissing("device_commands", "cancelled_by_user_id", "TEXT");
+        addColumnIfMissing("device_commands", "expired_at", "TEXT");
+        addColumnIfMissing("device_commands", "updated_at", "TEXT");
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_device_commands_claim
+            ON device_commands(device_id, status, ttl_expires_at, requested_at);
+          CREATE INDEX IF NOT EXISTS idx_device_commands_audit
+            ON device_commands(requested_at DESC, device_id, command_type);
+        `);
+      }
+    },
+    {
+      version: 7,
+      name: "counter_order_customer_and_store_staff_ux",
+      up() {
+        addColumnIfMissing("store_access_tokens", "last_used_at", "TEXT");
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS store_staff_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_staff_session_id TEXT NOT NULL UNIQUE,
+            store_access_token_id TEXT NOT NULL,
+            session_token_hash TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT,
+            FOREIGN KEY(store_access_token_id) REFERENCES store_access_tokens(store_access_token_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS order_page_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_page_event_id TEXT NOT NULL UNIQUE,
+            counter_order_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            event_name TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            user_agent TEXT,
+            ip_hash TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(counter_order_id) REFERENCES counter_orders(counter_order_id) ON DELETE CASCADE,
+            FOREIGN KEY(store_id) REFERENCES stores(store_id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_store_staff_sessions_token
+            ON store_staff_sessions(session_token_hash, status, expires_at);
+          CREATE INDEX IF NOT EXISTS idx_store_staff_sessions_store
+            ON store_staff_sessions(store_id, status, expires_at);
+          CREATE INDEX IF NOT EXISTS idx_order_page_events_order
+            ON order_page_events(counter_order_id, occurred_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_order_page_events_store
+            ON order_page_events(store_id, event_name, occurred_at DESC);
+        `);
+      }
+    },
+    {
+      version: 8,
+      name: "public_abuse_guard_customer_reporting_access",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS public_rate_limit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            public_rate_limit_event_id TEXT NOT NULL UNIQUE,
+            route_type TEXT NOT NULL,
+            scope_hash TEXT NOT NULL,
+            window_started_at TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            limit_count INTEGER NOT NULL,
+            window_seconds INTEGER NOT NULL,
+            reason TEXT,
+            ip_hash TEXT,
+            user_agent_hash TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+          );
+
+          CREATE TABLE IF NOT EXISTS customer_access_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_access_token_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            pin_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'customer_viewer',
+            store_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            failed_attempts INTEGER NOT NULL DEFAULT 0,
+            locked_until TEXT,
+            rotated_at TEXT,
+            pin_rotated_at TEXT,
+            last_used_at TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS customer_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_session_id TEXT NOT NULL UNIQUE,
+            customer_access_token_id TEXT NOT NULL,
+            session_token_hash TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            store_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT,
+            FOREIGN KEY(customer_access_token_id) REFERENCES customer_access_tokens(customer_access_token_id) ON DELETE CASCADE,
+            FOREIGN KEY(tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_public_rate_limit_scope
+            ON public_rate_limit_events(route_type, scope_hash, window_started_at, decision);
+          CREATE INDEX IF NOT EXISTS idx_public_rate_limit_time
+            ON public_rate_limit_events(occurred_at DESC, decision, route_type);
+          CREATE INDEX IF NOT EXISTS idx_customer_access_tokens_tenant
+            ON customer_access_tokens(tenant_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_customer_sessions_token
+            ON customer_sessions(session_token_hash, status, expires_at);
+          CREATE INDEX IF NOT EXISTS idx_customer_sessions_tenant
+            ON customer_sessions(tenant_id, status, expires_at);
+        `);
+      }
     }
   ];
 }
@@ -2264,7 +3173,6 @@ function addColumnIfMissing(tableName, columnName, definition) {
 }
 
 function migrateDevicesTable() {
-  const existingColumns = new Set(db.prepare("PRAGMA table_info(devices)").all().map((column) => column.name));
   const columns = [
     ["token_status", "TEXT NOT NULL DEFAULT 'active'"],
     ["token_generation", "INTEGER NOT NULL DEFAULT 1"],
@@ -2285,9 +3193,7 @@ function migrateDevicesTable() {
   ];
 
   for (const [name, definition] of columns) {
-    if (!existingColumns.has(name)) {
-      db.exec(`ALTER TABLE devices ADD COLUMN ${name} ${definition}`);
-    }
+    addColumnIfMissing("devices", name, definition);
   }
 
   const terminalDevices = db.prepare(`
@@ -2314,6 +3220,23 @@ function migrateDevicesTable() {
     });
     migrateTerminalTokens(terminalDevices);
   }
+}
+
+function addColumnIfMissing(tableName, columnName, definition) {
+  const table = cleanSqlIdentifier(tableName);
+  const column = cleanSqlIdentifier(columnName);
+  const existingColumns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((item) => item.name));
+  if (!existingColumns.has(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function cleanSqlIdentifier(value) {
+  const identifier = String(value || "").trim();
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
+    throw new Error(`Invalid SQL identifier: ${identifier}`);
+  }
+  return identifier;
 }
 
 function normalizeDeviceInput(input) {
@@ -2610,6 +3533,23 @@ function resolvePlaylogEventId(payload, device, occurredAt) {
   };
   const digest = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 32);
   return { event_id: `legacy-${digest}`, generated: true };
+}
+
+function resolveDeviceErrorEventId(payload, device, occurredAt, severity, message) {
+  const supplied = cleanId(payload.event_id || payload.eventId);
+  if (supplied) return { event_id: supplied, generated: false };
+
+  const identity = {
+    tenant_id: cleanId(device.tenant_id),
+    device_id: cleanId(device.device_id),
+    occurred_at: cleanString(occurredAt),
+    severity: cleanString(severity),
+    message: cleanString(message),
+    path: cleanString(payload.path),
+    event_type: cleanString(payload.event_type || payload.eventType || "device_error")
+  };
+  const digest = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 32);
+  return { event_id: `legacy-error-${digest}`, generated: true };
 }
 
 function listOffers(limit = 100) {
@@ -3050,7 +3990,7 @@ function assertQrLinkUsable(qrLink) {
 }
 
 function recordQrScan(qrLink, req) {
-  const now = nowIso();
+  const now = requestNowIso({ ...(req.query || {}), ...(req.body || {}) });
   const qrScanId = nextEntityId("qrs", qrLink.qr_link_id);
   const userAgent = cleanString(req.get("user-agent")).slice(0, 500);
   const referrer = cleanString(req.get("referer") || req.get("referrer")).slice(0, 500);
@@ -3149,23 +4089,21 @@ function publicQrLink(row) {
 }
 
 function listCounterOrders(query = {}) {
+  const tenantId = cleanId(query.tenant_id || query.tenantId);
   const storeId = cleanId(query.store_id);
   const status = cleanString(query.status);
+  const q = cleanString(query.q || query.search || "").slice(0, 80);
   const boundedLimit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
-  const rows = storeId
-    ? db.prepare(`
-      SELECT * FROM counter_orders
-      WHERE store_id = ?
-        AND (? = '' OR status = ?)
-      ORDER BY issued_at DESC, id DESC
-      LIMIT ?
-    `).all(storeId, status, status, boundedLimit)
-    : db.prepare(`
-      SELECT * FROM counter_orders
-      WHERE (? = '' OR status = ?)
-      ORDER BY issued_at DESC, id DESC
-      LIMIT ?
-    `).all(status, status, boundedLimit);
+  const qLike = q ? `%${q}%` : "";
+  const rows = db.prepare(`
+    SELECT * FROM counter_orders
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR status = ?)
+      AND (? = '' OR order_number LIKE ? OR verify_code LIKE ? OR counter_order_id LIKE ?)
+    ORDER BY issued_at DESC, id DESC
+    LIMIT ?
+  `).all(tenantId, tenantId, storeId, storeId, status, status, q, qLike, qLike, qLike, boundedLimit);
   return rows.map(publicCounterOrder);
 }
 
@@ -3280,7 +4218,21 @@ function updateCounterOrderStatus(counterOrderId, input) {
     now,
     existing.counter_order_id
   );
-  recordAuditLog("admin", cleanString(input.actor_id || "admin"), "counter_order.status_update", "counter_order", existing.counter_order_id, existing, getCounterOrder(existing.counter_order_id), { status }, now);
+  recordAuditLog(
+    cleanString(input.actor_type || "admin"),
+    cleanString(input.actor_id || "admin"),
+    cleanString(input.audit_action || "counter_order.status_update"),
+    "counter_order",
+    existing.counter_order_id,
+    existing,
+    getCounterOrder(existing.counter_order_id),
+    {
+      status,
+      store_id: cleanId(existing.store_id),
+      reason: cleanString(input.reason || input.cancellation_reason).slice(0, 1000)
+    },
+    now
+  );
   return getCounterOrder(existing.counter_order_id);
 }
 
@@ -3343,6 +4295,2085 @@ function publicCounterOrder(row) {
     created_at: cleanString(item.created_at)
   }));
   return order;
+}
+
+function withCounterOrderStoreProfile(order) {
+  const store = getStoreSettings(order.store_id, { withDefaults: true }) || {
+    tenant_id: order.tenant_id,
+    store_id: order.store_id,
+    store_name: order.store_id,
+    timezone: DEFAULT_TIMEZONE,
+    business_day_start_time: "00:00",
+    pickup_available_from: "",
+    pickup_available_until: "",
+    currency: order.currency,
+    tax_included: order.tax_included
+  };
+  const revision = order.offer_revision_id ? getOfferRevision(order.offer_revision_id) : null;
+  const pickupAvailableFrom = cleanString(revision?.pickup_available_from || store.pickup_available_from);
+  const pickupAvailableUntil = cleanString(revision?.pickup_available_until || store.pickup_available_until);
+  const validUntil = cleanString(order.expires_at || revision?.valid_until);
+  return {
+    ...order,
+    store: {
+      tenant_id: cleanId(store.tenant_id || order.tenant_id),
+      store_id: cleanId(store.store_id || order.store_id),
+      store_name: cleanString(store.store_name || order.store_id),
+      timezone: cleanString(store.timezone || DEFAULT_TIMEZONE),
+      pickup_available_from: cleanString(store.pickup_available_from),
+      pickup_available_until: cleanString(store.pickup_available_until)
+    },
+    offer_revision: revision ? {
+      offer_revision_id: revision.offer_revision_id,
+      title: revision.title,
+      pickup_location: revision.pickup_location,
+      pickup_available_from: revision.pickup_available_from,
+      pickup_available_until: revision.pickup_available_until,
+      valid_until: revision.valid_until
+    } : null,
+    receipt_snapshot: {
+      offer_title: cleanString(revision?.title),
+      pickup_location: cleanString(revision?.pickup_location),
+      pickup_available_from: pickupAvailableFrom,
+      pickup_available_until: pickupAvailableUntil,
+      pickup_window: formatPickupWindow(pickupAvailableFrom, pickupAvailableUntil),
+      valid_until: validUntil,
+      currency: normalizeCurrency(order.currency),
+      tax_included: order.tax_included !== false,
+      tax_amount: asInteger(order.tax_amount),
+      total_amount: asInteger(order.total_amount) || 0
+    }
+  };
+}
+
+function recordOrderPageEvent(orderToken, input, req) {
+  const order = getCounterOrderByToken(orderToken);
+  if (!order) throw requestError("Order not found", 404);
+  const eventName = cleanString(input.event_name || input.eventName || input.name || "view").slice(0, 80);
+  if (!ORDER_PAGE_EVENTS.has(eventName)) {
+    throw requestError(`event_name must be one of: ${Array.from(ORDER_PAGE_EVENTS).join(", ")}`, 400);
+  }
+  const now = requestNowIso(input);
+  const metadata = {
+    source: cleanString(input.source || "order_page").slice(0, 80),
+    previous_order_token_present: Boolean(input.previous_order_token_present || input.previousOrderTokenPresent),
+    user_action: cleanString(input.user_action || input.userAction).slice(0, 120)
+  };
+  const eventId = nextEntityId("ope", `${order.counter_order_id}-${eventName}`);
+  db.prepare(`
+    INSERT INTO order_page_events (
+      order_page_event_id, counter_order_id, tenant_id, store_id, event_name,
+      occurred_at, user_agent, ip_hash, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    eventId,
+    order.counter_order_id,
+    order.tenant_id,
+    order.store_id,
+    eventName,
+    now,
+    cleanString(req.get("user-agent")).slice(0, 500),
+    hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`),
+    JSON.stringify(metadata)
+  );
+  return {
+    order_page_event_id: eventId,
+    counter_order_id: order.counter_order_id,
+    event_name: eventName,
+    occurred_at: now
+  };
+}
+
+function createStoreAccessToken(storeId, input, actor = {}) {
+  const store = db.prepare("SELECT * FROM stores WHERE store_id = ?").get(cleanId(storeId));
+  if (!store) throw requestError("Store not found", 404);
+  const pin = normalizeStoreStaffPin(input.pin);
+  const now = nowIso();
+  const token = generateStoreAccessToken();
+  const tokenId = nextEntityId("sat", store.store_id);
+  const row = {
+    store_access_token_id: tokenId,
+    tenant_id: store.tenant_id,
+    store_id: store.store_id,
+    token_hash: hashStoreAccessToken(token),
+    pin_hash: hashStoreStaffPin(tokenId, pin),
+    status: "active",
+    failed_attempts: 0,
+    locked_until: "",
+    rotated_at: "",
+    pin_rotated_at: now,
+    notes: cleanString(input.notes).slice(0, 1000),
+    created_at: now,
+    updated_at: now
+  };
+  db.prepare(`
+    INSERT INTO store_access_tokens (
+      store_access_token_id, tenant_id, store_id, token_hash, pin_hash, status,
+      failed_attempts, locked_until, rotated_at, pin_rotated_at, notes, created_at, updated_at
+    ) VALUES (
+      @store_access_token_id, @tenant_id, @store_id, @token_hash, @pin_hash, @status,
+      @failed_attempts, @locked_until, @rotated_at, @pin_rotated_at, @notes, @created_at, @updated_at
+    )
+  `).run(row);
+  const created = getStoreAccessToken(tokenId);
+  recordAuditLog("admin", actor.actor_id || "admin", "store_access_token.create", "store_access_token", tokenId, null, created, {
+    store_id: store.store_id,
+    actor_role: actor.role || ""
+  }, now);
+  return {
+    store_access_token: created,
+    store_token: token,
+    store_orders_url: `/store/orders/${token}`
+  };
+}
+
+function listStoreAccessTokens(query = {}) {
+  const storeId = cleanId(query.store_id || query.storeId);
+  const status = cleanString(query.status);
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT sat.*, s.name AS store_name
+    FROM store_access_tokens sat
+    LEFT JOIN stores s ON s.store_id = sat.store_id
+    WHERE (? = '' OR sat.store_id = ?)
+      AND (? = '' OR sat.status = ?)
+    ORDER BY sat.updated_at DESC, sat.id DESC
+    LIMIT ?
+  `).all(storeId, storeId, status, status, limit).map(publicStoreAccessToken);
+}
+
+function getStoreAccessToken(storeAccessTokenId) {
+  const row = db.prepare(`
+    SELECT sat.*, s.name AS store_name
+    FROM store_access_tokens sat
+    LEFT JOIN stores s ON s.store_id = sat.store_id
+    WHERE sat.store_access_token_id = ?
+  `).get(cleanId(storeAccessTokenId));
+  return row ? publicStoreAccessToken(row) : null;
+}
+
+function getStoreAccessTokenByRawToken(token) {
+  if (!token) return null;
+  const row = db.prepare(`
+    SELECT sat.*, s.name AS store_name
+    FROM store_access_tokens sat
+    LEFT JOIN stores s ON s.store_id = sat.store_id
+    WHERE sat.token_hash = ?
+  `).get(hashStoreAccessToken(token));
+  return row ? publicStoreAccessToken(row, { includeHashFields: true }) : null;
+}
+
+function rotateStoreAccessToken(storeAccessTokenId, input, actor = {}) {
+  const existing = db.prepare("SELECT * FROM store_access_tokens WHERE store_access_token_id = ?").get(cleanId(storeAccessTokenId));
+  if (!existing) throw requestError("Store access token not found", 404);
+  const now = nowIso();
+  const token = generateStoreAccessToken();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        token_hash = ?,
+        status = 'active',
+        failed_attempts = 0,
+        locked_until = '',
+        rotated_at = ?,
+        notes = COALESCE(NULLIF(?, ''), notes),
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(hashStoreAccessToken(token), now, cleanString(input.notes).slice(0, 1000), now, existing.store_access_token_id);
+    db.prepare(`
+      UPDATE store_staff_sessions SET
+        status = 'revoked',
+        revoked_at = ?
+      WHERE store_access_token_id = ?
+        AND status = 'active'
+    `).run(now, existing.store_access_token_id);
+  })();
+  const updated = getStoreAccessToken(existing.store_access_token_id);
+  recordAuditLog("admin", actor.actor_id || "admin", "store_access_token.rotate", "store_access_token", existing.store_access_token_id, publicStoreAccessToken(existing), updated, {
+    store_id: existing.store_id,
+    actor_role: actor.role || ""
+  }, now);
+  return {
+    store_access_token: updated,
+    store_token: token,
+    store_orders_url: `/store/orders/${token}`
+  };
+}
+
+function resetStoreAccessTokenPin(storeAccessTokenId, input, actor = {}) {
+  const existing = db.prepare("SELECT * FROM store_access_tokens WHERE store_access_token_id = ?").get(cleanId(storeAccessTokenId));
+  if (!existing) throw requestError("Store access token not found", 404);
+  const pin = normalizeStoreStaffPin(input.pin);
+  const now = nowIso();
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        pin_hash = ?,
+        failed_attempts = 0,
+        locked_until = '',
+        pin_rotated_at = ?,
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(hashStoreStaffPin(existing.store_access_token_id, pin), now, now, existing.store_access_token_id);
+    db.prepare(`
+      UPDATE store_staff_sessions SET
+        status = 'revoked',
+        revoked_at = ?
+      WHERE store_access_token_id = ?
+        AND status = 'active'
+    `).run(now, existing.store_access_token_id);
+  })();
+  const updated = getStoreAccessToken(existing.store_access_token_id);
+  recordAuditLog("admin", actor.actor_id || "admin", "store_access_token.pin_reset", "store_access_token", existing.store_access_token_id, publicStoreAccessToken(existing), updated, {
+    store_id: existing.store_id,
+    actor_role: actor.role || ""
+  }, now);
+  return updated;
+}
+
+function createStoreStaffSession(storeToken, input, req) {
+  const access = getStoreAccessTokenByRawToken(storeToken);
+  if (!access) throw requestError("Store access token not found", 404);
+  const now = nowIso();
+  if (access.status !== "active") throw requestError("Store access token is not active", 403);
+  if (access.locked_until && access.locked_until > now) {
+    recordStoreStaffLoginAudit(access, "store_staff.login_locked", req, { locked_until: access.locked_until }, now);
+    throw requestError("PIN is temporarily locked", 429);
+  }
+  const pin = normalizeStoreStaffPin(input.pin, { label: "pin", allowEmpty: false });
+  const expectedHash = hashStoreStaffPin(access.store_access_token_id, pin);
+  if (!safeEqualHex(access.pin_hash, expectedHash)) {
+    const failedAttempts = (asInteger(access.failed_attempts) || 0) + 1;
+    const lockedUntil = failedAttempts >= STORE_STAFF_PIN_MAX_ATTEMPTS
+      ? new Date(Date.now() + STORE_STAFF_PIN_LOCK_SECONDS * 1000).toISOString()
+      : "";
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        failed_attempts = ?,
+        locked_until = ?,
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(failedAttempts, lockedUntil, now, access.store_access_token_id);
+    recordStoreStaffLoginAudit(access, "store_staff.login_failed", req, { failed_attempts: failedAttempts, locked_until: lockedUntil }, now);
+    throw requestError(lockedUntil ? "PIN is temporarily locked" : "PIN is invalid", lockedUntil ? 429 : 401);
+  }
+
+  const sessionToken = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + STORE_STAFF_SESSION_TTL_SECONDS * 1000).toISOString();
+  const sessionId = nextEntityId("sss", access.store_id);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO store_staff_sessions (
+        store_staff_session_id, store_access_token_id, session_token_hash,
+        tenant_id, store_id, status, created_at, expires_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `).run(
+      sessionId,
+      access.store_access_token_id,
+      hashStoreStaffSessionToken(sessionToken),
+      access.tenant_id,
+      access.store_id,
+      now,
+      expiresAt,
+      now
+    );
+    db.prepare(`
+      UPDATE store_access_tokens SET
+        failed_attempts = 0,
+        locked_until = '',
+        last_used_at = ?,
+        updated_at = ?
+      WHERE store_access_token_id = ?
+    `).run(now, now, access.store_access_token_id);
+  })();
+  const session = getStoreStaffSessionById(sessionId);
+  recordStoreStaffLoginAudit(access, "store_staff.login_success", req, { session_id: sessionId }, now);
+  return {
+    ...session,
+    session_token: sessionToken
+  };
+}
+
+function requireStoreStaffSession(req, res, next) {
+  try {
+    const token = getStoreStaffSessionToken(req);
+    if (!token) throw requestError("Store staff session is required", 401);
+    const session = getStoreStaffSessionByRawToken(token);
+    if (!session) throw requestError("Store staff session is invalid", 401);
+    const now = nowIso();
+    if (session.status !== "active" || session.expires_at <= now) {
+      throw requestError("Store staff session has expired", 401);
+    }
+    if (session.access_token_status !== "active") {
+      throw requestError("Store access token is not active", 403);
+    }
+    db.prepare("UPDATE store_staff_sessions SET last_used_at = ? WHERE store_staff_session_id = ?").run(now, session.store_staff_session_id);
+    req.storeStaffSession = {
+      ...session,
+      last_used_at: now
+    };
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function updateStoreCounterOrderStatus(session, counterOrderId, input) {
+  const order = getCounterOrder(counterOrderId);
+  if (!order) throw requestError("Counter order not found", 404);
+  if (order.store_id !== session.store_id) throw requestError("Counter order is outside this store", 403);
+  const status = cleanString(input.status);
+  if (!["issued", "redeemed", "cancelled"].includes(status)) {
+    throw requestError("status must be one of: issued, redeemed, cancelled", 400);
+  }
+  if (status === "redeemed") {
+    const suppliedVerifyCode = cleanString(input.verify_code || input.verifyCode);
+    if (!suppliedVerifyCode) throw requestError("verify_code is required to redeem", 400);
+    if (!safeEqualString(order.verify_code, suppliedVerifyCode)) {
+      throw requestError("verify_code does not match", 403);
+    }
+  }
+  return updateCounterOrderStatus(order.counter_order_id, {
+    ...input,
+    actor_type: "store_staff",
+    actor_id: session.store_staff_session_id,
+    audit_action: "counter_order.staff_status_update"
+  });
+}
+
+function revokeStoreStaffSession(session) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE store_staff_sessions SET
+      status = 'revoked',
+      revoked_at = ?,
+      last_used_at = ?
+    WHERE store_staff_session_id = ?
+  `).run(now, now, session.store_staff_session_id);
+}
+
+function getStoreStaffSessionByRawToken(token) {
+  const row = db.prepare(`
+    SELECT
+      sss.*,
+      sat.status AS access_token_status,
+      sat.notes AS access_token_notes,
+      st.name AS store_name
+    FROM store_staff_sessions sss
+    JOIN store_access_tokens sat ON sat.store_access_token_id = sss.store_access_token_id
+    LEFT JOIN stores st ON st.store_id = sss.store_id
+    WHERE sss.session_token_hash = ?
+  `).get(hashStoreStaffSessionToken(token));
+  return row ? publicStoreStaffSessionRow(row) : null;
+}
+
+function getStoreStaffSessionById(sessionId) {
+  const row = db.prepare(`
+    SELECT
+      sss.*,
+      sat.status AS access_token_status,
+      sat.notes AS access_token_notes,
+      st.name AS store_name
+    FROM store_staff_sessions sss
+    JOIN store_access_tokens sat ON sat.store_access_token_id = sss.store_access_token_id
+    LEFT JOIN stores st ON st.store_id = sss.store_id
+    WHERE sss.store_staff_session_id = ?
+  `).get(cleanId(sessionId));
+  return row ? publicStoreStaffSessionRow(row) : null;
+}
+
+function publicStoreStaffSessionRow(row) {
+  const store = getStoreSettings(row.store_id, { withDefaults: true }) || {
+    tenant_id: row.tenant_id,
+    store_id: row.store_id,
+    store_name: row.store_name || row.store_id
+  };
+  return {
+    store_staff_session_id: cleanId(row.store_staff_session_id),
+    store_access_token_id: cleanId(row.store_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    status: cleanString(row.status),
+    access_token_status: cleanString(row.access_token_status),
+    created_at: cleanString(row.created_at),
+    expires_at: cleanString(row.expires_at),
+    last_used_at: cleanString(row.last_used_at),
+    revoked_at: cleanString(row.revoked_at),
+    store: {
+      tenant_id: cleanId(store.tenant_id || row.tenant_id),
+      store_id: cleanId(store.store_id || row.store_id),
+      store_name: cleanString(store.store_name || row.store_name || row.store_id),
+      timezone: cleanString(store.timezone || DEFAULT_TIMEZONE),
+      pickup_available_from: cleanString(store.pickup_available_from),
+      pickup_available_until: cleanString(store.pickup_available_until)
+    }
+  };
+}
+
+function publicStoreStaffSession(session) {
+  return {
+    store_staff_session_id: session.store_staff_session_id,
+    store_access_token_id: session.store_access_token_id,
+    tenant_id: session.tenant_id,
+    store_id: session.store_id,
+    status: session.status,
+    expires_at: session.expires_at,
+    last_used_at: session.last_used_at
+  };
+}
+
+function publicStoreAccessToken(row, options = {}) {
+  const token = {
+    store_access_token_id: cleanId(row.store_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    store_name: cleanString(row.store_name),
+    status: cleanString(row.status),
+    failed_attempts: asInteger(row.failed_attempts) || 0,
+    locked_until: cleanString(row.locked_until),
+    rotated_at: cleanString(row.rotated_at),
+    pin_rotated_at: cleanString(row.pin_rotated_at),
+    last_used_at: cleanString(row.last_used_at),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    store_orders_path: `/store/orders/:store_token`
+  };
+  if (options.includeHashFields) {
+    token.token_hash = cleanString(row.token_hash);
+    token.pin_hash = cleanString(row.pin_hash);
+  }
+  return token;
+}
+
+function recordStoreStaffLoginAudit(access, action, req, metadata = {}, createdAt = nowIso()) {
+  recordAuditLog("store_staff", access.store_access_token_id, action, "store_access_token", access.store_access_token_id, null, null, {
+    store_id: access.store_id,
+    tenant_id: access.tenant_id,
+    ip_hash: hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`),
+    user_agent: cleanString(req.get("user-agent")).slice(0, 500),
+    ...metadata
+  }, createdAt);
+}
+
+function normalizeStoreStaffPin(value, options = {}) {
+  const pin = cleanString(value);
+  if (!pin && options.allowEmpty !== true) throw requestError(`${options.label || "pin"} is required`, 400);
+  if (!/^\d{4,12}$/.test(pin)) throw requestError(`${options.label || "pin"} must be 4 to 12 digits`, 400);
+  return pin;
+}
+
+function enforcePublicRateLimit(req, routeType, rawScope, options = {}) {
+  const limit = Math.max(1, asInteger(options.limit) || 1);
+  const windowSeconds = Math.max(10, asInteger(options.windowSeconds) || 60);
+  const now = requestNowIso({ ...(req.query || {}), ...(req.body || {}) });
+  const occurredAt = new Date(now).getTime();
+  const windowStartedAt = new Date(Math.floor(occurredAt / (windowSeconds * 1000)) * windowSeconds * 1000).toISOString();
+  const ipHash = hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`);
+  const userAgent = cleanString(req.get("user-agent")).slice(0, 500);
+  const userAgentHash = hashToken(userAgent);
+  const visitId = cleanId(req.query?.visit_id || req.query?.visitId || req.body?.visit_id || req.body?.visitId);
+  const scopeHash = hashToken(JSON.stringify({
+    route_type: cleanString(routeType),
+    scope: cleanString(rawScope),
+    visit_id: visitId,
+    ip_hash: ipHash,
+    user_agent_hash: userAgentHash
+  }));
+  const count = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM public_rate_limit_events
+    WHERE route_type = ?
+      AND scope_hash = ?
+      AND window_started_at = ?
+      AND decision = 'allow'
+  `).get(cleanString(routeType), scopeHash, windowStartedAt).count;
+  const allowed = count < limit;
+  const reason = allowed ? "" : "public_rate_limit_exceeded";
+  recordPublicRateLimitEvent({
+    route_type: routeType,
+    scope_hash: scopeHash,
+    window_started_at: windowStartedAt,
+    occurred_at: now,
+    decision: allowed ? "allow" : "reject",
+    limit_count: limit,
+    window_seconds: windowSeconds,
+    reason,
+    ip_hash: ipHash,
+    user_agent_hash: userAgentHash,
+    metadata: {
+      method: cleanString(req.method),
+      route_type: cleanString(routeType),
+      visit_id_present: Boolean(visitId)
+    }
+  });
+  if (!allowed) {
+    recordAuditLog("public", "anonymous", "public_rate_limit.reject", "public_route", cleanString(routeType), null, null, {
+      route_type: cleanString(routeType),
+      scope_hash: scopeHash,
+      window_started_at: windowStartedAt,
+      limit_count: limit,
+      window_seconds: windowSeconds,
+      ip_hash: ipHash,
+      user_agent_hash: userAgentHash
+    }, now);
+    throw requestError("Public rate limit exceeded", 429);
+  }
+}
+
+function recordPublicRateLimitEvent(event) {
+  db.prepare(`
+    INSERT INTO public_rate_limit_events (
+      public_rate_limit_event_id, route_type, scope_hash, window_started_at,
+      occurred_at, decision, limit_count, window_seconds, reason,
+      ip_hash, user_agent_hash, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    nextEntityId("prl", `${event.route_type}-${event.scope_hash}-${event.occurred_at}`),
+    cleanString(event.route_type).slice(0, 80),
+    cleanString(event.scope_hash),
+    cleanString(event.window_started_at),
+    cleanString(event.occurred_at),
+    cleanString(event.decision),
+    asInteger(event.limit_count) || 0,
+    asInteger(event.window_seconds) || 0,
+    cleanString(event.reason).slice(0, 200),
+    cleanString(event.ip_hash),
+    cleanString(event.user_agent_hash),
+    JSON.stringify(event.metadata || {})
+  );
+}
+
+function createCustomerAccessToken(tenantId, input, actor = {}) {
+  const tenant = db.prepare("SELECT * FROM tenants WHERE tenant_id = ?").get(cleanId(tenantId));
+  if (!tenant) throw requestError("Tenant not found", 404);
+  const pin = normalizeStoreStaffPin(input.pin, { label: "pin" });
+  const role = normalizeCustomerRole(input.role || "customer_viewer");
+  const storeIds = normalizeCustomerStoreIds(input.store_ids || input.storeIds || input.store_id || input.storeId, tenant.tenant_id);
+  const now = nowIso();
+  const token = generateCustomerAccessToken();
+  const tokenId = nextEntityId("cat", tenant.tenant_id);
+  const row = {
+    customer_access_token_id: tokenId,
+    tenant_id: tenant.tenant_id,
+    token_hash: hashCustomerAccessToken(token),
+    pin_hash: hashCustomerPin(tokenId, pin),
+    role,
+    store_ids_json: JSON.stringify(storeIds),
+    status: "active",
+    failed_attempts: 0,
+    locked_until: "",
+    rotated_at: "",
+    pin_rotated_at: now,
+    last_used_at: "",
+    notes: cleanString(input.notes).slice(0, 1000),
+    created_at: now,
+    updated_at: now
+  };
+  db.prepare(`
+    INSERT INTO customer_access_tokens (
+      customer_access_token_id, tenant_id, token_hash, pin_hash, role,
+      store_ids_json, status, failed_attempts, locked_until, rotated_at,
+      pin_rotated_at, last_used_at, notes, created_at, updated_at
+    ) VALUES (
+      @customer_access_token_id, @tenant_id, @token_hash, @pin_hash, @role,
+      @store_ids_json, @status, @failed_attempts, @locked_until, @rotated_at,
+      @pin_rotated_at, @last_used_at, @notes, @created_at, @updated_at
+    )
+  `).run(row);
+  const created = getCustomerAccessToken(tokenId);
+  recordAuditLog("admin", actor.actor_id || "admin", "customer_access_token.create", "customer_access_token", tokenId, null, created, {
+    tenant_id: tenant.tenant_id,
+    actor_role: actor.role || "",
+    role,
+    store_ids: storeIds
+  }, now);
+  return {
+    customer_access_token: created,
+    customer_admin_url: `/customer/admin/${tokenId}`
+  };
+}
+
+function listCustomerAccessTokens(query = {}) {
+  const tenantId = cleanId(query.tenant_id || query.tenantId);
+  const status = cleanString(query.status);
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT cat.*, t.name AS tenant_name
+    FROM customer_access_tokens cat
+    LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
+    WHERE (? = '' OR cat.tenant_id = ?)
+      AND (? = '' OR cat.status = ?)
+    ORDER BY cat.updated_at DESC, cat.id DESC
+    LIMIT ?
+  `).all(tenantId, tenantId, status, status, limit).map(publicCustomerAccessToken);
+}
+
+function getCustomerAccessToken(customerAccessTokenId) {
+  const row = db.prepare(`
+    SELECT cat.*, t.name AS tenant_name
+    FROM customer_access_tokens cat
+    LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
+    WHERE cat.customer_access_token_id = ?
+  `).get(cleanId(customerAccessTokenId));
+  return row ? publicCustomerAccessToken(row) : null;
+}
+
+function getCustomerAccessTokenForAuth(customerAccessTokenId) {
+  if (!customerAccessTokenId) return null;
+  const row = db.prepare(`
+    SELECT cat.*, t.name AS tenant_name
+    FROM customer_access_tokens cat
+    LEFT JOIN tenants t ON t.tenant_id = cat.tenant_id
+    WHERE cat.customer_access_token_id = ?
+  `).get(cleanId(customerAccessTokenId));
+  return row ? publicCustomerAccessToken(row, { includeHashFields: true }) : null;
+}
+
+function createCustomerSession(customerAccessTokenId, input, req) {
+  const access = getCustomerAccessTokenForAuth(customerAccessTokenId);
+  if (!access) throw requestError("Customer access token not found", 404);
+  const now = nowIso();
+  if (access.status !== "active") throw requestError("Customer access token is not active", 403);
+  if (access.locked_until && access.locked_until > now) {
+    recordCustomerLoginAudit(access, "customer.login_locked", req, { locked_until: access.locked_until }, now);
+    throw requestError("PIN is temporarily locked", 429);
+  }
+  const pin = normalizeStoreStaffPin(input.pin, { label: "pin", allowEmpty: false });
+  const expectedHash = hashCustomerPin(access.customer_access_token_id, pin);
+  if (!safeEqualHex(access.pin_hash, expectedHash)) {
+    const failedAttempts = (asInteger(access.failed_attempts) || 0) + 1;
+    const lockedUntil = failedAttempts >= CUSTOMER_PIN_MAX_ATTEMPTS
+      ? new Date(Date.now() + CUSTOMER_PIN_LOCK_SECONDS * 1000).toISOString()
+      : "";
+    db.prepare(`
+      UPDATE customer_access_tokens SET
+        failed_attempts = ?,
+        locked_until = ?,
+        updated_at = ?
+      WHERE customer_access_token_id = ?
+    `).run(failedAttempts, lockedUntil, now, access.customer_access_token_id);
+    recordCustomerLoginAudit(access, "customer.login_failed", req, { failed_attempts: failedAttempts, locked_until: lockedUntil }, now);
+    throw requestError(lockedUntil ? "PIN is temporarily locked" : "PIN is invalid", lockedUntil ? 429 : 401);
+  }
+
+  const sessionToken = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + CUSTOMER_SESSION_TTL_SECONDS * 1000).toISOString();
+  const sessionId = nextEntityId("cus", access.tenant_id);
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO customer_sessions (
+        customer_session_id, customer_access_token_id, session_token_hash,
+        tenant_id, role, store_ids_json, status, created_at, expires_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `).run(
+      sessionId,
+      access.customer_access_token_id,
+      hashCustomerSessionToken(sessionToken),
+      access.tenant_id,
+      access.role,
+      JSON.stringify(access.store_ids || []),
+      now,
+      expiresAt,
+      now
+    );
+    db.prepare(`
+      UPDATE customer_access_tokens SET
+        failed_attempts = 0,
+        locked_until = '',
+        last_used_at = ?,
+        updated_at = ?
+      WHERE customer_access_token_id = ?
+    `).run(now, now, access.customer_access_token_id);
+  })();
+  const session = getCustomerSessionById(sessionId);
+  recordCustomerLoginAudit(access, "customer.login_success", req, { session_id: sessionId }, now);
+  return {
+    ...session,
+    session_token: sessionToken
+  };
+}
+
+function requireCustomerSession(req, res, next) {
+  try {
+    const token = getCustomerSessionToken(req);
+    if (!token) throw requestError("Customer session is required", 401);
+    const session = getCustomerSessionByRawToken(token);
+    if (!session) throw requestError("Customer session is invalid", 401);
+    const now = nowIso();
+    if (session.status !== "active" || session.expires_at <= now) {
+      throw requestError("Customer session has expired", 401);
+    }
+    if (session.access_token_status !== "active") {
+      throw requestError("Customer access token is not active", 403);
+    }
+    db.prepare("UPDATE customer_sessions SET last_used_at = ? WHERE customer_session_id = ?").run(now, session.customer_session_id);
+    req.customerSession = {
+      ...session,
+      last_used_at: now
+    };
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function requireCustomerEditor(req, res, next) {
+  if (!CUSTOMER_EDIT_ROLES.has(req.customerSession?.role)) {
+    res.status(403).json({ error: "Customer role cannot edit offers" });
+    return;
+  }
+  next();
+}
+
+function revokeCustomerSession(session) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE customer_sessions SET
+      status = 'revoked',
+      revoked_at = ?,
+      last_used_at = ?
+    WHERE customer_session_id = ?
+  `).run(now, now, session.customer_session_id);
+}
+
+function getCustomerSessionByRawToken(token) {
+  const row = db.prepare(`
+    SELECT
+      cs.*,
+      cat.status AS access_token_status,
+      cat.notes AS access_token_notes,
+      t.name AS tenant_name
+    FROM customer_sessions cs
+    JOIN customer_access_tokens cat ON cat.customer_access_token_id = cs.customer_access_token_id
+    LEFT JOIN tenants t ON t.tenant_id = cs.tenant_id
+    WHERE cs.session_token_hash = ?
+  `).get(hashCustomerSessionToken(token));
+  return row ? publicCustomerSessionRow(row) : null;
+}
+
+function getCustomerSessionById(sessionId) {
+  const row = db.prepare(`
+    SELECT
+      cs.*,
+      cat.status AS access_token_status,
+      cat.notes AS access_token_notes,
+      t.name AS tenant_name
+    FROM customer_sessions cs
+    JOIN customer_access_tokens cat ON cat.customer_access_token_id = cs.customer_access_token_id
+    LEFT JOIN tenants t ON t.tenant_id = cs.tenant_id
+    WHERE cs.customer_session_id = ?
+  `).get(cleanId(sessionId));
+  return row ? publicCustomerSessionRow(row) : null;
+}
+
+function publicCustomerSessionRow(row) {
+  return {
+    customer_session_id: cleanId(row.customer_session_id),
+    customer_access_token_id: cleanId(row.customer_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    tenant_name: cleanString(row.tenant_name || row.tenant_id),
+    role: normalizeCustomerRole(row.role || "customer_viewer"),
+    store_ids: parseStoreIdsJson(row.store_ids_json),
+    status: cleanString(row.status),
+    access_token_status: cleanString(row.access_token_status),
+    created_at: cleanString(row.created_at),
+    expires_at: cleanString(row.expires_at),
+    last_used_at: cleanString(row.last_used_at),
+    revoked_at: cleanString(row.revoked_at)
+  };
+}
+
+function publicCustomerSession(session) {
+  return {
+    customer_session_id: session.customer_session_id,
+    customer_access_token_id: session.customer_access_token_id,
+    tenant_id: session.tenant_id,
+    tenant_name: session.tenant_name,
+    role: session.role,
+    store_ids: session.store_ids || [],
+    status: session.status,
+    expires_at: session.expires_at,
+    last_used_at: session.last_used_at
+  };
+}
+
+function publicCustomerAccessToken(row, options = {}) {
+  const token = {
+    customer_access_token_id: cleanId(row.customer_access_token_id),
+    tenant_id: cleanId(row.tenant_id),
+    tenant_name: cleanString(row.tenant_name || row.tenant_id),
+    role: normalizeCustomerRole(row.role || "customer_viewer"),
+    store_ids: parseStoreIdsJson(row.store_ids_json),
+    status: cleanString(row.status),
+    failed_attempts: asInteger(row.failed_attempts) || 0,
+    locked_until: cleanString(row.locked_until),
+    rotated_at: cleanString(row.rotated_at),
+    pin_rotated_at: cleanString(row.pin_rotated_at),
+    last_used_at: cleanString(row.last_used_at),
+    notes: cleanString(row.notes),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    customer_admin_path: "/customer/admin/:customer_access_token_id"
+  };
+  if (options.includeHashFields) {
+    token.token_hash = cleanString(row.token_hash);
+    token.pin_hash = cleanString(row.pin_hash);
+  }
+  return token;
+}
+
+function normalizeCustomerRole(value) {
+  const role = cleanString(value || "customer_viewer");
+  if (!CUSTOMER_ROLES.has(role)) throw requestError(`role must be one of: ${Array.from(CUSTOMER_ROLES).join(", ")}`, 400);
+  return role;
+}
+
+function normalizeCustomerStoreIds(value, tenantId) {
+  const raw = Array.isArray(value) ? value : cleanString(value).split(",");
+  const storeIds = Array.from(new Set(raw.map(cleanId).filter(Boolean)));
+  for (const storeId of storeIds) {
+    const store = db.prepare("SELECT tenant_id FROM stores WHERE store_id = ?").get(storeId);
+    if (!store) throw requestError(`store_id was not found: ${storeId}`, 400);
+    if (cleanId(store.tenant_id) !== cleanId(tenantId)) throw requestError(`store_id is outside tenant scope: ${storeId}`, 403);
+  }
+  return storeIds;
+}
+
+function parseStoreIdsJson(value) {
+  const parsed = parseJson(value || "[]", []);
+  return Array.isArray(parsed) ? parsed.map(cleanId).filter(Boolean) : [];
+}
+
+function assertCustomerStoreScope(session, storeId) {
+  const normalizedStoreId = cleanId(storeId);
+  if (!normalizedStoreId) return "";
+  const store = db.prepare("SELECT tenant_id FROM stores WHERE store_id = ?").get(normalizedStoreId);
+  if (!store) throw requestError("Store not found", 404);
+  if (cleanId(store.tenant_id) !== session.tenant_id) throw requestError("Store is outside tenant scope", 403);
+  if (session.store_ids?.length && !session.store_ids.includes(normalizedStoreId)) {
+    throw requestError("Store is outside customer scope", 403);
+  }
+  return normalizedStoreId;
+}
+
+function defaultCustomerStoreId(session, suppliedStoreId = "") {
+  const storeId = cleanId(suppliedStoreId);
+  if (storeId) return assertCustomerStoreScope(session, storeId);
+  if (session.store_ids?.length === 1) return session.store_ids[0];
+  if (session.store_ids?.length > 1) throw requestError("store_id is required for multi-store customer scope", 400);
+  return "";
+}
+
+function normalizeCustomerReportCriteria(input, session) {
+  const criteria = normalizeReportCriteria({
+    ...input,
+    tenant_id: session.tenant_id,
+    store_id: defaultCustomerStoreId(session, input.store_id || input.storeId || input.site_id || input.siteId)
+  });
+  return criteria;
+}
+
+function normalizeCustomerCounterOrderQuery(input, session) {
+  const storeId = defaultCustomerStoreId(session, input.store_id || input.storeId);
+  return {
+    ...input,
+    tenant_id: session.tenant_id,
+    store_id: storeId
+  };
+}
+
+function buildCustomerConversionReport(criteria, session) {
+  const summary = buildReportSummary(criteria);
+  const totals = summary.totals || {};
+  const issued = asInteger(totals.counter_orders_issued_count) || 0;
+  const redeemed = asInteger(totals.counter_orders_redeemed_count) || 0;
+  const scans = asInteger(totals.qr_scan_count) || 0;
+  const kpis = {
+    qr_scan_count: scans,
+    counter_orders_issued_count: issued,
+    counter_orders_redeemed_count: redeemed,
+    potential_sales_amount: asInteger(totals.counter_order_total_amount) || 0,
+    estimated_redeemed_amount: asInteger(totals.counter_order_redeemed_amount) || 0,
+    scan_to_order_rate: scans > 0 ? issued / scans : 0,
+    order_to_redeem_rate: issued > 0 ? redeemed / issued : 0,
+    amount_wording: {
+      potential_sales_amount: "受付発行額。POS決済済み売上ではありません。",
+      estimated_redeemed_amount: "引換済み推定額。現地会計の確定売上ではありません。"
+    }
+  };
+  return {
+    ...summary,
+    audience: "customer",
+    customer_scope: {
+      tenant_id: session.tenant_id,
+      role: session.role,
+      store_ids: session.store_ids || []
+    },
+    kpis
+  };
+}
+
+function listCustomerStoreSettings(session) {
+  return listStoreSettings().filter((store) => {
+    if (store.tenant_id !== session.tenant_id) return false;
+    return !session.store_ids?.length || session.store_ids.includes(store.store_id);
+  });
+}
+
+function listCustomerOffers(session) {
+  return db.prepare(`
+    SELECT * FROM offers
+    WHERE tenant_id = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 200
+  `).all(session.tenant_id)
+    .filter((offer) => !session.store_ids?.length || session.store_ids.includes(cleanId(offer.store_id)))
+    .map((row) => publicOffer(row, { includeCurrentRevision: true }));
+}
+
+function createCustomerOfferRevision(session, offerId, input) {
+  const offer = getOffer(offerId, { includeCurrentRevision: true });
+  if (!offer) throw requestError("Offer not found", 404);
+  if (offer.tenant_id !== session.tenant_id) throw requestError("Offer is outside tenant scope", 403);
+  assertCustomerStoreScope(session, offer.store_id);
+  const current = offer.current_revision || getOfferRevision(offer.current_offer_revision_id);
+  if (!current) throw requestError("Offer has no current revision to copy", 409);
+  const allowedStatus = cleanString(input.status || current.status || "draft");
+  const nextInput = {
+    title: cleanString(input.title ?? current.title),
+    description: cleanString(input.description ?? current.description),
+    pickup_location: cleanString(input.pickup_location ?? input.pickupLocation ?? current.pickup_location),
+    pickup_available_from: cleanString(input.pickup_available_from ?? input.pickupAvailableFrom ?? current.pickup_available_from),
+    pickup_available_until: cleanString(input.pickup_available_until ?? input.pickupAvailableUntil ?? current.pickup_available_until),
+    order_issue_cutoff_time: cleanString(input.order_issue_cutoff_time ?? input.orderIssueCutoffTime ?? current.order_issue_cutoff_time),
+    valid_from: cleanString(input.valid_from ?? input.validFrom ?? current.valid_from),
+    valid_until: cleanString(input.valid_until ?? input.validUntil ?? current.valid_until),
+    max_orders_total: input.max_orders_total ?? input.maxOrdersTotal ?? current.max_orders_total,
+    max_orders_per_day: input.max_orders_per_day ?? input.maxOrdersPerDay ?? current.max_orders_per_day,
+    max_orders_per_visit: input.max_orders_per_visit ?? input.maxOrdersPerVisit ?? current.max_orders_per_visit,
+    currency: normalizeCurrency(input.currency ?? current.currency),
+    tax_included: normalizeBooleanFlag(input.tax_included ?? current.tax_included ?? true),
+    tax_amount: input.tax_amount ?? current.tax_amount,
+    notes: cleanString(input.notes ?? current.notes),
+    status: allowedStatus,
+    created_by: session.customer_session_id,
+    items: Array.isArray(input.items) ? input.items : (current.items || []).map((item) => ({
+      item_id: item.item_id,
+      item_name: item.item_name_snapshot,
+      quantity: item.quantity,
+      unit_price: item.unit_price_snapshot,
+      currency: item.currency,
+      tax_included: item.tax_included
+    }))
+  };
+  const revision = createOfferRevision(offer.offer_id, nextInput);
+  recordAuditLog("customer", session.customer_session_id, "offer_revision.customer_create", "offer", offer.offer_id, current, revision, {
+    tenant_id: session.tenant_id,
+    store_id: offer.store_id,
+    role: session.role
+  }, nowIso());
+  return revision;
+}
+
+function recordCustomerLoginAudit(access, action, req, metadata = {}, createdAt = nowIso()) {
+  recordAuditLog("customer", access.customer_access_token_id, action, "customer_access_token", access.customer_access_token_id, null, null, {
+    tenant_id: access.tenant_id,
+    role: access.role,
+    store_ids: access.store_ids || [],
+    ip_hash: hashToken(`${req.ip || ""}:${DEVICE_TOKEN_PEPPER}`),
+    user_agent: cleanString(req.get("user-agent")).slice(0, 500),
+    ...metadata
+  }, createdAt);
+}
+
+function generateCustomerAccessToken() {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function hashCustomerAccessToken(token) {
+  return hashCustomerSecret("customer-access-token", token);
+}
+
+function hashCustomerPin(customerAccessTokenId, pin) {
+  return hashCustomerSecret(`customer-pin:${customerAccessTokenId}`, pin);
+}
+
+function hashCustomerSessionToken(token) {
+  return hashCustomerSecret("customer-session", token);
+}
+
+function hashCustomerSecret(scope, value) {
+  return crypto
+    .createHmac("sha256", CUSTOMER_ACCESS_TOKEN_PEPPER)
+    .update(`${scope}:${value}`)
+    .digest("hex");
+}
+
+function generateStoreAccessToken() {
+  return crypto.randomBytes(24).toString("base64url");
+}
+
+function hashStoreAccessToken(token) {
+  return hashStoreSecret("store-access-token", token);
+}
+
+function hashStoreStaffPin(storeAccessTokenId, pin) {
+  return hashStoreSecret(`store-staff-pin:${storeAccessTokenId}`, pin);
+}
+
+function hashStoreStaffSessionToken(token) {
+  return hashStoreSecret("store-staff-session", token);
+}
+
+function hashStoreSecret(scope, value) {
+  return crypto
+    .createHmac("sha256", STORE_ACCESS_TOKEN_PEPPER)
+    .update(`${scope}:${value}`)
+    .digest("hex");
+}
+
+function normalizeReportCriteria(input = {}) {
+  const month = cleanMonthKey(input.month || input.period_month || input.periodMonth);
+  let from = cleanDateKey(input.from || input.period_start || input.start_date || input.startDate);
+  let to = cleanDateKey(input.to || input.period_end || input.end_date || input.endDate);
+
+  if (month && (!from || !to)) {
+    const bounds = monthBounds(month);
+    from = from || bounds.from;
+    to = to || bounds.to;
+  }
+
+  if (!from && !to) {
+    const bounds = monthBounds(nowIso().slice(0, 7));
+    from = bounds.from;
+    to = bounds.to;
+  } else if (!from) {
+    from = to;
+  } else if (!to) {
+    to = from;
+  }
+
+  if (!from || !to) throw requestError("from/to or month is required", 400);
+  if (to < from) throw requestError("to must be on or after from", 400);
+  const toExclusive = addDaysToDateKey(to, 1);
+  const days = dateKeysBetween(from, toExclusive);
+  if (days.length > 370) throw requestError("report period must be 370 days or less", 400);
+
+  return {
+    from,
+    to,
+    to_exclusive: toExclusive,
+    month: month || (from.slice(0, 7) === to.slice(0, 7) ? from.slice(0, 7) : ""),
+    days,
+    tenant_id: cleanId(input.tenant_id || input.tenantId),
+    store_id: cleanId(input.store_id || input.storeId || input.site_id || input.siteId),
+    campaign_id: cleanId(input.campaign_id || input.campaignId),
+    content_id: cleanId(input.content_id || input.contentId),
+    heartbeat_interval_minutes: REPORT_HEARTBEAT_INTERVAL_MINUTES
+  };
+}
+
+function normalizeReportSnapshotListFilters(input = {}) {
+  return {
+    month: cleanMonthKey(input.month || input.period_month || input.periodMonth),
+    tenant_id: cleanId(input.tenant_id || input.tenantId),
+    store_id: cleanId(input.store_id || input.storeId || input.site_id || input.siteId),
+    campaign_id: cleanId(input.campaign_id || input.campaignId),
+    content_id: cleanId(input.content_id || input.contentId),
+    status: cleanString(input.status),
+    report_type: cleanString(input.report_type || input.reportType || "monthly_summary"),
+    limit: Math.max(1, Math.min(asInteger(input.limit) || 50, 200))
+  };
+}
+
+function buildReportSummary(criteria, options = {}) {
+  const generatedAt = cleanString(options.generatedAt) || nowIso();
+  const rows = (options.dailyRows || aggregateReportDailyStoreMetrics(criteria).rows).map(publicReportDailyStoreMetric);
+  const daily = summarizeReportRowsByDate(criteria, rows);
+  const totals = summarizeReportMetricRows(rows);
+  return {
+    report_type: "summary",
+    generated_at: generatedAt,
+    source: options.dailyRows ? "report_daily_store_metrics" : "live_events",
+    period: {
+      from: criteria.from,
+      to: criteria.to,
+      to_exclusive: criteria.to_exclusive,
+      days: criteria.days.length
+    },
+    filters: reportCriteriaFilters(criteria),
+    totals,
+    daily,
+    content: buildReportContentBreakdown(criteria),
+    qr_links: buildReportQrBreakdown(criteria),
+    counter_orders: buildReportOrderBreakdown(criteria)
+  };
+}
+
+function rebuildReportDailyStoreMetrics(criteria) {
+  const result = aggregateReportDailyStoreMetrics(criteria);
+  const persistRows = db.transaction((rows) => {
+    db.prepare(`
+      DELETE FROM report_daily_store_metrics
+      WHERE period_start = ?
+        AND period_end = ?
+        AND campaign_id = ?
+        AND content_id = ?
+        AND (? = '' OR tenant_id = ?)
+        AND (? = '' OR store_id = ?)
+    `).run(
+      criteria.from,
+      criteria.to,
+      criteria.campaign_id,
+      criteria.content_id,
+      criteria.tenant_id,
+      criteria.tenant_id,
+      criteria.store_id,
+      criteria.store_id
+    );
+
+    const insert = db.prepare(`
+      INSERT INTO report_daily_store_metrics (
+        metric_key, metric_date, period_start, period_end, timezone,
+        tenant_id, store_id, campaign_id, content_id, device_count,
+        active_device_count, heartbeat_count, expected_heartbeat_count,
+        uptime_sample_rate, play_event_count, play_started_count,
+        play_completed_count, play_failed_count, play_duration_seconds,
+        qr_scan_count, counter_orders_issued_count, counter_orders_redeemed_count,
+        counter_orders_cancelled_count, counter_orders_expired_count,
+        counter_order_total_amount, counter_order_redeemed_amount, error_count,
+        generated_at, updated_at, source_from, source_to
+      ) VALUES (
+        @metric_key, @metric_date, @period_start, @period_end, @timezone,
+        @tenant_id, @store_id, @campaign_id, @content_id, @device_count,
+        @active_device_count, @heartbeat_count, @expected_heartbeat_count,
+        @uptime_sample_rate, @play_event_count, @play_started_count,
+        @play_completed_count, @play_failed_count, @play_duration_seconds,
+        @qr_scan_count, @counter_orders_issued_count, @counter_orders_redeemed_count,
+        @counter_orders_cancelled_count, @counter_orders_expired_count,
+        @counter_order_total_amount, @counter_order_redeemed_amount, @error_count,
+        @generated_at, @updated_at, @source_from, @source_to
+      )
+    `);
+    for (const row of rows.map(publicReportDailyStoreMetric)) {
+      insert.run(row);
+    }
+  });
+  persistRows(result.rows);
+  return result;
+}
+
+function listReportDailyStoreMetrics(criteria) {
+  return db.prepare(`
+    SELECT * FROM report_daily_store_metrics
+    WHERE period_start = ?
+      AND period_end = ?
+      AND campaign_id = ?
+      AND content_id = ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+    ORDER BY metric_date ASC, store_id ASC
+  `).all(
+    criteria.from,
+    criteria.to,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id
+  ).map(publicReportDailyStoreMetric);
+}
+
+function aggregateReportDailyStoreMetrics(criteria) {
+  const generatedAt = nowIso();
+  const settingsCache = new Map();
+  const rowsByKey = new Map();
+  for (const store of listReportStores(criteria)) {
+    for (const metricDate of criteria.days) {
+      const row = createReportDailyMetricRow(criteria, store, metricDate, settingsCache, generatedAt);
+      rowsByKey.set(row.metric_key, row);
+    }
+  }
+
+  for (const count of listReportDeviceCounts(criteria)) {
+    for (const metricDate of criteria.days) {
+      const row = getOrCreateReportDailyMetricRow(criteria, {
+        tenant_id: count.tenant_id,
+        store_id: count.store_id
+      }, metricDate, rowsByKey, settingsCache, generatedAt);
+      row.device_count = asInteger(count.device_count) || 0;
+    }
+  }
+
+  addHeartbeatMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addPlaylogMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+  addErrorMetrics(criteria, rowsByKey, settingsCache, generatedAt);
+
+  const rows = Array.from(rowsByKey.values())
+    .sort((a, b) => `${a.metric_date}:${a.store_id}`.localeCompare(`${b.metric_date}:${b.store_id}`))
+    .map((row) => finalizeReportDailyMetricRow(row, criteria));
+  return { generated_at: generatedAt, rows };
+}
+
+function listReportStores(criteria) {
+  return db.prepare(`
+    SELECT tenant_id, store_id, name AS store_name
+    FROM stores
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+    ORDER BY tenant_id, store_id
+  `).all(criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id).map((row) => ({
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    store_name: cleanString(row.store_name)
+  }));
+}
+
+function listReportDeviceCounts(criteria) {
+  return db.prepare(`
+    SELECT tenant_id, store_id, COUNT(*) AS device_count
+    FROM devices
+    WHERE status NOT IN ('retired', 'lost')
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+    GROUP BY tenant_id, store_id
+  `).all(criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id);
+}
+
+function createReportDailyMetricRow(criteria, store, metricDate, settingsCache, generatedAt) {
+  const settings = cachedReportStoreSettings(store.store_id, store.tenant_id, settingsCache);
+  return {
+    metric_key: reportDailyMetricKey(criteria, metricDate, store.tenant_id, store.store_id),
+    metric_date: metricDate,
+    period_start: criteria.from,
+    period_end: criteria.to,
+    timezone: settings.timezone,
+    tenant_id: cleanId(store.tenant_id),
+    store_id: cleanId(store.store_id),
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id,
+    device_count: 0,
+    active_device_count: 0,
+    heartbeat_count: 0,
+    expected_heartbeat_count: 0,
+    uptime_sample_rate: 0,
+    play_event_count: 0,
+    play_started_count: 0,
+    play_completed_count: 0,
+    play_failed_count: 0,
+    play_duration_seconds: 0,
+    qr_scan_count: 0,
+    counter_orders_issued_count: 0,
+    counter_orders_redeemed_count: 0,
+    counter_orders_cancelled_count: 0,
+    counter_orders_expired_count: 0,
+    counter_order_total_amount: 0,
+    counter_order_redeemed_amount: 0,
+    error_count: 0,
+    generated_at: generatedAt,
+    updated_at: generatedAt,
+    source_from: criteria.from,
+    source_to: criteria.to,
+    _active_devices: new Set()
+  };
+}
+
+function getOrCreateReportDailyMetricRow(criteria, store, metricDate, rowsByKey, settingsCache, generatedAt) {
+  const tenantId = cleanId(store.tenant_id);
+  const storeId = cleanId(store.store_id);
+  const key = reportDailyMetricKey(criteria, metricDate, tenantId, storeId);
+  let row = rowsByKey.get(key);
+  if (!row) {
+    row = createReportDailyMetricRow(criteria, { tenant_id: tenantId, store_id: storeId }, metricDate, settingsCache, generatedAt);
+    rowsByKey.set(key, row);
+  }
+  return row;
+}
+
+function addHeartbeatMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, device_id, received_at
+    FROM heartbeats
+    WHERE received_at >= ?
+      AND received_at < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+  `).all(range.from, range.to, criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id);
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.received_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.heartbeat_count += 1;
+    if (item.device_id) row._active_devices.add(item.device_id);
+  }
+}
+
+function addPlaylogMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      tenant_id, store_id, device_id, campaign_id, content_id,
+      event_type, result, duration,
+      COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) AS event_at
+    FROM playlogs
+    WHERE COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) >= ?
+      AND COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.play_event_count += 1;
+    if (isReportPlayStarted(item)) row.play_started_count += 1;
+    if (isReportPlayCompleted(item)) row.play_completed_count += 1;
+    if (isReportPlayFailed(item)) row.play_failed_count += 1;
+    row.play_duration_seconds += Math.max(0, asInteger(item.duration) || 0);
+  }
+}
+
+function addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, campaign_id, content_id, scanned_at
+    FROM qr_scans
+    WHERE scanned_at >= ?
+      AND scanned_at < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.scanned_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.qr_scan_count += 1;
+  }
+}
+
+function addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, campaign_id, content_id, business_date, status, total_amount
+    FROM counter_orders
+    WHERE business_date >= ?
+      AND business_date <= ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    criteria.from,
+    criteria.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  for (const item of rows) {
+    if (!reportDateInRange(item.business_date, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, item.business_date, rowsByKey, settingsCache, generatedAt);
+    const amount = Math.max(0, asInteger(item.total_amount) || 0);
+    row.counter_orders_issued_count += 1;
+    row.counter_order_total_amount += amount;
+    if (item.status === "redeemed") {
+      row.counter_orders_redeemed_count += 1;
+      row.counter_order_redeemed_amount += amount;
+    } else if (item.status === "cancelled") {
+      row.counter_orders_cancelled_count += 1;
+    } else if (item.status === "expired") {
+      row.counter_orders_expired_count += 1;
+    }
+  }
+}
+
+function addErrorMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      tenant_id, store_id,
+      COALESCE(NULLIF(occurred_at, ''), received_at) AS event_at
+    FROM error_logs
+    WHERE COALESCE(NULLIF(occurred_at, ''), received_at) >= ?
+      AND COALESCE(NULLIF(occurred_at, ''), received_at) < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+  `).all(range.from, range.to, criteria.tenant_id, criteria.tenant_id, criteria.store_id, criteria.store_id);
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.error_count += 1;
+  }
+}
+
+function finalizeReportDailyMetricRow(row, criteria) {
+  row.active_device_count = row._active_devices?.size || row.active_device_count || 0;
+  row.expected_heartbeat_count = Math.max(
+    0,
+    Math.round((row.device_count || 0) * (24 * 60 / criteria.heartbeat_interval_minutes))
+  );
+  row.uptime_sample_rate = row.expected_heartbeat_count > 0
+    ? Math.min(1, row.heartbeat_count / row.expected_heartbeat_count)
+    : 0;
+  delete row._active_devices;
+  return row;
+}
+
+function publicReportDailyStoreMetric(row) {
+  return {
+    metric_key: cleanString(row.metric_key),
+    metric_date: cleanDateKey(row.metric_date),
+    period_start: cleanDateKey(row.period_start),
+    period_end: cleanDateKey(row.period_end),
+    timezone: cleanString(row.timezone) || DEFAULT_TIMEZONE,
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    campaign_id: cleanId(row.campaign_id),
+    content_id: cleanId(row.content_id),
+    device_count: asInteger(row.device_count) || 0,
+    active_device_count: asInteger(row.active_device_count) || 0,
+    heartbeat_count: asInteger(row.heartbeat_count) || 0,
+    expected_heartbeat_count: asInteger(row.expected_heartbeat_count) || 0,
+    uptime_sample_rate: Number(row.uptime_sample_rate || 0),
+    play_event_count: asInteger(row.play_event_count) || 0,
+    play_started_count: asInteger(row.play_started_count) || 0,
+    play_completed_count: asInteger(row.play_completed_count) || 0,
+    play_failed_count: asInteger(row.play_failed_count) || 0,
+    play_duration_seconds: asInteger(row.play_duration_seconds) || 0,
+    qr_scan_count: asInteger(row.qr_scan_count) || 0,
+    counter_orders_issued_count: asInteger(row.counter_orders_issued_count) || 0,
+    counter_orders_redeemed_count: asInteger(row.counter_orders_redeemed_count) || 0,
+    counter_orders_cancelled_count: asInteger(row.counter_orders_cancelled_count) || 0,
+    counter_orders_expired_count: asInteger(row.counter_orders_expired_count) || 0,
+    counter_order_total_amount: asInteger(row.counter_order_total_amount) || 0,
+    counter_order_redeemed_amount: asInteger(row.counter_order_redeemed_amount) || 0,
+    error_count: asInteger(row.error_count) || 0,
+    generated_at: cleanString(row.generated_at),
+    updated_at: cleanString(row.updated_at),
+    source_from: cleanDateKey(row.source_from),
+    source_to: cleanDateKey(row.source_to)
+  };
+}
+
+function summarizeReportRowsByDate(criteria, rows) {
+  const byDate = new Map(criteria.days.map((date) => [date, emptyReportMetricSummary(date)]));
+  for (const row of rows) {
+    const target = byDate.get(row.metric_date) || emptyReportMetricSummary(row.metric_date);
+    addReportMetricToSummary(target, row);
+    byDate.set(row.metric_date, target);
+  }
+  return Array.from(byDate.values()).map(finalizeReportMetricSummary);
+}
+
+function summarizeReportMetricRows(rows) {
+  const summary = emptyReportMetricSummary("");
+  const deviceCountByDate = new Map();
+  for (const row of rows) {
+    addReportMetricToSummary(summary, row);
+    deviceCountByDate.set(row.metric_date, (deviceCountByDate.get(row.metric_date) || 0) + row.device_count);
+  }
+  summary.device_count = Math.max(0, ...deviceCountByDate.values());
+  return finalizeReportMetricSummary(summary);
+}
+
+function emptyReportMetricSummary(metricDate) {
+  return {
+    date: metricDate,
+    device_count: 0,
+    active_device_count: 0,
+    heartbeat_count: 0,
+    expected_heartbeat_count: 0,
+    uptime_sample_rate: 0,
+    play_event_count: 0,
+    play_started_count: 0,
+    play_completed_count: 0,
+    play_failed_count: 0,
+    play_duration_seconds: 0,
+    qr_scan_count: 0,
+    qr_response_rate: 0,
+    counter_orders_issued_count: 0,
+    counter_orders_redeemed_count: 0,
+    counter_orders_cancelled_count: 0,
+    counter_orders_expired_count: 0,
+    counter_order_total_amount: 0,
+    counter_order_redeemed_amount: 0,
+    error_count: 0
+  };
+}
+
+function addReportMetricToSummary(summary, row) {
+  summary.device_count += row.device_count;
+  summary.active_device_count += row.active_device_count;
+  summary.heartbeat_count += row.heartbeat_count;
+  summary.expected_heartbeat_count += row.expected_heartbeat_count;
+  summary.play_event_count += row.play_event_count;
+  summary.play_started_count += row.play_started_count;
+  summary.play_completed_count += row.play_completed_count;
+  summary.play_failed_count += row.play_failed_count;
+  summary.play_duration_seconds += row.play_duration_seconds;
+  summary.qr_scan_count += row.qr_scan_count;
+  summary.counter_orders_issued_count += row.counter_orders_issued_count;
+  summary.counter_orders_redeemed_count += row.counter_orders_redeemed_count;
+  summary.counter_orders_cancelled_count += row.counter_orders_cancelled_count;
+  summary.counter_orders_expired_count += row.counter_orders_expired_count;
+  summary.counter_order_total_amount += row.counter_order_total_amount;
+  summary.counter_order_redeemed_amount += row.counter_order_redeemed_amount;
+  summary.error_count += row.error_count;
+}
+
+function finalizeReportMetricSummary(summary) {
+  summary.uptime_sample_rate = summary.expected_heartbeat_count > 0
+    ? Math.min(1, summary.heartbeat_count / summary.expected_heartbeat_count)
+    : 0;
+  summary.qr_response_rate = summary.play_started_count > 0
+    ? summary.qr_scan_count / summary.play_started_count
+    : 0;
+  if (!summary.date) delete summary.date;
+  return summary;
+}
+
+function buildReportContentBreakdown(criteria) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      store_id, campaign_id, content_id, playlist_version, playlist_item_id,
+      asset_id, layout, event_type, result, duration,
+      COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) AS event_at
+    FROM playlogs
+    WHERE COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) >= ?
+      AND COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  const settingsCache = new Map();
+  const groups = new Map();
+  for (const row of rows) {
+    const metricDate = reportBusinessDateFor(row.store_id, "", row.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const key = [
+      row.store_id,
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanString(row.playlist_version),
+      cleanString(row.playlist_item_id),
+      cleanString(row.asset_id),
+      cleanString(row.layout)
+    ].join("|");
+    const target = groups.get(key) || {
+      store_id: cleanId(row.store_id),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      playlist_version: cleanString(row.playlist_version),
+      playlist_item_id: cleanString(row.playlist_item_id),
+      asset_id: cleanString(row.asset_id),
+      layout: cleanString(row.layout),
+      play_event_count: 0,
+      play_started_count: 0,
+      play_completed_count: 0,
+      play_failed_count: 0,
+      play_duration_seconds: 0
+    };
+    target.play_event_count += 1;
+    if (isReportPlayStarted(row)) target.play_started_count += 1;
+    if (isReportPlayCompleted(row)) target.play_completed_count += 1;
+    if (isReportPlayFailed(row)) target.play_failed_count += 1;
+    target.play_duration_seconds += Math.max(0, asInteger(row.duration) || 0);
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.play_event_count - a.play_event_count)
+    .slice(0, 50);
+}
+
+function buildReportQrBreakdown(criteria) {
+  const range = reportBroadIsoRange(criteria);
+  const rows = db.prepare(`
+    SELECT
+      qs.store_id, qs.campaign_id, qs.content_id, qs.offer_id,
+      qs.offer_revision_id, qs.qr_link_id, qs.scanned_at,
+      ql.label, ql.destination_type
+    FROM qr_scans qs
+    LEFT JOIN qr_links ql ON ql.qr_link_id = qs.qr_link_id
+    WHERE qs.scanned_at >= ?
+      AND qs.scanned_at < ?
+      AND (? = '' OR qs.tenant_id = ?)
+      AND (? = '' OR qs.store_id = ?)
+      AND (? = '' OR qs.campaign_id = ?)
+      AND (? = '' OR qs.content_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  const settingsCache = new Map();
+  const groups = new Map();
+  for (const row of rows) {
+    const metricDate = reportBusinessDateFor(row.store_id, "", row.scanned_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const key = [
+      cleanId(row.store_id),
+      cleanId(row.qr_link_id),
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanId(row.offer_revision_id)
+    ].join("|");
+    const target = groups.get(key) || {
+      store_id: cleanId(row.store_id),
+      qr_link_id: cleanId(row.qr_link_id),
+      label: cleanString(row.label),
+      destination_type: cleanString(row.destination_type),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      offer_id: cleanId(row.offer_id),
+      offer_revision_id: cleanId(row.offer_revision_id),
+      qr_scan_count: 0
+    };
+    target.qr_scan_count += 1;
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.qr_scan_count - a.qr_scan_count)
+    .slice(0, 50);
+}
+
+function buildReportOrderBreakdown(criteria) {
+  const rows = db.prepare(`
+    SELECT
+      store_id, campaign_id, content_id, offer_id, offer_revision_id,
+      status, business_date, total_amount
+    FROM counter_orders
+    WHERE business_date >= ?
+      AND business_date <= ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+  `).all(
+    criteria.from,
+    criteria.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    criteria.campaign_id,
+    criteria.content_id,
+    criteria.content_id
+  );
+  const groups = new Map();
+  for (const row of rows) {
+    const key = [
+      cleanId(row.store_id),
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanId(row.offer_revision_id)
+    ].join("|");
+    const target = groups.get(key) || {
+      store_id: cleanId(row.store_id),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      offer_id: cleanId(row.offer_id),
+      offer_revision_id: cleanId(row.offer_revision_id),
+      issued_count: 0,
+      redeemed_count: 0,
+      cancelled_count: 0,
+      expired_count: 0,
+      total_amount: 0,
+      redeemed_amount: 0
+    };
+    const amount = Math.max(0, asInteger(row.total_amount) || 0);
+    target.issued_count += 1;
+    target.total_amount += amount;
+    if (row.status === "redeemed") {
+      target.redeemed_count += 1;
+      target.redeemed_amount += amount;
+    } else if (row.status === "cancelled") {
+      target.cancelled_count += 1;
+    } else if (row.status === "expired") {
+      target.expired_count += 1;
+    }
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.issued_count - a.issued_count)
+    .slice(0, 50);
+}
+
+function createMonthlyReportSnapshot(input = {}) {
+  const criteria = normalizeReportCriteria(input);
+  if (!criteria.month || criteria.from !== monthBounds(criteria.month).from || criteria.to !== monthBounds(criteria.month).to) {
+    throw requestError("monthly snapshot requires a full month; pass month as YYYY-MM", 400);
+  }
+
+  const status = cleanString(input.status || "draft");
+  if (!REPORT_SNAPSHOT_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(REPORT_SNAPSHOT_STATUS).join(", ")}`, 400);
+  }
+  const snapshotKey = reportSnapshotKey(criteria, "monthly_summary");
+  const existing = db.prepare("SELECT * FROM report_snapshots WHERE snapshot_key = ?").get(snapshotKey);
+  if (existing && !normalizeBooleanFlag(input.replace || input.overwrite)) {
+    throw requestError("Monthly report snapshot already exists for this scope", 409);
+  }
+
+  const rebuilt = rebuildReportDailyStoreMetrics(criteria);
+  const report = buildReportSummary(criteria, { dailyRows: rebuilt.rows, generatedAt: rebuilt.generated_at });
+  const summaryJson = JSON.stringify(report);
+  const metricsSha256 = reportMetricsSha256(report);
+  const now = nowIso();
+  const title = cleanString(input.title || `Misell monthly report ${criteria.month}`).slice(0, 160);
+  const notes = cleanString(input.notes).slice(0, 1000);
+  const createdBy = cleanString(input.created_by || input.createdBy || "admin").slice(0, 120);
+
+  const saveSnapshot = db.transaction(() => {
+    if (existing) {
+      db.prepare(`
+        UPDATE report_snapshots SET
+          campaign_id = ?,
+          content_id = ?,
+          period_start = ?,
+          period_end = ?,
+          snapshot_type = 'monthly_summary',
+          metrics_json = ?,
+          notes = ?,
+          created_by = ?,
+          tenant_id = ?,
+          store_id = ?,
+          screen_group_id = '',
+          report_type = 'monthly_summary',
+          status = ?,
+          title = ?,
+          summary_json = ?,
+          generated_at = ?,
+          published_at = ?,
+          metrics_sha256 = ?
+        WHERE snapshot_id = ?
+      `).run(
+        criteria.campaign_id || null,
+        criteria.content_id || null,
+        criteria.from,
+        criteria.to,
+        summaryJson,
+        notes,
+        createdBy,
+        criteria.tenant_id || null,
+        criteria.store_id || null,
+        status,
+        title,
+        summaryJson,
+        rebuilt.generated_at,
+        status === "published" ? now : null,
+        metricsSha256,
+        existing.snapshot_id
+      );
+      recordAuditLog("admin", createdBy, "report_snapshot.replace", "report_snapshot", existing.snapshot_id, existing, getReportSnapshot(existing.snapshot_id), { snapshot_key: snapshotKey }, now);
+      return existing.snapshot_id;
+    }
+
+    const snapshotId = nextEntityId("rpts", `${criteria.month}-${criteria.store_id || criteria.tenant_id || "all"}`);
+    db.prepare(`
+      INSERT INTO report_snapshots (
+        snapshot_id, campaign_id, advertiser_id, period_start, period_end,
+        snapshot_type, metrics_json, notes, created_by, created_at,
+        tenant_id, store_id, screen_group_id, content_id, report_type, status, title,
+        summary_json, generated_at, published_at, snapshot_key, metrics_sha256
+      ) VALUES (?, ?, NULL, ?, ?, 'monthly_summary', ?, ?, ?, ?, ?, ?, '', ?, 'monthly_summary', ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      snapshotId,
+      criteria.campaign_id || null,
+      criteria.from,
+      criteria.to,
+      summaryJson,
+      notes,
+      createdBy,
+      now,
+      criteria.tenant_id || null,
+      criteria.store_id || null,
+      criteria.content_id || null,
+      status,
+      title,
+      summaryJson,
+      rebuilt.generated_at,
+      status === "published" ? now : null,
+      snapshotKey,
+      metricsSha256
+    );
+    recordAuditLog("admin", createdBy, "report_snapshot.create", "report_snapshot", snapshotId, null, getReportSnapshot(snapshotId), { snapshot_key: snapshotKey }, now);
+    return snapshotId;
+  });
+
+  return getReportSnapshot(saveSnapshot());
+}
+
+function listReportSnapshots(filters = {}) {
+  const params = [
+    filters.report_type,
+    filters.report_type,
+    filters.tenant_id,
+    filters.tenant_id,
+    filters.store_id,
+    filters.store_id,
+    filters.campaign_id,
+    filters.campaign_id,
+    filters.content_id,
+    filters.content_id,
+    filters.status,
+    filters.status,
+    filters.limit
+  ];
+  const monthWhere = filters.month ? "AND period_start = ? AND period_end = ?" : "";
+  if (filters.month) {
+    const bounds = monthBounds(filters.month);
+    params.splice(params.length - 1, 0, bounds.from, bounds.to);
+  }
+  return db.prepare(`
+    SELECT * FROM report_snapshots
+    WHERE (? = '' OR COALESCE(report_type, snapshot_type) = ?)
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR campaign_id = ?)
+      AND (? = '' OR content_id = ?)
+      AND (? = '' OR status = ?)
+      ${monthWhere}
+    ORDER BY period_start DESC, created_at DESC, id DESC
+    LIMIT ?
+  `).all(...params).map(publicReportSnapshot);
+}
+
+function getReportSnapshot(snapshotId) {
+  const row = db.prepare("SELECT * FROM report_snapshots WHERE snapshot_id = ?").get(cleanId(snapshotId));
+  return row ? publicReportSnapshot(row, { includeSummary: true }) : null;
+}
+
+function publicReportSnapshot(row, options = {}) {
+  const summary = parseJson(row.summary_json || row.metrics_json || "{}", {});
+  const snapshot = {
+    snapshot_id: cleanId(row.snapshot_id),
+    snapshot_key: cleanString(row.snapshot_key),
+    report_type: cleanString(row.report_type || row.snapshot_type || "monthly_summary"),
+    snapshot_type: cleanString(row.snapshot_type || row.report_type || "monthly_summary"),
+    status: cleanString(row.status || "draft"),
+    title: cleanString(row.title),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_id: cleanId(row.campaign_id),
+    content_id: cleanId(row.content_id),
+    advertiser_id: cleanId(row.advertiser_id),
+    period_start: cleanDateKey(row.period_start),
+    period_end: cleanDateKey(row.period_end),
+    metrics_sha256: cleanString(row.metrics_sha256),
+    notes: cleanString(row.notes),
+    created_by: cleanString(row.created_by),
+    generated_at: cleanString(row.generated_at),
+    published_at: cleanString(row.published_at),
+    created_at: cleanString(row.created_at)
+  };
+  if (options.includeSummary) {
+    snapshot.summary = summary;
+  } else {
+    snapshot.totals = summary?.totals || {};
+  }
+  return snapshot;
+}
+
+function reportMetricsSha256(report) {
+  return crypto.createHash("sha256")
+    .update(JSON.stringify(stableReportPayloadForHash(report)))
+    .digest("hex");
+}
+
+function stableReportPayloadForHash(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableReportPayloadForHash);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const result = {};
+  for (const key of Object.keys(value).sort()) {
+    if (key === "generated_at") continue;
+    result[key] = stableReportPayloadForHash(value[key]);
+  }
+  return result;
+}
+
+function reportCriteriaFilters(criteria) {
+  return {
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id
+  };
+}
+
+function cachedReportStoreSettings(storeId, tenantId, settingsCache) {
+  const normalizedStoreId = cleanId(storeId);
+  if (settingsCache.has(normalizedStoreId)) return settingsCache.get(normalizedStoreId);
+  const settings = getStoreSettings(normalizedStoreId, { withDefaults: true }) || {
+    tenant_id: cleanId(tenantId),
+    store_id: normalizedStoreId,
+    timezone: DEFAULT_TIMEZONE,
+    business_day_start_time: "00:00"
+  };
+  settingsCache.set(normalizedStoreId, settings);
+  return settings;
+}
+
+function reportBusinessDateFor(storeId, tenantId, isoValue, settingsCache) {
+  const settings = cachedReportStoreSettings(storeId, tenantId, settingsCache);
+  return businessDateFor(isoValue, settings.timezone, settings.business_day_start_time);
+}
+
+function reportBroadIsoRange(criteria) {
+  return {
+    from: `${addDaysToDateKey(criteria.from, -2)}T00:00:00.000Z`,
+    to: `${addDaysToDateKey(criteria.to_exclusive, 2)}T00:00:00.000Z`
+  };
+}
+
+function reportDateInRange(dateKey, criteria) {
+  return Boolean(dateKey && dateKey >= criteria.from && dateKey < criteria.to_exclusive);
+}
+
+function reportDailyMetricKey(criteria, metricDate, tenantId, storeId) {
+  const hash = crypto.createHash("sha256").update(JSON.stringify({
+    metric_date: metricDate,
+    period_start: criteria.from,
+    period_end: criteria.to,
+    tenant_id: cleanId(tenantId),
+    store_id: cleanId(storeId),
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id
+  })).digest("hex").slice(0, 40);
+  return `rdm-${hash}`;
+}
+
+function reportSnapshotKey(criteria, reportType) {
+  const hash = crypto.createHash("sha256").update(JSON.stringify({
+    report_type: reportType,
+    period_start: criteria.from,
+    period_end: criteria.to,
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id
+  })).digest("hex").slice(0, 40);
+  return `rps-${hash}`;
+}
+
+function isReportPlayStarted(row) {
+  const eventType = cleanString(row.event_type).toLowerCase();
+  const result = cleanString(row.result).toLowerCase();
+  if (!eventType && !result) return true;
+  return eventType.includes("started") || result === "started" || result === "playback" || result === "played";
+}
+
+function isReportPlayCompleted(row) {
+  const eventType = cleanString(row.event_type).toLowerCase();
+  const result = cleanString(row.result).toLowerCase();
+  return eventType.includes("completed") || eventType.includes("ended") || ["completed", "success", "ended", "done"].includes(result);
+}
+
+function isReportPlayFailed(row) {
+  const eventType = cleanString(row.event_type).toLowerCase();
+  const result = cleanString(row.result).toLowerCase();
+  return eventType.includes("failed") || eventType.includes("error") || ["failed", "error"].includes(result);
+}
+
+function cleanDateKey(value) {
+  const text = cleanString(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return "";
+  const date = new Date(`${text}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text ? "" : text;
+}
+
+function cleanMonthKey(value) {
+  const text = cleanString(value).slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(text)) return "";
+  const date = new Date(`${text}-01T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 7) !== text ? "" : text;
+}
+
+function monthBounds(monthKey) {
+  const month = cleanMonthKey(monthKey);
+  if (!month) throw requestError("month must be YYYY-MM", 400);
+  const from = `${month}-01`;
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const next = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+  const to = new Date(next.getTime() - 86400000).toISOString().slice(0, 10);
+  return { from, to, to_exclusive: next.toISOString().slice(0, 10) };
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const date = new Date(`${cleanDateKey(dateKey)}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function dateKeysBetween(fromDate, toExclusiveDate) {
+  const dates = [];
+  let current = cleanDateKey(fromDate);
+  const end = cleanDateKey(toExclusiveDate);
+  while (current && end && current < end) {
+    dates.push(current);
+    current = addDaysToDateKey(current, 1);
+  }
+  return dates;
 }
 
 function resolveCounterOrderOfferRevision(input) {
@@ -3508,6 +6539,32 @@ function normalizeContentManifestInput(input, existing = {}) {
   const assetsSupplied = Object.prototype.hasOwnProperty.call(input, "assets") ||
     Object.prototype.hasOwnProperty.call(input, "asset_ids") ||
     Object.prototype.hasOwnProperty.call(input, "assetIds");
+  const assets = assetsSupplied ? normalizeContentManifestAssets(input.assets ?? input.asset_ids ?? input.assetIds) : [];
+  const hashAssets = assetsSupplied
+    ? assets
+    : (existing.content_id ? listContentManifestAssets(existing.content_id).map((asset) => ({
+      asset_id: asset.asset_id,
+      target_path: asset.target_path,
+      required: asset.required,
+      sha256: asset.sha256
+    })) : []);
+  const tenantId = cleanId(input.tenant_id ?? input.tenantId ?? existing.tenant_id);
+  const storeId = cleanId(input.store_id ?? input.storeId ?? input.site_id ?? input.siteId ?? existing.store_id ?? existing.site_id);
+  const screenGroupId = cleanId(input.screen_group_id ?? input.screenGroupId ?? input.display_wall_id ?? input.displayWallId ?? existing.screen_group_id ?? existing.display_wall_id);
+  const screenSlotId = cleanId(input.screen_slot_id ?? input.screenSlotId ?? input.screen_id ?? input.screenId ?? existing.screen_slot_id ?? existing.screen_id);
+  const manifestSchemaVersion = Math.max(1, asInteger(input.manifest_schema_version ?? input.manifestSchemaVersion ?? existing.manifest_schema_version) || 1);
+  const manifestVersion = Math.max(1, asInteger(input.manifest_version ?? input.manifestVersion ?? existing.manifest_version) || 1);
+  const lifecycleStatus = cleanString(input.lifecycle_status ?? input.lifecycleStatus ?? existing.lifecycle_status ?? status) || status;
+  const manifestContract = buildManifestContract({
+    tenant_id: tenantId,
+    store_id: storeId,
+    screen_group_id: screenGroupId,
+    screen_slot_id: screenSlotId,
+    manifest_schema_version: manifestSchemaVersion,
+    manifest_version: manifestVersion,
+    playlist,
+    assets: hashAssets
+  });
 
   return {
     content_id: contentId,
@@ -3516,8 +6573,16 @@ function normalizeContentManifestInput(input, existing = {}) {
     status,
     title: cleanString(input.title ?? existing.title).slice(0, 160),
     notes: cleanString(input.notes ?? existing.notes).slice(0, 1000),
+    tenant_id: tenantId,
+    store_id: storeId,
+    screen_group_id: screenGroupId,
+    screen_slot_id: screenSlotId,
+    manifest_schema_version: manifestSchemaVersion,
+    manifest_version: manifestVersion,
+    content_hash: cleanString(input.content_hash ?? input.contentHash) || manifestContract.content_hash,
+    lifecycle_status: lifecycleStatus,
     playlist,
-    assets: assetsSupplied ? normalizeContentManifestAssets(input.assets ?? input.asset_ids ?? input.assetIds) : [],
+    assets,
     assets_supplied: assetsSupplied
   };
 }
@@ -3886,6 +6951,7 @@ function getDeviceDetail(deviceId) {
   if (!device) return null;
   return {
     ...device,
+    device_commands: listDeviceCommands({ device_id: deviceId, limit: 20 }),
     token_events: db.prepare("SELECT * FROM device_token_events WHERE device_id = ? ORDER BY created_at DESC LIMIT 50").all(deviceId),
     log_bundles: listDeviceLogBundles(deviceId, 20),
     asset_states: listDeviceAssetStates(deviceId, 50),
@@ -3894,6 +6960,596 @@ function getDeviceDetail(deviceId) {
     error_logs: db.prepare("SELECT * FROM error_logs WHERE device_id = ? ORDER BY received_at DESC LIMIT 50").all(deviceId),
     alerts: db.prepare("SELECT * FROM alerts WHERE device_id = ? AND status = 'open' ORDER BY last_seen DESC").all(deviceId)
   };
+}
+
+function listDeviceCommands(filters = {}) {
+  const conditions = [];
+  const params = {};
+  const tenantId = cleanId(filters.tenant_id);
+  if (tenantId) {
+    conditions.push("tenant_id = @tenant_id");
+    params.tenant_id = tenantId;
+  }
+  const storeId = cleanId(filters.store_id);
+  if (storeId) {
+    conditions.push("store_id = @store_id");
+    params.store_id = storeId;
+  }
+  const screenGroupId = cleanId(filters.screen_group_id);
+  if (screenGroupId) {
+    conditions.push("screen_group_id = @screen_group_id");
+    params.screen_group_id = screenGroupId;
+  }
+  const deviceId = cleanId(filters.device_id);
+  if (deviceId) {
+    conditions.push("device_id = @device_id");
+    params.device_id = deviceId;
+  }
+  const status = cleanString(filters.status);
+  if (status) {
+    if (!DEVICE_COMMAND_STATUS.has(status)) {
+      throw requestError(`status must be one of: ${Array.from(DEVICE_COMMAND_STATUS).join(", ")}`, 400);
+    }
+    conditions.push("status = @status");
+    params.status = status;
+  }
+  const limit = normalizedLimit(filters.limit, 100, 1, 500);
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  return db.prepare(`
+    SELECT * FROM device_commands
+    ${where}
+    ORDER BY requested_at DESC, id DESC
+    LIMIT @limit
+  `).all({ ...params, limit }).map(publicDeviceCommand);
+}
+
+function listPendingDeviceCommands(device, limit = 5) {
+  return db.prepare(`
+    SELECT * FROM device_commands
+    WHERE device_id = ?
+      AND status = 'queued'
+      AND ttl_expires_at > ?
+    ORDER BY requested_at ASC, id ASC
+    LIMIT ?
+  `).all(device.device_id, nowIso(), normalizedLimit(limit, 5, 1, 20)).map(publicDeviceCommand);
+}
+
+function createDeviceCommand(deviceId, body, actor) {
+  const device = db.prepare("SELECT * FROM devices WHERE device_id = ?").get(deviceId);
+  if (!device) throw requestError("Device not found", 404);
+  if (device.token_status === "revoked") throw requestError("Device token is revoked", 409);
+  if (device.status === "retired" || device.status === "lost") {
+    throw requestError("Device is not allowed to receive commands", 409);
+  }
+
+  const input = normalizeDeviceCommandCreateInput(body);
+  const now = nowIso();
+  const commandId = nextEntityId("dcmd", `${deviceId}-${input.command_type}`);
+  const expiresAt = new Date(Date.parse(now) + input.ttl_seconds * 1000).toISOString();
+  const paramsJson = JSON.stringify(input.params);
+  const actorId = cleanString(actor?.actor_id || "admin").slice(0, 120) || "admin";
+
+  const createCommand = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO device_commands (
+        device_command_id, tenant_id, store_id, screen_group_id, device_id,
+        command_type, params_json, status, requested_by_user_id, requested_at,
+        ttl_expires_at, result_json, error, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, '{}', '', ?)
+    `).run(
+      commandId,
+      device.tenant_id,
+      device.store_id,
+      device.screen_group_id,
+      device.device_id,
+      input.command_type,
+      paramsJson,
+      actorId,
+      now,
+      expiresAt,
+      now
+    );
+    const after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    const auditLogId = recordAuditLog(
+      "admin",
+      actorId,
+      "device_command.create",
+      "device_command",
+      commandId,
+      null,
+      publicDeviceCommand(after),
+      { role: actor?.role || "", device_id: device.device_id },
+      now
+    );
+    if (auditLogId) {
+      db.prepare("UPDATE device_commands SET audit_log_id = ? WHERE device_command_id = ?").run(auditLogId, commandId);
+    }
+  });
+  createCommand();
+
+  return publicDeviceCommand(db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId));
+}
+
+function cancelDeviceCommand(commandId, body, actor) {
+  const now = nowIso();
+  const actorId = cleanString(actor?.actor_id || "admin").slice(0, 120) || "admin";
+  const reason = cleanText(body.reason || "cancelled by admin").slice(0, 500);
+  const payload = {
+    status: "cancelled",
+    reason,
+    actor_role: cleanString(actor?.role),
+    at: now
+  };
+  let after = null;
+  const cancel = db.transaction(() => {
+    const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    if (!existing) throw requestError("Device command not found", 404);
+    if (DEVICE_COMMAND_TERMINAL_STATUS.has(existing.status)) {
+      throw requestError("Device command is already terminal", 409);
+    }
+    if (existing.status !== "queued") {
+      throw requestError("Device command has already been claimed", 409);
+    }
+
+    const result = db.prepare(`
+      UPDATE device_commands SET
+        status = 'cancelled',
+        cancelled_at = ?,
+        cancelled_by_user_id = ?,
+        completed_at = ?,
+        result_json = ?,
+        error = ?,
+        updated_at = ?
+      WHERE device_command_id = ?
+        AND status = 'queued'
+    `).run(now, actorId, now, JSON.stringify(payload), reason, now, commandId);
+    if (result.changes !== 1) {
+      throw requestError("Device command could not be cancelled", 409);
+    }
+
+    after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    recordAuditLog(
+      "admin",
+      actorId,
+      "device_command.cancel",
+      "device_command",
+      commandId,
+      publicDeviceCommand(existing),
+      publicDeviceCommand(after),
+      { role: actor?.role || "", reason },
+      now
+    );
+  });
+  cancel();
+  return publicDeviceCommand(after);
+}
+
+function forceCancelDeviceCommand(commandId, body, actor) {
+  const now = nowIso();
+  const actorId = cleanString(actor?.actor_id || "admin").slice(0, 120) || "admin";
+  const reason = cleanText(body.reason || "force-cancelled by admin").slice(0, 500);
+  let after = null;
+  const forceCancel = db.transaction(() => {
+    const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    if (!existing) throw requestError("Device command not found", 404);
+    if (DEVICE_COMMAND_TERMINAL_STATUS.has(existing.status)) {
+      throw requestError("Device command is already terminal", 409);
+    }
+
+    const payload = {
+      status: "force_cancelled",
+      previous_status: existing.status,
+      reason,
+      actor_role: cleanString(actor?.role),
+      at: now
+    };
+    const result = db.prepare(`
+      UPDATE device_commands SET
+        status = 'force_cancelled',
+        cancelled_at = ?,
+        cancelled_by_user_id = ?,
+        completed_at = ?,
+        result_json = ?,
+        error = ?,
+        updated_at = ?
+      WHERE device_command_id = ?
+        AND status NOT IN (${sqlPlaceholders(Array.from(DEVICE_COMMAND_TERMINAL_STATUS).length)})
+    `).run(
+      now,
+      actorId,
+      now,
+      JSON.stringify(payload),
+      reason,
+      now,
+      commandId,
+      ...Array.from(DEVICE_COMMAND_TERMINAL_STATUS)
+    );
+    if (result.changes !== 1) {
+      throw requestError("Device command could not be force-cancelled", 409);
+    }
+
+    after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+    recordAuditLog(
+      "admin",
+      actorId,
+      "device_command.force_cancel",
+      "device_command",
+      commandId,
+      publicDeviceCommand(existing),
+      publicDeviceCommand(after),
+      { role: actor?.role || "", reason, previous_status: existing.status },
+      now
+    );
+  });
+  forceCancel();
+  return publicDeviceCommand(after);
+}
+
+function claimDeviceCommand(device, commandId, body) {
+  maintainDeviceCommands();
+  const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ? AND device_id = ?").get(commandId, device.device_id);
+  if (!existing) throw requestError("Device command not found", 404);
+  if (existing.status !== "queued") throw requestError("Device command is not queued", 409);
+
+  const now = requestNowIso(body);
+  if (existing.ttl_expires_at <= now) {
+    expireQueuedDeviceCommands(now);
+    throw requestError("Device command has expired", 409);
+  }
+
+  const claimToken = crypto.randomBytes(24).toString("base64url");
+  const runnerId = cleanString(body.runner_id || body.runnerId || "").slice(0, 120);
+  const result = db.prepare(`
+    UPDATE device_commands SET
+      status = 'claimed',
+      claimed_at = ?,
+      claim_token = ?,
+      claimed_by_runner_id = ?,
+      updated_at = ?
+    WHERE device_command_id = ?
+      AND device_id = ?
+      AND status = 'queued'
+      AND ttl_expires_at > ?
+  `).run(now, claimToken, runnerId, now, commandId, device.device_id, now);
+  if (result.changes !== 1) {
+    throw requestError("Device command could not be claimed", 409);
+  }
+
+  const after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+  recordAuditLog(
+    "device",
+    device.device_id,
+    "device_command.claim",
+    "device_command",
+    commandId,
+    publicDeviceCommand(existing),
+    publicDeviceCommand(after),
+    { runner_id: runnerId },
+    now
+  );
+  return publicDeviceCommand(after, { include_claim_token: true });
+}
+
+function completeDeviceCommand(device, commandId, body) {
+  maintainDeviceCommands();
+  const now = requestNowIso(body);
+  const existing = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ? AND device_id = ?").get(commandId, device.device_id);
+  if (!existing) throw requestError("Device command not found", 404);
+  if (existing.status !== "claimed" && existing.status !== "running") {
+    throw requestError("Device command is not claimed", 409);
+  }
+  const claimToken = cleanString(body.claim_token || body.claimToken);
+  if (!claimToken || claimToken !== existing.claim_token) {
+    throw requestError("Device command claim token is invalid", 403);
+  }
+
+  const input = normalizeDeviceCommandResult(body);
+  const resultJson = JSON.stringify({
+    status: input.status,
+    exit_code: input.exit_code,
+    summary: input.summary,
+    runner_id: input.runner_id,
+    started_at: input.started_at,
+    completed_at: now,
+    summary_truncated: input.summary_truncated
+  });
+  const result = db.prepare(`
+    UPDATE device_commands SET
+      status = ?,
+      started_at = COALESCE(NULLIF(started_at, ''), ?),
+      completed_at = ?,
+      result_json = ?,
+      error = ?,
+      updated_at = ?
+    WHERE device_command_id = ?
+      AND device_id = ?
+      AND claim_token = ?
+      AND status IN ('claimed', 'running')
+  `).run(
+    input.status,
+    input.started_at || now,
+    now,
+    resultJson,
+    input.status === "failed" ? input.summary : "",
+    now,
+    commandId,
+    device.device_id,
+    claimToken
+  );
+  if (result.changes !== 1) {
+    throw requestError("Device command result was not accepted", 409);
+  }
+
+  const after = db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(commandId);
+  recordAuditLog(
+    "device",
+    device.device_id,
+    "device_command.result",
+    "device_command",
+    commandId,
+    publicDeviceCommand(existing),
+    publicDeviceCommand(after),
+    { status: input.status, runner_id: input.runner_id },
+    now
+  );
+  return publicDeviceCommand(after);
+}
+
+function maintainDeviceCommands(now = nowIso()) {
+  const expired = expireQueuedDeviceCommands(now);
+  const stale = markStaleDeviceCommands(now);
+  const purged = purgeTerminalDeviceCommands(now);
+  return { expired, stale, purged };
+}
+
+function expireQueuedDeviceCommands(now = nowIso()) {
+  const expired = db.prepare(`
+    SELECT * FROM device_commands
+    WHERE status = 'queued'
+      AND ttl_expires_at <= ?
+  `).all(now);
+  if (expired.length === 0) return 0;
+
+  const expire = db.transaction((rows) => {
+    for (const row of rows) {
+      const resultPayload = {
+        status: "expired",
+        reason: "ttl expired before device claim",
+        at: now
+      };
+      db.prepare(`
+        UPDATE device_commands SET
+          status = 'expired',
+          expired_at = ?,
+          completed_at = ?,
+          result_json = ?,
+          error = ?,
+          updated_at = ?
+        WHERE device_command_id = ? AND status = 'queued'
+      `).run(now, now, JSON.stringify(resultPayload), resultPayload.reason, now, row.device_command_id);
+      recordAuditLog(
+        "system",
+        "device-command-expiry",
+        "device_command.expire",
+        "device_command",
+        row.device_command_id,
+        publicDeviceCommand(row),
+        publicDeviceCommand(db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(row.device_command_id)),
+        {},
+        now
+      );
+    }
+  });
+  expire(expired);
+  return expired.length;
+}
+
+function markStaleDeviceCommands(now = nowIso()) {
+  const cutoff = new Date(Date.parse(now) - DEVICE_COMMAND_CLAIM_LEASE_SECONDS * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT * FROM device_commands
+    WHERE status IN ('claimed', 'running')
+      AND COALESCE(NULLIF(claimed_at, ''), NULLIF(started_at, ''), updated_at, requested_at) <= ?
+  `).all(cutoff);
+  if (rows.length === 0) return 0;
+
+  const mark = db.transaction((commands) => {
+    for (const row of commands) {
+      const payload = {
+        status: "stale",
+        previous_status: row.status,
+        reason: `claim lease expired after ${DEVICE_COMMAND_CLAIM_LEASE_SECONDS}s without result`,
+        at: now
+      };
+      const result = db.prepare(`
+        UPDATE device_commands SET
+          status = 'stale',
+          completed_at = ?,
+          result_json = ?,
+          error = ?,
+          updated_at = ?
+        WHERE device_command_id = ?
+          AND status IN ('claimed', 'running')
+          AND COALESCE(NULLIF(claimed_at, ''), NULLIF(started_at, ''), updated_at, requested_at) <= ?
+      `).run(now, JSON.stringify(payload), payload.reason, now, row.device_command_id, cutoff);
+      if (result.changes !== 1) continue;
+      recordAuditLog(
+        "system",
+        "device-command-lease",
+        "device_command.stale",
+        "device_command",
+        row.device_command_id,
+        publicDeviceCommand(row),
+        publicDeviceCommand(db.prepare("SELECT * FROM device_commands WHERE device_command_id = ?").get(row.device_command_id)),
+        { claim_lease_seconds: DEVICE_COMMAND_CLAIM_LEASE_SECONDS },
+        now
+      );
+    }
+  });
+  mark(rows);
+  return rows.length;
+}
+
+function purgeTerminalDeviceCommands(now = nowIso()) {
+  const cutoff = new Date(Date.parse(now) - DEVICE_COMMAND_RETENTION_DAYS * 86400000).toISOString();
+  const terminalStatuses = Array.from(DEVICE_COMMAND_TERMINAL_STATUS);
+  const rows = db.prepare(`
+    SELECT * FROM device_commands
+    WHERE status IN (${sqlPlaceholders(terminalStatuses.length)})
+      AND completed_at IS NOT NULL
+      AND completed_at != ''
+      AND completed_at <= ?
+    ORDER BY completed_at ASC, id ASC
+    LIMIT 500
+  `).all(...terminalStatuses, cutoff);
+  if (rows.length === 0) return 0;
+
+  const purge = db.transaction((commands) => {
+    const ids = commands.map((row) => row.id);
+    const result = db.prepare(`
+      DELETE FROM device_commands
+      WHERE id IN (${sqlPlaceholders(ids.length)})
+    `).run(...ids);
+    recordAuditLog(
+      "system",
+      "device-command-retention",
+      "device_command.purge",
+      "device_command",
+      "device-command-retention",
+      null,
+      null,
+      {
+        retention_days: DEVICE_COMMAND_RETENTION_DAYS,
+        cutoff,
+        selected_count: commands.length,
+        deleted_count: result.changes,
+        statuses: terminalStatuses
+      },
+      now
+    );
+  });
+  purge(rows);
+  return rows.length;
+}
+
+function normalizeDeviceCommandCreateInput(input) {
+  const commandType = cleanString(input.command_type || input.commandType);
+  if (!DEVICE_COMMAND_TYPES.has(commandType)) {
+    throw requestError(`command_type must be one of: ${Array.from(DEVICE_COMMAND_TYPES).join(", ")}`, 400);
+  }
+  const ttlSeconds = normalizedLimit(input.ttl_seconds || input.ttlSeconds, DEVICE_COMMAND_DEFAULT_TTL_SECONDS, 1, DEVICE_COMMAND_MAX_TTL_SECONDS);
+  return {
+    command_type: commandType,
+    ttl_seconds: ttlSeconds,
+    params: normalizeDeviceCommandParams(input)
+  };
+}
+
+function normalizeDeviceCommandParams(input) {
+  const source = parseParamsObject(input.params_json ?? input.params ?? {});
+  const bodyFields = {
+    reason: input.reason,
+    label: input.label
+  };
+  const combined = { ...source, ...Object.fromEntries(Object.entries(bodyFields).filter(([, value]) => value !== undefined)) };
+  const allowedKeys = new Set(["reason", "label"]);
+  for (const key of Object.keys(combined)) {
+    if (!allowedKeys.has(key)) {
+      throw requestError(`params.${key} is not allowed for device commands`, 400);
+    }
+  }
+  return {
+    reason: cleanText(combined.reason).slice(0, 500),
+    label: cleanString(combined.label).slice(0, 120)
+  };
+}
+
+function parseParamsObject(value) {
+  if (!value) return {};
+  if (typeof value === "string") {
+    const parsed = parseJson(value, null);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw requestError("params_json must be a JSON object", 400);
+    }
+    return parsed;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw requestError("params must be an object", 400);
+  }
+  return value;
+}
+
+function normalizeDeviceCommandResult(input) {
+  for (const key of ["stdout", "stderr", "stdout_text", "stderr_text", "raw_output", "logs"]) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) {
+      throw requestError("Device command result must not include stdout/stderr or raw logs", 400);
+    }
+  }
+  const status = cleanString(input.status);
+  if (status !== "succeeded" && status !== "failed") {
+    throw requestError("status must be succeeded or failed", 400);
+  }
+  const startedAt = cleanIsoString(input.started_at || input.startedAt);
+  const summary = truncateTextByBytes(input.summary || input.message || "", DEVICE_COMMAND_RESULT_MAX_BYTES);
+  return {
+    status,
+    exit_code: asInteger(input.exit_code ?? input.exitCode),
+    started_at: startedAt,
+    summary: summary.value || (status === "succeeded" ? "completed" : "failed"),
+    summary_truncated: summary.truncated,
+    runner_id: cleanString(input.runner_id || input.runnerId).slice(0, 120)
+  };
+}
+
+function cleanIsoString(value) {
+  const text = cleanString(value);
+  if (!text) return "";
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function publicDeviceCommand(row, options = {}) {
+  if (!row) return null;
+  const status = cleanString(row.status);
+  const isClaimed = status === "claimed" || status === "running";
+  const claimedAtMs = Date.parse(row.claimed_at || "");
+  const claimStaleAt = isClaimed && Number.isFinite(claimedAtMs)
+    ? new Date(claimedAtMs + DEVICE_COMMAND_CLAIM_LEASE_SECONDS * 1000).toISOString()
+    : "";
+  const command = {
+    device_command_id: cleanString(row.device_command_id),
+    tenant_id: cleanString(row.tenant_id),
+    store_id: cleanString(row.store_id),
+    screen_group_id: cleanString(row.screen_group_id),
+    device_id: cleanString(row.device_id),
+    command_type: cleanString(row.command_type),
+    params: parseJson(row.params_json || "{}", {}),
+    status,
+    terminal: DEVICE_COMMAND_TERMINAL_STATUS.has(status),
+    claim_stale_at: claimStaleAt,
+    requested_by_user_id: cleanString(row.requested_by_user_id),
+    requested_at: cleanString(row.requested_at),
+    ttl_expires_at: cleanString(row.ttl_expires_at),
+    claimed_at: cleanString(row.claimed_at),
+    claimed_by_runner_id: cleanString(row.claimed_by_runner_id),
+    started_at: cleanString(row.started_at),
+    completed_at: cleanString(row.completed_at),
+    cancelled_at: cleanString(row.cancelled_at),
+    cancelled_by_user_id: cleanString(row.cancelled_by_user_id),
+    expired_at: cleanString(row.expired_at),
+    result: parseJson(row.result_json || "{}", {}),
+    error: cleanString(row.error),
+    audit_log_id: row.audit_log_id || null,
+    updated_at: cleanString(row.updated_at)
+  };
+  if (options.include_claim_token) {
+    command.claim_token = cleanString(row.claim_token);
+  }
+  return command;
+}
+
+function sqlPlaceholders(count) {
+  return Array.from({ length: count }, () => "?").join(", ");
 }
 
 function listDeviceLogBundles(deviceId = "", limit = 50) {
@@ -4190,7 +7846,7 @@ function localDateTimeParts(isoValue, timezone = DEFAULT_TIMEZONE) {
 }
 
 function recordAuditLog(actorType, actorId, action, entityType, entityId, beforeValue, afterValue, metadata = {}, createdAt = nowIso()) {
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO audit_logs (
       actor_type, actor_id, action, entity_type, entity_id,
       before_json, after_json, metadata_json, created_at
@@ -4206,6 +7862,7 @@ function recordAuditLog(actorType, actorId, action, entityType, entityId, before
     JSON.stringify(metadata || {}),
     createdAt
   );
+  return result.lastInsertRowid;
 }
 
 function normalizedCloudAssetPath(value) {
@@ -4605,6 +8262,9 @@ function summarizeContentRollout(manifest, devices) {
 }
 
 function publicContentManifest(row, includePlaylist = false) {
+  const storeId = cleanString(row.store_id || row.site_id);
+  const screenGroupId = cleanString(row.screen_group_id || row.display_wall_id);
+  const screenSlotId = cleanString(row.screen_slot_id || row.screen_id);
   const publicFields = {
     id: row.id,
     content_id: cleanString(row.content_id),
@@ -4613,6 +8273,17 @@ function publicContentManifest(row, includePlaylist = false) {
     status: cleanString(row.status),
     title: cleanString(row.title),
     notes: cleanString(row.notes),
+    tenant_id: cleanString(row.tenant_id),
+    store_id: storeId,
+    screen_group_id: screenGroupId,
+    screen_slot_id: screenSlotId,
+    site_id: storeId,
+    display_wall_id: screenGroupId,
+    screen_id: screenSlotId,
+    manifest_schema_version: asInteger(row.manifest_schema_version) || 1,
+    manifest_version: asInteger(row.manifest_version) || 1,
+    content_hash: cleanString(row.content_hash),
+    lifecycle_status: cleanString(row.lifecycle_status || row.status),
     created_at: cleanString(row.created_at),
     updated_at: cleanString(row.updated_at),
     published_at: cleanString(row.published_at)
@@ -4694,6 +8365,16 @@ function buildDeviceContentPolicy(device) {
     source: manifest ? "content_manifest" : "none",
     content_id: cleanString(manifest?.content_id),
     playlist_version: targetPlaylistVersion,
+    manifest_schema_version: asInteger(manifest?.manifest_schema_version) || 1,
+    manifest_version: asInteger(manifest?.manifest_version) || 1,
+    content_hash: cleanString(manifest?.content_hash),
+    tenant_id: cleanString(manifest?.tenant_id),
+    store_id: cleanString(manifest?.store_id || manifest?.site_id),
+    screen_group_id: cleanString(manifest?.screen_group_id || manifest?.display_wall_id),
+    screen_slot_id: cleanString(manifest?.screen_slot_id || manifest?.screen_id),
+    site_id: cleanString(manifest?.store_id || manifest?.site_id),
+    display_wall_id: cleanString(manifest?.screen_group_id || manifest?.display_wall_id),
+    screen_id: cleanString(manifest?.screen_slot_id || manifest?.screen_id),
     release_channel: cleanString(manifest?.release_channel),
     published_at: cleanString(manifest?.published_at),
     assets: manifest ? manifest.assets || [] : [],
@@ -5128,6 +8809,80 @@ function compactTimestamp(date = new Date()) {
   return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
+function requestAcceptsHtml(req) {
+  const accept = cleanString(req.get("accept")).toLowerCase();
+  return accept.includes("text/html");
+}
+
+function getStoreStaffSessionToken(req) {
+  const bearer = getBearerToken(req);
+  if (bearer) return bearer;
+  return parseCookies(req.get("cookie")).misell_store_staff_session || "";
+}
+
+function getCustomerSessionToken(req) {
+  const bearer = getBearerToken(req);
+  if (bearer) return bearer;
+  return parseCookies(req.get("cookie")).misell_customer_session || "";
+}
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  for (const part of cleanString(cookieHeader).split(";")) {
+    const index = part.indexOf("=");
+    if (index <= 0) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (key) cookies[key] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+function setStoreStaffSessionCookie(req, res, token, expiresAt) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_store_staff_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${new Date(expiresAt).toUTCString()}`
+  ]);
+}
+
+function clearStoreStaffSessionCookie(req, res) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_store_staff_session=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`
+  ]);
+}
+
+function setCustomerSessionCookie(req, res, token, expiresAt) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_customer_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${new Date(expiresAt).toUTCString()}`
+  ]);
+}
+
+function clearCustomerSessionCookie(req, res) {
+  const secure = requestIsHttps(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", [
+    `misell_customer_session=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`
+  ]);
+}
+
+function requestIsHttps(req) {
+  return Boolean(req.secure || cleanString(req.get("x-forwarded-proto")).split(",")[0].trim().toLowerCase() === "https");
+}
+
+function safeEqualString(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""), "utf8");
+  const rightBuffer = Buffer.from(String(right || ""), "utf8");
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function safeEqualHex(left, right) {
+  const leftText = cleanString(left);
+  const rightText = cleanString(right);
+  if (!/^[a-f0-9]{64}$/i.test(leftText) || !/^[a-f0-9]{64}$/i.test(rightText)) return false;
+  return crypto.timingSafeEqual(Buffer.from(leftText, "hex"), Buffer.from(rightText, "hex"));
+}
+
 function parseJson(value, fallback) {
   try {
     return JSON.parse(value);
@@ -5144,6 +8899,329 @@ function escapeHtml(value) {
     "\"": "&quot;",
     "'": "&#39;"
   }[char]));
+}
+
+function escapeJsonForScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function renderCounterOrderPage(order, orderToken, req) {
+  const payload = withCounterOrderStoreProfile(order);
+  const receipt = payload.receipt_snapshot || {};
+  const absoluteUrl = `${req.protocol}://${req.get("host")}/order/${encodeURIComponent(orderToken)}`;
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>受付番号 ${escapeHtml(order.order_number)} | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="order-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">${escapeHtml(payload.store.store_name || "店舗")}</p>
+          <h1>受付番号を発行しました</h1>
+          <p>商品を受け取るときに、この番号と確認コードをスタッフに見せてください。</p>
+        </div>
+        <span class="update-status update-status-${escapeHtml(order.status === "issued" ? "success" : order.status)}">${escapeHtml(counterOrderStatusLabel(order.status))}</span>
+      </section>
+      <section id="order-card" class="order-card" aria-label="受付番号カード">
+        <div class="order-card-head">
+          <span>${escapeHtml(payload.store.store_name || "Misell")}</span>
+          <strong>${escapeHtml(counterOrderStatusLabel(order.status))}</strong>
+        </div>
+        <p class="order-number-label">受付番号</p>
+        <div class="order-number">${escapeHtml(order.order_number)}</div>
+        <div class="verify-code">確認コード <strong>${escapeHtml(order.verify_code)}</strong></div>
+        <dl class="order-receipt-meta">
+          <div>
+            <dt>引換場所</dt>
+            <dd>${escapeHtml(receipt.pickup_location || "店頭")}</dd>
+          </div>
+          <div>
+            <dt>引換時間</dt>
+            <dd>${escapeHtml(receipt.pickup_window || "店舗営業時間に準じます")}</dd>
+          </div>
+          <div>
+            <dt>有効期限</dt>
+            <dd>${escapeHtml(formatOrderDate(receipt.valid_until) || "なし")}</dd>
+          </div>
+        </dl>
+        <div class="order-items">
+          ${payload.items.map((item) => `
+            <div class="order-item-row">
+              <span>
+                <strong>${escapeHtml(item.item_name_snapshot)}</strong>
+                <small>単価 ${escapeHtml(formatCurrency(item.unit_price_snapshot, item.currency))} / ${escapeHtml(item.quantity)}点</small>
+              </span>
+              <strong>小計 ${escapeHtml(formatCurrency(item.subtotal_amount, item.currency))}</strong>
+            </div>
+          `).join("")}
+        </div>
+        <div class="order-card-foot">
+          <span>合計 ${escapeHtml(formatCurrency(order.total_amount, order.currency))}</span>
+          <span>${order.tax_included ? "税込" : "税別"}</span>
+          <span>${escapeHtml(formatOrderDate(order.issued_at))}</span>
+        </div>
+      </section>
+      <section id="previous-order" class="order-previous" hidden></section>
+      <section class="order-actions" aria-label="受付番号操作">
+        <button id="save-order-image" type="button">画像で保存</button>
+        <button id="preview-order-image" class="secondary" type="button">画像プレビュー</button>
+        <button id="share-order" class="secondary" type="button">共有</button>
+        <button id="copy-order-number" class="secondary" type="button">番号をコピー</button>
+        <button id="copy-order-url" class="secondary" type="button">URLをコピー</button>
+      </section>
+      <section id="order-image-fallback" class="order-image-fallback" hidden>
+        <div>
+          <strong>画像プレビュー</strong>
+          <p>iPhone Safariでは、この画像を長押しして「写真に保存」または「画像を保存」を選択してください。</p>
+        </div>
+        <img id="order-image-preview" alt="受付番号カード画像">
+      </section>
+      <p id="order-message" class="order-message" role="status"></p>
+      <canvas id="order-card-canvas" width="1200" height="1600" hidden></canvas>
+    </main>
+    <script>
+      window.MISELL_COUNTER_ORDER = ${escapeJsonForScript(payload)};
+      window.MISELL_ORDER_TOKEN = ${escapeJsonForScript(orderToken)};
+      window.MISELL_ORDER_URL = ${escapeJsonForScript(absoluteUrl)};
+      window.MISELL_FORCE_IMAGE_FALLBACK = ${req.query?.force_image_fallback === "1" ? "true" : "false"};
+    </script>
+    <script src="/order-card.js"></script>
+  </body>
+</html>`;
+}
+
+function renderOrderNotFoundPage() {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>受付番号が見つかりません | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="order-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">Misell</p>
+          <h1>受付番号が見つかりません</h1>
+          <p>URLが正しいか、もう一度確認してください。</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function renderStoreOrdersPage(storeAccess, req) {
+  const store = getStoreSettings(storeAccess.store_id, { withDefaults: true }) || {
+    store_id: storeAccess.store_id,
+    store_name: storeAccess.store_name || storeAccess.store_id
+  };
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(store.store_name || store.store_id)} 受付確認 | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="store-orders-page">
+    <div class="shell">
+      <header class="topbar">
+        <h1>${escapeHtml(store.store_name || store.store_id)} 受付確認</h1>
+        <button id="store-refresh" type="button">更新</button>
+      </header>
+      <main>
+        <section id="store-login" class="store-login-panel">
+          <h2>スタッフPIN</h2>
+          <form id="store-login-form" class="store-login-form">
+            <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password" placeholder="PIN" aria-label="スタッフPIN" required>
+            <button type="submit">開始</button>
+          </form>
+        </section>
+        <section id="store-orders-app" hidden>
+          <div class="store-orders-toolbar">
+            <select id="store-order-status" aria-label="受付ステータス">
+              <option value="issued">未引換</option>
+              <option value="redeemed">引換済み</option>
+              <option value="cancelled">取消</option>
+              <option value="">すべて</option>
+            </select>
+            <input id="store-order-search" type="search" placeholder="受付番号/確認コード" aria-label="受付検索">
+            <button id="store-order-search-button" type="button">検索</button>
+            <button id="store-logout" class="secondary" type="button">終了</button>
+          </div>
+          <div id="store-session-summary" class="notification-bar"></div>
+          <div id="store-orders-list"></div>
+        </section>
+        <p id="store-orders-message" class="order-message" role="status"></p>
+      </main>
+    </div>
+    <script>
+      window.MISELL_STORE_TOKEN = ${escapeJsonForScript(cleanString(req.params.store_token))};
+      window.MISELL_STORE = ${escapeJsonForScript({
+        store_id: store.store_id,
+        store_name: store.store_name || store.store_id
+      })};
+    </script>
+    <script src="/store-orders.js"></script>
+  </body>
+</html>`;
+}
+
+function renderStoreOrdersNotFoundPage() {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>店舗受付が見つかりません | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="store-orders-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">Misell</p>
+          <h1>店舗受付が見つかりません</h1>
+          <p>URLが正しいか、管理者に確認してください。</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function renderCustomerAdminPage(customerAccess, req) {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${escapeHtml(customerAccess.tenant_name || customerAccess.tenant_id)} 顧客管理 | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="customer-admin-page">
+    <div class="shell">
+      <header class="topbar">
+        <h1>${escapeHtml(customerAccess.tenant_name || customerAccess.tenant_id)} 顧客管理</h1>
+        <button id="customer-refresh" type="button">更新</button>
+      </header>
+      <main>
+        <section id="customer-login" class="store-login-panel">
+          <h2>顧客PIN</h2>
+          <form id="customer-login-form" class="store-login-form">
+            <input name="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password" placeholder="PIN" aria-label="顧客PIN" required>
+            <button type="submit">開始</button>
+          </form>
+        </section>
+        <section id="customer-admin-app" hidden>
+          <div class="store-orders-toolbar">
+            <input id="customer-report-month" type="month" aria-label="レポート月">
+            <select id="customer-store-filter" aria-label="店舗"></select>
+            <button id="customer-logout" class="secondary" type="button">終了</button>
+          </div>
+          <div id="customer-session-summary" class="notification-bar"></div>
+          <section class="section">
+            <h2>成果KPI</h2>
+            <div id="customer-kpis" class="metrics"></div>
+          </section>
+          <section class="section">
+            <h2>受付状況</h2>
+            <div id="customer-orders"></div>
+          </section>
+          <section class="section">
+            <h2>店舗運用設定</h2>
+            <div id="customer-store-settings"></div>
+          </section>
+          <section class="section">
+            <h2>オファー設定</h2>
+            <div id="customer-offers"></div>
+          </section>
+        </section>
+        <p id="customer-message" class="order-message" role="status"></p>
+      </main>
+    </div>
+    <script>
+      window.MISELL_CUSTOMER_ACCESS_ID = ${escapeJsonForScript(customerAccess.customer_access_token_id)};
+      window.MISELL_CUSTOMER_ACCESS = ${escapeJsonForScript({
+        tenant_id: customerAccess.tenant_id,
+        tenant_name: customerAccess.tenant_name,
+        role: customerAccess.role,
+        store_ids: customerAccess.store_ids || []
+      })};
+    </script>
+    <script src="/customer-admin.js"></script>
+  </body>
+</html>`;
+}
+
+function renderCustomerAdminNotFoundPage() {
+  return `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>顧客管理が見つかりません | Misell</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body class="customer-admin-page">
+    <main class="order-shell">
+      <section class="order-hero">
+        <div>
+          <p class="order-kicker">Misell</p>
+          <h1>顧客管理が見つかりません</h1>
+          <p>URLが正しいか、管理者に確認してください。</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>`;
+}
+
+function counterOrderStatusLabel(status) {
+  return {
+    issued: "未引換",
+    redeemed: "引換済み",
+    expired: "期限切れ",
+    cancelled: "取消"
+  }[status] || status || "";
+}
+
+function formatCurrency(amount, currency) {
+  if (normalizeCurrency(currency) === "JPY") return `${asInteger(amount) || 0}円`;
+  return `${asInteger(amount) || 0} ${normalizeCurrency(currency)}`;
+}
+
+function formatPickupWindow(from, until) {
+  const start = cleanString(from);
+  const end = cleanString(until);
+  if (start && end) return `${start} - ${end}`;
+  return start || end || "";
+}
+
+function formatOrderDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function renderDeviceDetailPage(device) {

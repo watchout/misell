@@ -207,6 +207,22 @@ INSTALL_CONTENT_SYNC=1 scripts/setup-autostart.sh
 systemctl --user status misell-content-sync.timer
 ```
 
+Enable the remote command runner only after heartbeat/token verification is
+working and Cloud command issuance has been approved. The runner is disabled by
+default even if the timer is installed.
+
+```bash
+MISELL_COMMAND_RUNNER_ENABLED=1 INSTALL_COMMAND_RUNNER=1 scripts/setup-autostart.sh
+systemctl --user status misell-command-runner.timer
+```
+
+If `~/.config/misell-player/env` already contains `MISELL_COMMAND_RUNNER_ENABLED=0`, edit that file to `MISELL_COMMAND_RUNNER_ENABLED=1` before starting the timer.
+
+`MISELL_DEVICE_COMMANDS_URL` is optional when `MISELL_HEARTBEAT_URL` ends with
+`/api/device/heartbeat`; the runner derives `/api/device/commands` from it.
+The runner executes only fixed allowlisted actions and does not expand command
+params into shell text.
+
 ## Security Baseline
 
 Dry-run:
@@ -318,7 +334,8 @@ scripts/check-update.sh --dry-run
 
 `scripts/check-update.sh` accepts both per-device update targets and active Cloud release manifests. When a manifest is returned, the script reports `target_manifest_id` back to Cloud with the update result.
 
-Commercial deployments should move from direct Git refs to release bundles with symlink rollback.
+Commercial deployments use content release bundles for playlist rollback. App
+binary updates are still handled by release manifests and `check-update.sh`.
 
 ## Cloud Content Sync
 
@@ -334,7 +351,39 @@ Dry-run:
 scripts/sync-content.sh --dry-run
 ```
 
-The script backs up local content, writes the Cloud playlist to `MISELL_PLAYLIST_PATH`, validates it, and reports success or failure to Cloud.
+The script syncs required assets first, verifies local asset file size and sha256 against the Cloud manifest, backs up local content, writes the Cloud playlist into a staging release directory, validates it, promotes it by atomically updating `${MISELL_CONTENT_RELEASES_DIR}/current`, and points `MISELL_PLAYLIST_PATH` at the active release playlist. If staging, validation, or promote fails, the previous active release remains playable. If a downloaded asset does not match the manifest sha256, or if media validation rejects the downloaded image/video, the terminal quarantines the downloaded file under `${MISELL_ASSETS_DIR}/.quarantine` and does not apply the playlist.
+
+Rollback switches to an already-downloaded release without re-downloading assets:
+
+```bash
+scripts/sync-content.sh --rollback previous
+scripts/sync-content.sh --rollback <release_id>
+```
+
+Release bundles default to `${MISELL_DATA_DIR}/releases`, with the active pointer at `${MISELL_DATA_DIR}/releases/current`. Override with:
+
+```bash
+MISELL_CONTENT_RELEASES_DIR=/path/to/releases
+MISELL_CONTENT_CURRENT_LINK=/path/to/releases/current
+```
+
+Dry-run lists the asset work without requiring new files to already exist locally. Set `MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=1` only when you explicitly want dry-run to fail on missing or mismatched local assets.
+
+Asset verification, playlist reference checks, media signature validation, and quarantine retention are enabled by default:
+
+```bash
+MISELL_VERIFY_CONTENT_ASSETS=1
+MISELL_VERIFY_CONTENT_ASSETS_DRY_RUN=0
+MISELL_VERIFY_PLAYLIST_ASSET_REFS=1
+MISELL_VALIDATE_MEDIA_ASSETS=1
+MISELL_VALIDATE_MEDIA_WITH_FFPROBE=0
+MISELL_ASSET_QUARANTINE_DIR=/path/to/quarantine
+MISELL_ASSET_QUARANTINE_RETENTION_DAYS=30
+MISELL_ASSET_QUARANTINE_MAX_FILES=200
+MISELL_ASSET_QUARANTINE_MAX_BYTES=524288000
+```
+
+Media validation uses image/video file signatures by default. Set `MISELL_VALIDATE_MEDIA_WITH_FFPROBE=1` to additionally run `ffprobe` for MP4/M4V/MOV files when `ffprobe` is installed. If `ffprobe` is missing, the signature check still applies.
 
 ## Local State SQLite
 
@@ -354,26 +403,33 @@ MISELL_LOCAL_STATE_DB_PATH=/path/to/local_state.sqlite
 
 The database stores:
 
-- outbound playlog events waiting for Cloud backfill
+- outbound playlog, error, content-result, and asset-result events waiting for Cloud backfill
 - applied content manifest history
+- content apply job state for interrupted or failed applies
 - local asset sync state
 
-Playback logs are still appended to `logs/playlog.jsonl`. New playback events are also queued in SQLite and can be synced to Cloud:
+Playback logs are still appended to `logs/playlog.jsonl`. New playback, error, content-result, and asset-result events are also queued in SQLite and can be synced to Cloud:
 
 ```bash
+npm run local-events:sync
 npm run playlogs:sync
 ```
 
-When `MISELL_HEARTBEAT_URL` points at `/api/device/heartbeat`, `scripts/emit-heartbeat.sh` derives `/api/device/playlog` and runs playlog sync after a successful heartbeat. Set `MISELL_SKIP_PLAYLOG_SYNC=1` to disable that best-effort backfill.
+`npm run playlogs:sync` is kept as a playlog-only compatibility command. New deployments should use `npm run local-events:sync`.
 
-Playlog sync settings:
+When `MISELL_HEARTBEAT_URL` points at `/api/device/heartbeat`, `scripts/emit-heartbeat.sh` derives the Cloud base URL and runs local event sync after a successful heartbeat. Set `MISELL_SKIP_LOCAL_EVENT_SYNC=1` to disable that best-effort backfill. `MISELL_SKIP_PLAYLOG_SYNC=1` is still honored as a compatibility alias.
+
+Local event sync settings:
 
 ```bash
+MISELL_LOCAL_EVENT_SYNC_LIMIT=100
+MISELL_LOCAL_EVENT_SYNC_TIMEOUT_MS=15000
+MISELL_LOCAL_EVENT_SENT_RETENTION_DAYS=30
 MISELL_PLAYLOG_SYNC_TIMEOUT_MS=15000
 MISELL_PLAYLOG_SENT_RETENTION_DAYS=30
 ```
 
-Only playback events created after this local-state deployment are queued in SQLite. Existing `logs/playlog.jsonl` rows are not migrated or backfilled by this PR.
+Only new events created after this local-state deployment are queued in SQLite. Existing `logs/playlog.jsonl` rows and historical JSON/JSONL error or content-result evidence are not migrated or backfilled by this PR.
 
 Inspect local state:
 
