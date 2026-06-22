@@ -1430,8 +1430,8 @@
           <option value="">店舗</option>
           ${stores.map((store) => `<option value="${escapeHtml(store.store_id || "")}" data-tenant-id="${escapeHtml(store.tenant_id || "")}">${escapeHtml(store.store_name || store.store_id || "")}</option>`).join("")}
         </select>
-        <select name="screen_group_id" aria-label="画面グループ">
-          <option value="">画面グループ任意</option>
+        <select name="screen_group_id" aria-label="画面グループ" required>
+          <option value="">画面グループ</option>
           ${screenGroups.map((group) => `<option value="${escapeHtml(group.screen_group_id || "")}" data-store-id="${escapeHtml(group.store_id || "")}">${escapeHtml(group.screen_group_name || group.screen_group_id || "")}</option>`).join("")}
         </select>
         <input name="proposal_month" type="month" value="${escapeHtml(currentMonth)}" aria-label="提案月" required>
@@ -1513,7 +1513,7 @@
           three_screen_outline: outlineFromText(form.elements.three_screen_outline.value),
           qr_flow: form.elements.qr_flow.value,
           expected_effect: form.elements.expected_effect.value,
-          status: "visible"
+          status: "proposed"
         })
       });
       form.reset();

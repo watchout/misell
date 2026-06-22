@@ -134,9 +134,25 @@ const CUSTOMER_PIN_LOCK_SECONDS = normalizedLimit(
 );
 const CUSTOMER_ROLES = new Set(["customer_admin", "customer_editor", "customer_viewer"]);
 const CUSTOMER_EDIT_ROLES = new Set(["customer_admin", "customer_editor"]);
-const CAMPAIGN_PROPOSAL_STATUS = new Set(["draft", "visible", "selected", "held", "rejected", "archived"]);
+const CAMPAIGN_PROPOSAL_STATUS = new Set(["draft", "proposed", "selected", "held", "rejected", "expired"]);
 const CUSTOMER_CAMPAIGN_PROPOSAL_STATUS = new Set(["selected", "held", "rejected"]);
-const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["visible", "selected", "held", "rejected"]);
+const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["proposed", "selected", "held", "rejected"]);
+const CUSTOMER_CONTEXT_CATEGORIES = new Set([
+  "facility_profile",
+  "brand_profile",
+  "products_services",
+  "campaign_history",
+  "performance_summary",
+  "selected_preferences",
+  "rejected_patterns",
+  "asset_library",
+  "seasonal_calendar",
+  "operation_rules"
+]);
+const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(["customer_visible", "operator_internal", "ai_context"]);
+const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(["customer", "misell", "system", "partner"]);
+const CUSTOMER_CONTEXT_SOURCE_TYPES = new Set(["operator_input", "customer_input", "imported", "report_summary", "system_generated"]);
+const CUSTOMER_CONTEXT_CONFIDENCE = new Set(["low", "medium", "high", "confirmed"]);
 const PUBLIC_QR_VIEW_LIMIT = normalizedLimit(
   process.env.MISELL_PUBLIC_QR_VIEW_LIMIT_PER_MINUTE,
   120,
@@ -883,6 +899,10 @@ app.get("/api/customer/counter-orders", requireCustomerSession, (req, res, next)
 
 app.get("/api/customer/store-settings", requireCustomerSession, (req, res) => {
   res.json({ ok: true, store_settings: listCustomerStoreSettings(req.customerSession) });
+});
+
+app.get("/api/customer/screen-groups", requireCustomerSession, (req, res) => {
+  res.json({ ok: true, screen_groups: listCustomerScreenGroups(req.customerSession) });
 });
 
 app.get("/api/customer/offers", requireCustomerSession, (req, res) => {
@@ -3232,8 +3252,13 @@ function schemaMigrations() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer_context_item_id TEXT NOT NULL UNIQUE,
             tenant_id TEXT NOT NULL,
-            store_id TEXT NOT NULL DEFAULT '',
-            screen_group_id TEXT NOT NULL DEFAULT '',
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            context_category TEXT NOT NULL,
+            visibility_scope TEXT NOT NULL,
+            source_owner TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            confidence TEXT NOT NULL,
             item_type TEXT NOT NULL,
             item_key TEXT NOT NULL,
             value_json TEXT NOT NULL DEFAULT '{}',
@@ -3248,8 +3273,8 @@ function schemaMigrations() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             customer_context_snapshot_id TEXT NOT NULL UNIQUE,
             tenant_id TEXT NOT NULL,
-            store_id TEXT NOT NULL DEFAULT '',
-            screen_group_id TEXT NOT NULL DEFAULT '',
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
             proposal_month TEXT NOT NULL,
             snapshot_json TEXT NOT NULL,
             snapshot_sha256 TEXT NOT NULL,
@@ -3262,8 +3287,8 @@ function schemaMigrations() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             proposal_generation_run_id TEXT NOT NULL UNIQUE,
             tenant_id TEXT NOT NULL,
-            store_id TEXT NOT NULL DEFAULT '',
-            screen_group_id TEXT NOT NULL DEFAULT '',
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
             proposal_month TEXT NOT NULL,
             context_snapshot_id TEXT NOT NULL,
             generator_type TEXT NOT NULL DEFAULT 'operator_seed',
@@ -3286,8 +3311,8 @@ function schemaMigrations() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_proposal_id TEXT NOT NULL UNIQUE,
             tenant_id TEXT NOT NULL,
-            store_id TEXT NOT NULL DEFAULT '',
-            screen_group_id TEXT NOT NULL DEFAULT '',
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
             proposal_month TEXT NOT NULL,
             context_snapshot_id TEXT NOT NULL,
             proposal_generation_run_id TEXT,
@@ -3299,7 +3324,7 @@ function schemaMigrations() {
             recommended_time_slots_json TEXT NOT NULL DEFAULT '[]',
             expected_effect TEXT NOT NULL DEFAULT '',
             required_assets_json TEXT NOT NULL DEFAULT '[]',
-            status TEXT NOT NULL DEFAULT 'visible',
+            status TEXT NOT NULL DEFAULT 'proposed',
             rejected_reason TEXT NOT NULL DEFAULT '',
             selected_at TEXT,
             held_at TEXT,
@@ -3317,8 +3342,8 @@ function schemaMigrations() {
             campaign_proposal_event_id TEXT NOT NULL UNIQUE,
             campaign_proposal_id TEXT NOT NULL,
             tenant_id TEXT NOT NULL,
-            store_id TEXT NOT NULL DEFAULT '',
-            screen_group_id TEXT NOT NULL DEFAULT '',
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
             from_status TEXT NOT NULL DEFAULT '',
             to_status TEXT NOT NULL,
             reason TEXT NOT NULL DEFAULT '',
@@ -3334,8 +3359,8 @@ function schemaMigrations() {
             campaign_brief_id TEXT NOT NULL UNIQUE,
             campaign_proposal_id TEXT NOT NULL UNIQUE,
             tenant_id TEXT NOT NULL,
-            store_id TEXT NOT NULL DEFAULT '',
-            screen_group_id TEXT NOT NULL DEFAULT '',
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
             context_snapshot_id TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'stub',
             brief_json TEXT NOT NULL DEFAULT '{}',
@@ -3346,7 +3371,7 @@ function schemaMigrations() {
           );
 
           CREATE INDEX IF NOT EXISTS idx_customer_context_items_scope
-            ON customer_context_items(tenant_id, store_id, screen_group_id, status, item_type, item_key);
+            ON customer_context_items(tenant_id, store_id, screen_group_id, status, context_category, item_type, item_key);
           CREATE INDEX IF NOT EXISTS idx_customer_context_snapshots_scope
             ON customer_context_snapshots(tenant_id, store_id, screen_group_id, proposal_month, created_at DESC);
           CREATE INDEX IF NOT EXISTS idx_proposal_generation_runs_scope
@@ -5443,6 +5468,27 @@ function listCustomerStoreSettings(session) {
   });
 }
 
+function listCustomerScreenGroups(session) {
+  return db.prepare(`
+    SELECT tenant_id, store_id, location_id, screen_group_id, name, display_count, created_at, updated_at
+    FROM screen_groups
+    WHERE tenant_id = ?
+    ORDER BY store_id ASC, screen_group_id ASC
+    LIMIT 500
+  `).all(session.tenant_id).filter((group) => {
+    return !session.store_ids?.length || session.store_ids.includes(cleanId(group.store_id));
+  }).map((group) => ({
+    tenant_id: cleanId(group.tenant_id),
+    store_id: cleanId(group.store_id),
+    location_id: cleanId(group.location_id),
+    screen_group_id: cleanId(group.screen_group_id),
+    screen_group_name: cleanString(group.name),
+    display_count: asInteger(group.display_count) || 0,
+    created_at: cleanString(group.created_at),
+    updated_at: cleanString(group.updated_at)
+  }));
+}
+
 function listCustomerOffers(session) {
   return db.prepare(`
     SELECT * FROM offers
@@ -5501,6 +5547,7 @@ function createCustomerOfferRevision(session, offerId, input) {
 function listCustomerContextItems(query = {}) {
   const scope = normalizeCampaignScope(query, { requireStore: false, allowEmptyTenant: true });
   const itemType = cleanId(query.item_type || query.itemType);
+  const contextCategory = cleanString(query.context_category || query.contextCategory);
   const status = cleanString(query.status || "active");
   const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
   return db.prepare(`
@@ -5508,14 +5555,16 @@ function listCustomerContextItems(query = {}) {
     WHERE (? = '' OR tenant_id = ?)
       AND (? = '' OR store_id = ?)
       AND (? = '' OR screen_group_id = ?)
+      AND (? = '' OR context_category = ?)
       AND (? = '' OR item_type = ?)
       AND (? = '' OR status = ?)
-    ORDER BY tenant_id ASC, store_id ASC, screen_group_id ASC, item_type ASC, item_key ASC
+    ORDER BY tenant_id ASC, store_id ASC, screen_group_id ASC, context_category ASC, item_type ASC, item_key ASC
     LIMIT ?
   `).all(
     scope.tenant_id, scope.tenant_id,
     scope.store_id, scope.store_id,
     scope.screen_group_id, scope.screen_group_id,
+    contextCategory, contextCategory,
     itemType, itemType,
     status, status,
     limit
@@ -5523,11 +5572,12 @@ function listCustomerContextItems(query = {}) {
 }
 
 function upsertCustomerContextItem(input, actor = {}) {
-  const scope = normalizeCampaignScope(input, { requireStore: false });
+  const scope = normalizeCampaignScope(input, { requireStore: true, requireScreenGroup: true });
   const itemType = cleanId(input.item_type || input.itemType || "facility_profile");
   const itemKey = cleanId(input.item_key || input.itemKey || input.key);
   if (!itemType) throw requestError("item_type is required", 400);
   if (!itemKey) throw requestError("item_key is required", 400);
+  const classification = normalizeCustomerContextClassification(input, itemType);
   const value = normalizeStructuredJson(input.value_json ?? input.valueJson ?? input.value ?? {}, {});
   const valueJson = safeJsonStringify(value, 30000);
   const source = cleanString(input.source || "operator").slice(0, 80) || "operator";
@@ -5548,10 +5598,16 @@ function upsertCustomerContextItem(input, actor = {}) {
   db.prepare(`
     INSERT INTO customer_context_items (
       customer_context_item_id, tenant_id, store_id, screen_group_id,
+      context_category, visibility_scope, source_owner, source_type, confidence,
       item_type, item_key, value_json, source, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tenant_id, store_id, screen_group_id, item_type, item_key)
     DO UPDATE SET
+      context_category = excluded.context_category,
+      visibility_scope = excluded.visibility_scope,
+      source_owner = excluded.source_owner,
+      source_type = excluded.source_type,
+      confidence = excluded.confidence,
       value_json = excluded.value_json,
       source = excluded.source,
       status = excluded.status,
@@ -5561,6 +5617,11 @@ function upsertCustomerContextItem(input, actor = {}) {
     scope.tenant_id,
     scope.store_id,
     scope.screen_group_id,
+    classification.context_category,
+    classification.visibility_scope,
+    classification.source_owner,
+    classification.source_type,
+    classification.confidence,
     itemType,
     itemKey,
     valueJson,
@@ -5581,6 +5642,7 @@ function upsertCustomerContextItem(input, actor = {}) {
     tenant_id: scope.tenant_id,
     store_id: scope.store_id,
     screen_group_id: scope.screen_group_id,
+    ...classification,
     item_type: itemType,
     item_key: itemKey
   }, now);
@@ -5591,7 +5653,7 @@ function createProposalGenerationRun(input, actor = {}) {
   if (normalizeBooleanFlag(input.external_ai_used || input.externalAiUsed) || cleanString(input.external_ai_provider || input.externalAiProvider)) {
     throw requestError("External AI generation is out of scope for this foundation endpoint", 400);
   }
-  const scope = normalizeCampaignScope(input, { requireStore: true });
+  const scope = normalizeCampaignScope(input, { requireStore: true, requireScreenGroup: true });
   const proposalMonth = cleanMonthKey(input.proposal_month || input.proposalMonth || input.month) || new Date().toISOString().slice(0, 7);
   const run = db.transaction(() => {
     const snapshot = createCustomerContextSnapshotRecord(scope, proposalMonth, cleanString(input.source || "operator_seed") || "operator_seed");
@@ -5637,11 +5699,11 @@ function listProposalGenerationRuns(query = {}) {
 
 function createCampaignProposal(input, actor = {}) {
   const proposal = db.transaction(() => {
-    const scope = normalizeCampaignScope(input, { requireStore: true });
+    const scope = normalizeCampaignScope(input, { requireStore: true, requireScreenGroup: true });
     const proposalMonth = cleanMonthKey(input.proposal_month || input.proposalMonth || input.month) || new Date().toISOString().slice(0, 7);
     const title = cleanString(input.title).slice(0, 160);
     if (!title) throw requestError("title is required", 400);
-    const status = cleanString(input.status || "visible");
+    const status = cleanString(input.status || "proposed");
     if (!CAMPAIGN_PROPOSAL_STATUS.has(status)) {
       throw requestError(`status must be one of: ${Array.from(CAMPAIGN_PROPOSAL_STATUS).join(", ")}`, 400);
     }
@@ -5762,9 +5824,15 @@ function listCampaignProposals(query = {}, options = {}) {
 }
 
 function listCustomerCampaignProposals(session, query = {}) {
-  const storeId = defaultCustomerStoreId(session, query.store_id || query.storeId);
   const screenGroupId = cleanId(query.screen_group_id || query.screenGroupId);
-  if (screenGroupId) assertScreenGroupScope(session.tenant_id, storeId, screenGroupId);
+  if (!screenGroupId) throw requestError("screen_group_id is required", 400);
+  const screenGroup = db.prepare("SELECT tenant_id, store_id FROM screen_groups WHERE screen_group_id = ?").get(screenGroupId);
+  if (!screenGroup) throw requestError("Screen group not found", 404);
+  if (cleanId(screenGroup.tenant_id) !== session.tenant_id) throw requestError("Screen group is outside tenant scope", 403);
+  const suppliedStoreId = cleanId(query.store_id || query.storeId);
+  const storeId = defaultCustomerStoreId(session, suppliedStoreId || screenGroup.store_id);
+  if (cleanId(screenGroup.store_id) !== storeId) throw requestError("Screen group is outside store scope", 403);
+  assertScreenGroupScope(session.tenant_id, storeId, screenGroupId);
   const proposalMonth = cleanMonthKey(query.proposal_month || query.proposalMonth || query.month) || new Date().toISOString().slice(0, 7);
   const proposals = listCampaignProposals({
     tenant_id: session.tenant_id,
@@ -5782,7 +5850,6 @@ function updateCustomerCampaignProposalStatus(session, campaignProposalId, input
     throw requestError("status must be selected, held, or rejected", 400);
   }
   const reason = cleanString(input.rejected_reason || input.rejectedReason || input.reason).slice(0, 1000);
-  if (status === "rejected" && !reason) throw requestError("rejected_reason is required", 400);
   const updated = db.transaction(() => {
     const existing = getCampaignProposal(campaignProposalId);
     if (!existing) throw requestError("Campaign proposal not found", 404);
@@ -5852,6 +5919,7 @@ function normalizeCampaignScope(input = {}, options = {}) {
     if (tenantId && cleanId(store.tenant_id) !== tenantId) throw requestError("Store is outside tenant scope", 403);
   }
   if (options.requireStore && !storeId) throw requestError("store_id is required", 400);
+  if (options.requireScreenGroup && !screenGroupId) throw requestError("screen_group_id is required", 400);
   return {
     tenant_id: tenantId,
     store_id: storeId,
@@ -5873,6 +5941,41 @@ function assertCustomerProposalScope(session, proposal) {
   if (proposal.tenant_id !== session.tenant_id) throw requestError("Campaign proposal is outside tenant scope", 403);
   assertCustomerStoreScope(session, proposal.store_id);
   if (proposal.screen_group_id) assertScreenGroupScope(session.tenant_id, proposal.store_id, proposal.screen_group_id);
+}
+
+function normalizeCustomerContextClassification(input = {}) {
+  const contextCategory = cleanString(input.context_category || input.contextCategory);
+  if (!contextCategory) throw requestError("context_category is required", 400);
+  if (!CUSTOMER_CONTEXT_CATEGORIES.has(contextCategory)) {
+    throw requestError(`context_category must be one of: ${Array.from(CUSTOMER_CONTEXT_CATEGORIES).join(", ")}`, 400);
+  }
+  const visibilityScope = cleanString(input.visibility_scope || input.visibilityScope);
+  if (!visibilityScope) throw requestError("visibility_scope is required", 400);
+  if (!CUSTOMER_CONTEXT_VISIBILITY_SCOPES.has(visibilityScope)) {
+    throw requestError(`visibility_scope must be one of: ${Array.from(CUSTOMER_CONTEXT_VISIBILITY_SCOPES).join(", ")}`, 400);
+  }
+  const sourceOwner = cleanString(input.source_owner || input.sourceOwner);
+  if (!sourceOwner) throw requestError("source_owner is required", 400);
+  if (!CUSTOMER_CONTEXT_SOURCE_OWNERS.has(sourceOwner)) {
+    throw requestError(`source_owner must be one of: ${Array.from(CUSTOMER_CONTEXT_SOURCE_OWNERS).join(", ")}`, 400);
+  }
+  const sourceType = cleanString(input.source_type || input.sourceType);
+  if (!sourceType) throw requestError("source_type is required", 400);
+  if (!CUSTOMER_CONTEXT_SOURCE_TYPES.has(sourceType)) {
+    throw requestError(`source_type must be one of: ${Array.from(CUSTOMER_CONTEXT_SOURCE_TYPES).join(", ")}`, 400);
+  }
+  const confidence = cleanString(input.confidence);
+  if (!confidence) throw requestError("confidence is required", 400);
+  if (!CUSTOMER_CONTEXT_CONFIDENCE.has(confidence)) {
+    throw requestError(`confidence must be one of: ${Array.from(CUSTOMER_CONTEXT_CONFIDENCE).join(", ")}`, 400);
+  }
+  return {
+    context_category: contextCategory,
+    visibility_scope: visibilityScope,
+    source_owner: sourceOwner,
+    source_type: sourceType,
+    confidence
+  };
 }
 
 function createCustomerContextSnapshotRecord(scope, proposalMonth, source = "operator_seed") {
@@ -5913,14 +6016,11 @@ function contextItemsForSnapshot(scope) {
   return db.prepare(`
     SELECT * FROM customer_context_items
     WHERE tenant_id = ?
+      AND store_id = ?
+      AND screen_group_id = ?
       AND status = 'active'
-      AND (
-        (store_id = '' AND screen_group_id = '')
-        OR (store_id = ? AND screen_group_id = '')
-        OR (store_id = ? AND screen_group_id = ?)
-      )
-    ORDER BY store_id ASC, screen_group_id ASC, item_type ASC, item_key ASC, updated_at ASC
-  `).all(scope.tenant_id, scope.store_id, scope.store_id, scope.screen_group_id);
+    ORDER BY context_category ASC, item_type ASC, item_key ASC, updated_at ASC
+  `).all(scope.tenant_id, scope.store_id, scope.screen_group_id);
 }
 
 function getCustomerContextSnapshot(snapshotId, scope = null) {
@@ -6096,6 +6196,11 @@ function publicCustomerContextItem(row) {
     tenant_id: cleanId(row.tenant_id),
     store_id: cleanId(row.store_id),
     screen_group_id: cleanId(row.screen_group_id),
+    context_category: cleanString(row.context_category),
+    visibility_scope: cleanString(row.visibility_scope),
+    source_owner: cleanString(row.source_owner),
+    source_type: cleanString(row.source_type),
+    confidence: cleanString(row.confidence),
     item_type: cleanId(row.item_type),
     item_key: cleanId(row.item_key),
     value: parseJson(row.value_json || "{}", {}),
@@ -10092,6 +10197,7 @@ function renderCustomerAdminPage(customerAccess, req) {
           <div class="store-orders-toolbar">
             <input id="customer-report-month" type="month" aria-label="レポート月">
             <select id="customer-store-filter" aria-label="店舗"></select>
+            <select id="customer-screen-group-filter" aria-label="画面グループ"></select>
             <button id="customer-logout" class="secondary" type="button">終了</button>
           </div>
           <div id="customer-session-summary" class="notification-bar"></div>

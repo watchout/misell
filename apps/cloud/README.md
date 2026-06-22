@@ -106,12 +106,29 @@ for the first implementation. It stores customer context items, immutable
 context snapshots, campaign proposals, proposal action events, proposal run
 stubs, and campaign brief stubs.
 
+The first slice is screen-group scoped. Admin proposal seed, operator-created
+proposals, context items, context snapshots, proposal generation run stubs, and
+campaign brief stubs all require `tenant_id`, `store_id`, `screen_group_id`, and
+`proposal_month` where applicable. Store-wide or tenant-wide proposals are left
+for a later scope.
+
+Customer context items require explicit classification/source fields:
+`context_category`, `visibility_scope`, `source_owner`, `source_type`, and
+`confidence`. These fields are enum-validated so context snapshots remain
+auditable and stable.
+
+Campaign proposal status is one of `draft`, `proposed`, `selected`, `held`,
+`rejected`, or `expired`. Customer Admin only sees customer-visible proposals;
+operator-created proposals default to `proposed`, while `draft` / `expired` are
+not returned from the customer proposal API.
+
 This phase does not call an external AI provider, does not create scenes, does
 not create `content_manifest` rows, does not publish content, does not add
 collaboration preview flows, and does not implement billing or credits.
 
 Customer Admin can view this month's proposals and mark them as `selected`,
-`held`, or `rejected` with a reason. Selecting a proposal creates only a
+`held`, or `rejected`; rejected reason is optional and preserved when supplied.
+Selecting a proposal creates only a
 `campaign_briefs` stub for the later Campaign Generator phase.
 
 ## macOS Launch Agent

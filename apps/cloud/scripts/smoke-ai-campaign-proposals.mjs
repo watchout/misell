@@ -37,18 +37,20 @@ async function main() {
       objective: "雨の日でも滞在導線を作る"
     }));
     const primaryProposal = primary.data.campaign_proposal;
-    if (!primaryProposal.context_snapshot_sha256 || primaryProposal.status !== "visible") {
+    if (!primaryProposal.context_snapshot_sha256 || primaryProposal.status !== "proposed") {
       throw new Error(`primary proposal was not created correctly: ${primary.text}`);
     }
 
-    await admin("POST", "/api/admin/customer-context-items", {
-      tenant_id: records.tenantId,
-      store_id: records.storeId,
-      screen_group_id: records.screenGroupId,
+    await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
+      context_category: "brand_profile",
+      visibility_scope: "customer_visible",
+      source_owner: "customer",
+      source_type: "customer_input",
+      confidence: "confirmed",
       item_type: "brand_profile",
       item_key: "tone",
       value: { tone: "updated after snapshot" }
-    });
+    }));
     const afterContextUpdate = await admin("GET", `/api/admin/campaign-proposals?campaign_proposal_id=${primaryProposal.campaign_proposal_id}&tenant_id=${records.tenantId}&store_id=${records.storeId}`);
     const sameProposal = afterContextUpdate.data.campaign_proposals.find((proposal) => proposal.campaign_proposal_id === primaryProposal.campaign_proposal_id);
     if (!sameProposal || sameProposal.context_snapshot_sha256 !== primaryProposal.context_snapshot_sha256) {
@@ -59,6 +61,11 @@ async function main() {
       campaign_proposal_id: `cpr-${runId}-reject`,
       title: "平日昼の追加訴求",
       objective: "平日昼の空き時間を埋める"
+    }));
+    await admin("POST", "/api/admin/campaign-proposals", proposalInput(records, {
+      campaign_proposal_id: `cpr-${runId}-reject-empty`,
+      title: "夕方前の軽い訴求",
+      objective: "却下理由なしでも履歴化できることを確認"
     }));
     await admin("POST", "/api/admin/campaign-proposals", proposalInput({
       ...records,
@@ -94,6 +101,27 @@ async function main() {
       month: "2026-07",
       external_ai_used: true
     }, 400, "External AI");
+    await expectAdminError("POST", "/api/admin/proposal-generation-runs", {
+      tenant_id: records.tenantId,
+      store_id: records.storeId,
+      month: "2026-07"
+    }, 400, "screen_group_id");
+    await expectAdminError("POST", "/api/admin/customer-context-items", contextInput(records, {
+      screen_group_id: "",
+      item_key: "missing-screen-group"
+    }), 400, "screen_group_id");
+    await expectAdminError("POST", "/api/admin/campaign-proposals", {
+      ...proposalInput(records, {
+        campaign_proposal_id: `cpr-${runId}-missing-sg`
+      }),
+      screen_group_id: ""
+    }, 400, "screen_group_id");
+    await expectAdminError("POST", "/api/admin/campaign-proposals", proposalInput({
+      ...records,
+      screenGroupId: records.otherStoreScreenGroupId
+    }, {
+      campaign_proposal_id: `cpr-${runId}-scope-mismatch`
+    }), 403, "store scope");
 
     const access = await admin("POST", `/api/admin/tenants/${records.tenantId}/customer-access-token`, {
       role: "customer_editor",
@@ -104,16 +132,22 @@ async function main() {
     const login = await rawRequest("POST", access.data.customer_admin_url + "/session", { pin: "2468" });
     const cookie = login.headers.get("set-cookie");
     if (!cookie) throw new Error("customer login did not return a session cookie");
+    const customerScreenGroups = await request("GET", "/api/customer/screen-groups", null, { cookie });
+    const customerScreenGroupIds = customerScreenGroups.data.screen_groups.map((group) => group.screen_group_id);
+    if (!customerScreenGroupIds.includes(records.screenGroupId) || customerScreenGroupIds.includes(records.otherStoreScreenGroupId)) {
+      throw new Error(`customer screen group list is not store-scoped: ${JSON.stringify(customerScreenGroupIds)}`);
+    }
 
     const scoped = await request("GET", `/api/customer/campaign-proposals?month=2026-07&store_id=${records.storeId}&screen_group_id=${records.screenGroupId}`, null, { cookie });
     const scopedIds = scoped.data.campaign_proposals.map((proposal) => proposal.campaign_proposal_id);
-    if (!scopedIds.includes(`cpr-${runId}-primary`) || !scopedIds.includes(`cpr-${runId}-reject`)) {
+    if (!scopedIds.includes(`cpr-${runId}-primary`) || !scopedIds.includes(`cpr-${runId}-reject`) || !scopedIds.includes(`cpr-${runId}-reject-empty`)) {
       throw new Error(`scoped proposals missing expected ids: ${JSON.stringify(scopedIds)}`);
     }
     if (scopedIds.includes(`cpr-${runId}-other-sg`) || scopedIds.includes(`cpr-${runId}-other-store`) || scopedIds.includes(`cpr-${runId}-foreign`)) {
       throw new Error(`scoped proposals leaked another scope: ${JSON.stringify(scopedIds)}`);
     }
-    await expectError("GET", `/api/customer/campaign-proposals?month=2026-07&store_id=${records.otherStoreId}`, null, { cookie }, 403, "scope");
+    await expectError("GET", `/api/customer/campaign-proposals?month=2026-07&store_id=${records.storeId}`, null, { cookie }, 400, "screen_group_id");
+    await expectError("GET", `/api/customer/campaign-proposals?month=2026-07&store_id=${records.otherStoreId}&screen_group_id=${records.otherStoreScreenGroupId}`, null, { cookie }, 403, "scope");
 
     const selected = await request("PATCH", `/api/customer/campaign-proposals/cpr-${runId}-primary/status`, {
       status: "selected"
@@ -128,6 +162,12 @@ async function main() {
     if (rejected.data.campaign_proposal.status !== "rejected" || rejected.data.campaign_proposal.rejected_reason !== "夏休み企画と重なる") {
       throw new Error(`rejected reason was not persisted: ${rejected.text}`);
     }
+    const rejectedWithoutReason = await request("PATCH", `/api/customer/campaign-proposals/cpr-${runId}-reject-empty/status`, {
+      status: "rejected"
+    }, { cookie });
+    if (rejectedWithoutReason.data.campaign_proposal.status !== "rejected" || rejectedWithoutReason.data.campaign_proposal.rejected_reason !== "") {
+      throw new Error(`rejected without reason should be accepted with empty reason: ${rejectedWithoutReason.text}`);
+    }
     await expectError("PATCH", `/api/customer/campaign-proposals/cpr-${runId}-other-store/status`, {
       status: "held"
     }, { cookie }, 403, "scope");
@@ -141,6 +181,21 @@ async function main() {
     if (runs.length < 4 || runs.some((run) => run.external_ai_used !== 0 || run.external_ai_provider)) {
       throw new Error(`proposal generation runs should be local stub only: ${JSON.stringify(runs)}`);
     }
+    const contextItems = db().prepare("SELECT * FROM customer_context_items").all();
+    const allowedContextCategories = new Set(["facility_profile", "brand_profile", "seasonal_calendar"]);
+    const allowedVisibilityScopes = new Set(["customer_visible"]);
+    const allowedSourceOwners = new Set(["customer", "misell"]);
+    const allowedSourceTypes = new Set(["operator_input", "customer_input", "imported"]);
+    const allowedConfidence = new Set(["confirmed", "high"]);
+    for (const item of contextItems) {
+      if (!item.store_id || !item.screen_group_id) throw new Error(`context item missing required screen scope: ${JSON.stringify(item)}`);
+      if (!item.context_category || !item.visibility_scope || !item.source_owner || !item.source_type || !item.confidence) {
+        throw new Error(`context item missing classification fields: ${JSON.stringify(item)}`);
+      }
+      if (!allowedContextCategories.has(item.context_category) || !allowedVisibilityScopes.has(item.visibility_scope) || !allowedSourceOwners.has(item.source_owner) || !allowedSourceTypes.has(item.source_type) || !allowedConfidence.has(item.confidence)) {
+        throw new Error(`context item has an unexpected classification enum value: ${JSON.stringify(item)}`);
+      }
+    }
     if (tableCount("campaign_proposal_events") < 5) throw new Error("campaign proposal event history is missing");
     if (tableCount("campaign_briefs") !== 1) throw new Error("selected proposal should create exactly one campaign brief stub");
 
@@ -149,7 +204,10 @@ async function main() {
       base_url: baseUrl,
       tenant_store_screen_group_isolation: true,
       status_transition: true,
-      rejected_reason: true,
+      screen_group_required: true,
+      context_classification: true,
+      rejected_reason_optional: true,
+      rejected_reason_persisted_when_supplied: true,
       immutable_context_snapshot: true,
       no_external_ai: true,
       no_content_manifest_creation: true,
@@ -196,27 +254,45 @@ async function seedDevice(tenantId, storeId, screenGroupId, deviceId) {
 }
 
 async function seedContext(records) {
-  await admin("POST", "/api/admin/customer-context-items", {
-    tenant_id: records.tenantId,
+  await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
+    context_category: "facility_profile",
     item_type: "facility_profile",
     item_key: "industry",
     value: { industry: "karaoke", audience: "weekday families" }
-  });
-  await admin("POST", "/api/admin/customer-context-items", {
-    tenant_id: records.tenantId,
-    store_id: records.storeId,
+  }));
+  await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
+    context_category: "seasonal_calendar",
+    source_type: "imported",
+    confidence: "high",
     item_type: "seasonal_calendar",
     item_key: "2026-07",
     value: { theme: "summer rain", local_event: "station festival" }
-  });
-  await admin("POST", "/api/admin/customer-context-items", {
-    tenant_id: records.tenantId,
-    store_id: records.storeId,
-    screen_group_id: records.screenGroupId,
+  }));
+  await admin("POST", "/api/admin/customer-context-items", contextInput(records, {
+    context_category: "brand_profile",
+    source_owner: "customer",
+    source_type: "customer_input",
     item_type: "brand_profile",
     item_key: "tone",
     value: { tone: "friendly", ng_words: ["guaranteed results"] }
-  });
+  }));
+}
+
+function contextInput(records, overrides = {}) {
+  return {
+    tenant_id: records.tenantId,
+    store_id: records.storeId,
+    screen_group_id: records.screenGroupId,
+    context_category: "facility_profile",
+    visibility_scope: "customer_visible",
+    source_owner: "misell",
+    source_type: "operator_input",
+    confidence: "confirmed",
+    item_type: "facility_profile",
+    item_key: "default",
+    value: {},
+    ...overrides
+  };
 }
 
 function proposalInput(records, overrides = {}) {
@@ -237,7 +313,7 @@ function proposalInput(records, overrides = {}) {
     recommended_time_slots: ["11:00-15:00"],
     expected_effect: "QR反応の改善仮説",
     required_assets: ["logo", "rainy-day-photo"],
-    status: "visible",
+    status: "proposed",
     ...overrides
   };
 }

@@ -2,6 +2,7 @@
   const state = {
     session: null,
     stores: [],
+    screenGroups: [],
     offers: [],
     orders: [],
     proposals: [],
@@ -16,6 +17,7 @@
     logout: document.getElementById("customer-logout"),
     month: document.getElementById("customer-report-month"),
     storeFilter: document.getElementById("customer-store-filter"),
+    screenGroupFilter: document.getElementById("customer-screen-group-filter"),
     summary: document.getElementById("customer-session-summary"),
     kpis: document.getElementById("customer-kpis"),
     proposals: document.getElementById("customer-campaign-proposals"),
@@ -31,6 +33,7 @@
   els.month.value = new Date().toISOString().slice(0, 7);
   els.month?.addEventListener("change", loadCustomerDashboard);
   els.storeFilter?.addEventListener("change", loadCustomerDashboard);
+  els.screenGroupFilter?.addEventListener("change", loadCustomerDashboard);
 
   bootstrap();
 
@@ -76,26 +79,38 @@
     els.login.hidden = true;
     els.app.hidden = false;
     populateStoreFilter();
+    populateScreenGroupFilter();
   }
 
   async function loadCustomerDashboard() {
     if (!state.session) return;
+    const [stores, screenGroups] = await Promise.all([
+      fetchJson("/api/customer/store-settings").catch(() => ({ store_settings: [] })),
+      fetchJson("/api/customer/screen-groups").catch(() => ({ screen_groups: [] }))
+    ]);
+    state.stores = stores.store_settings || [];
+    state.screenGroups = screenGroups.screen_groups || [];
+    populateStoreFilter();
+    populateScreenGroupFilter();
     const storeId = selectedStoreId();
+    const screenGroupId = selectedScreenGroupId();
     const params = new URLSearchParams({ month: els.month.value || new Date().toISOString().slice(0, 7) });
     if (storeId) params.set("store_id", storeId);
-    const [report, proposals, orders, stores, offers] = await Promise.all([
+    const proposalParams = new URLSearchParams(params);
+    if (screenGroupId) proposalParams.set("screen_group_id", screenGroupId);
+    const proposalRequest = screenGroupId
+      ? fetchJson(`/api/customer/campaign-proposals?${proposalParams}`).catch(() => ({ campaign_proposals: [] }))
+      : Promise.resolve({ campaign_proposals: [] });
+    const [report, proposals, orders, offers] = await Promise.all([
       fetchJson(`/api/customer/reports/conversion?${params}`),
-      fetchJson(`/api/customer/campaign-proposals?${params}`).catch(() => ({ campaign_proposals: [] })),
+      proposalRequest,
       fetchJson(`/api/customer/counter-orders?${storeId ? `store_id=${encodeURIComponent(storeId)}&` : ""}limit=50`).catch(() => ({ counter_orders: [] })),
-      fetchJson("/api/customer/store-settings"),
       fetchJson("/api/customer/offers")
     ]);
     state.report = report.report;
     state.proposals = proposals.campaign_proposals || [];
     state.orders = orders.counter_orders || [];
-    state.stores = stores.store_settings || [];
     state.offers = offers.offers || [];
-    populateStoreFilter();
     renderSession();
     renderKpis();
     renderProposals();
@@ -123,6 +138,26 @@
 
   function selectedStoreId() {
     return els.storeFilter?.value || "";
+  }
+
+  function populateScreenGroupFilter() {
+    if (!els.screenGroupFilter) return;
+    const current = els.screenGroupFilter.value;
+    const storeId = selectedStoreId();
+    const allowed = (state.screenGroups || []).filter((group) => !storeId || group.store_id === storeId);
+    els.screenGroupFilter.innerHTML = `
+      ${allowed.length === 1 ? "" : `<option value="">画面グループ</option>`}
+      ${allowed.map((group) => `<option value="${escapeAttr(group.screen_group_id)}">${escapeHtml(group.screen_group_name || group.screen_group_id)}</option>`).join("")}
+    `;
+    if (current && Array.from(els.screenGroupFilter.options).some((option) => option.value === current)) {
+      els.screenGroupFilter.value = current;
+    } else if (allowed.length === 1) {
+      els.screenGroupFilter.value = allowed[0].screen_group_id;
+    }
+  }
+
+  function selectedScreenGroupId() {
+    return els.screenGroupFilter?.value || "";
   }
 
   function renderSession() {
