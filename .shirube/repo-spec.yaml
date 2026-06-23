@@ -7,13 +7,13 @@ purpose: >
   repository contains the product code, smoke tests, documentation, and GitHub
   CI used to develop the MVP.
 non_goals:
-  - Shirube must not replace Misell Gate 0 during the report-only pilot.
+  - Shirube must not replace Misell Gate 0.
   - Shirube must not decide merge, security, CEO approval, publish, billing, deletion, RBAC, or deployment outcomes.
-  - Shirube must not activate branch protection, required checks, production deployment, external runners, or auto-merge.
+  - Shirube must not mutate branch protection/rulesets, production deployment, external runners, or auto-merge.
 scope:
-  - report-only governance evidence
+  - full operational PR governance evidence
   - Rapid/Lite handoff and lifecycle artifacts
-  - advisory detection of deterministic-control policy drift
+  - enforced detection of missing handoff, audit, owner decision, diff scope, and unexpected would_block findings
 design_principles:
   - Existing Misell Gate 0 remains authoritative for mechanical CI.
   - GitHub audit comments remain authoritative for semantic review.
@@ -22,32 +22,32 @@ design_principles:
   - Business data uses soft delete by default unless a bounded retention/purge exception is documented.
   - Shared helpers should own validation, scope checks, state transitions, token/file handling, audit writes, and config parsing.
   - Variable business values should live in DB, env, or centralized config/contract helpers.
-development_flow: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+development_flow: docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
 required_gates:
   - repo_spec
   - existing_gate_0
   - github_structured_audit
 operating_model:
   readiness:
-    purpose: Confirm the repo premise and report-only adoption state.
+    purpose: Confirm the repo premise and full operational adoption state.
     gates: [repo_spec, adoption_intake]
-    report_only: true
-    stop_condition: Report-only findings are advisory until owner-approved graduation.
+    report_only: false
+    stop_condition: Missing repo premise or adoption evidence blocks the Shirube gate.
   dev_loop:
-    purpose: Surface scope drift, missing evidence, and policy warnings on PRs.
+    purpose: Block scope drift, missing evidence, missing audit, and missing owner decision on PRs.
     gates: [rapid_lite_gate_contract, design_rules, lifecycle]
-    report_only: true
-    stop_condition: Do not continue if a human audit or existing Gate 0 blocks the PR.
+    report_only: false
+    stop_condition: Do not merge while Shirube Full Operational Gates, Gate 0, or human audit blocks the PR.
   change_flow:
-    purpose: Keep Shirube changes scoped to evidence and detection until pilot graduation.
+    purpose: Keep Shirube governance changes scoped and separated from runtime work.
     gates: [repo_spec, control_handoff]
-    report_only: true
-    stop_condition: Required-check activation, branch protection, or runtime behavior changes are out of scope.
+    report_only: false
+    stop_condition: Branch protection/ruleset mutation and runtime behavior changes require explicit protected governance scope.
   phase_control:
-    purpose: Track pilot lifecycle without blocking merges.
+    purpose: Track lifecycle with full operational GitHub gate evidence.
     state_ref: .shirube/lifecycle-state.yaml
     transition_ref: null
-    report_only: true
+    report_only: false
 gate_catalog:
   repo_spec:
     purpose: Validate repository premise and authority boundaries.
@@ -77,19 +77,20 @@ required_evidence:
   merge:
     - exact head evidence from GitHub PR
     - existing Gate 0 success
-    - structured audit comment when requested
+    - structured audit comment for exact head
+    - owner APPROVED_EXACT_HEAD decision for exact head
 risk_tier_policy:
   R0:
     gates: [existing Gate 0]
     merge_authority: owner merge only
   R1:
-    gates: [existing Gate 0, Shirube report-only evidence]
+    gates: [existing Gate 0, Shirube Full Operational Gates]
     merge_authority: owner merge
   R2:
-    gates: [existing Gate 0, semantic audit, Shirube report-only evidence]
+    gates: [existing Gate 0, semantic audit, Shirube Full Operational Gates]
     merge_authority: owner merge
   R3:
-    gates: [existing Gate 0, semantic audit, security or CEO approval when labeled]
+    gates: [existing Gate 0, semantic audit, Shirube Full Operational Gates, security or CEO approval when labeled]
     merge_authority: protected human authority
   route:ceo-approval:
     gates: [CEO ratification, protected governance review]
@@ -118,7 +119,7 @@ remediation_contract:
     - reference_docs
 audit_assignment:
   schema_version: shirube-audit-assignment/v1
-  source_ref: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+  source_ref: docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
   author_must_not_audit_own_artifact: true
   roles:
     spec:
@@ -148,7 +149,7 @@ confirmation_evidence:
       - github_pr_comment
     github_marker: shirube:rps-confirmation/v1
     verdict: CONFIRMED
-    decision_ref: user-request-2026-06-23-shirube-v3-report-only-pilot
+    decision_ref: https://github.com/watchout/misell/issues/184
 roles:
   spec: repo_owner
   arc: architecture_owner
@@ -158,8 +159,9 @@ roles:
   release_owner: repo_owner
 codeowners_ref: null
 audit_responsibilities: >
-  Shirube report-only output is advisory. Formal merge/audit readiness remains
-  GitHub PR review, structured audit comments, and existing Gate 0.
+  Shirube full operational output is a GitHub PR gate. Formal semantic findings
+  remain structured audit comments, and final merge authority remains owner
+  exact-head decision.
 shared_terminology:
   Cell: Bounded implementation unit.
   Tenant: Top-level customer/account boundary.
@@ -170,16 +172,15 @@ security_assumptions: >
   Shirube does not grant permissions, execute remote device commands, mutate
   production systems, read secrets, or approve protected security changes.
 privacy_assumptions: >
-  Shirube report-only checks operate on repository files and PR metadata. They
+  Shirube full operational checks operate on repository files and PR metadata. They
   do not inspect production customer data or backup artifacts.
 data_boundaries:
   - repository files and PR metadata only
   - no production database, backup, or customer file access
 dependency_boundaries:
   - vendored Rapid/Lite scripts are locked to watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
-  - GitHub Actions comments/artifacts are the only external write in the pilot
+  - GitHub Actions comments/artifacts are the only external write in the full operational gate
 forbidden_actions:
-  - activate Shirube as a required check
   - change branch protection or rulesets
   - replace existing Gate 0
   - weaken security/CEO gates
@@ -194,8 +195,8 @@ agent_permission_boundary:
   allowed_paths:
     - .shirube/**
     - scripts/shirube/**
-    - .github/workflows/shirube-rapid-lite-gates-report.yml
-    - docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+    - .github/workflows/shirube-full-operational-gates.yml
+    - docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
   forbidden_paths:
     - .env
     - .env.*
@@ -207,6 +208,7 @@ agent_permission_boundary:
     - git diff --check
     - node scripts/shirube/run-rapid-lite-report.mjs
     - npm run shirube:rapid-lite-report
+    - npm run shirube:smoke-full-operational
   forbidden_commands:
     - git push --force
     - gh api repos/*/branches/*/protection
@@ -216,5 +218,5 @@ agent_permission_boundary:
   forbidden_mcp_tools: []
 remediation:
   repo-spec:
-    on_fail: Update .shirube/repo-spec.yaml or keep finding as report-only pilot evidence.
-    doc_ref: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+    on_fail: Update .shirube/repo-spec.yaml or block the PR until evidence is correct.
+    doc_ref: docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md

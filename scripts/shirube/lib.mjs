@@ -41,6 +41,10 @@ export function readStructuredFile(filePath) {
   if (extname(filePath) === ".json") {
     return JSON.parse(text);
   }
+  return parseStructuredText(text);
+}
+
+export function parseStructuredText(text) {
   const json = execFileSync("ruby", [
     "-ryaml",
     "-rjson",

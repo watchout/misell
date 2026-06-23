@@ -1,21 +1,23 @@
-# Shirube V3 Report-Only Pilot
+# Shirube V3 Full Operational Gate
 
-This directory contains the Misell pilot configuration for Shirube V3
-Rapid/Lite.
+This directory contains the Misell Shirube V3 governance configuration.
 
-The pilot is intentionally non-blocking:
+Misell has graduated from report-only pilot to `FULL_SHIRUBE_OPERATIONAL`.
+Shirube evidence is now evaluated by the GitHub check
+`Shirube Full Operational Gates`.
 
-- existing GitHub Actions `Gate 0` remains the required mechanical gate
-- existing GitHub audit comments remain the semantic review record
-- existing `needs:cto-security` / `route:ceo-approval` labels remain the
-  protected authority gates
-- Shirube records PR-visible evidence and JSON artifacts only
-- Shirube findings do not fail CI and do not change branch protection
+The check is expected to fail when:
 
-The first useful signal is whether Shirube can identify scope drift, missing
-handoff evidence, owner decision gaps, hard-delete risk, LLM-authority wording,
-duplicated logic, and scattered configurable values without slowing normal
-Misell PR flow.
+- `handoff_ref` is missing,
+- changed files are outside the handoff boundary,
+- forbidden paths are touched,
+- a structured audit for the exact PR head is missing,
+- owner `APPROVED_EXACT_HEAD` evidence is missing,
+- unexpected Rapid/Lite `would_block=true` findings remain.
+
+The workflow runs from the trusted base/default branch context. The PR head is
+checked out only under `pr/` for inspection, and Shirube scripts are executed
+from the trusted base checkout.
 
 Normal development should use a per-PR control handoff:
 
@@ -23,15 +25,14 @@ Normal development should use a per-PR control handoff:
 2. fill a concrete file under `.shirube/control-handoffs/`
 3. add `handoff_ref: .shirube/control-handoffs/<file>.yaml` to the PR body
 4. post structured audits using `.shirube/audit-templates/structured-audit.md`
+5. post owner decision using the `shirube_owner_decision` YAML shape
 
-The detailed operating flow is documented in
-`docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md`.
+Structured audits must use an allowed `auditor_actor`, be posted by an allowed
+evidence poster, and satisfy maker-checker separation from the implementation
+actor set.
 
-Partial multi-repo adoption rules are documented in
-`docs/95_SHIRUBE_PARTIAL_ADOPTION_GUARD.md`. Repositories without `.shirube`
-should use `.shirube/gate-pack-bridge/TEMPLATE.yaml` as a bridge and must not
-claim full Shirube V3 control.
+The detailed full operational flow is documented in
+`docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`.
 
-Promotion to required checks requires a later owner-approved PR after several
-real Misell PRs have run through this report-only workflow with acceptable false
-positive rate and runtime.
+Historical pilot documents remain in `docs/93_*`, `docs/94_*`, and `docs/95_*`
+as background and migration context.
