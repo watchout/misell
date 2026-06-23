@@ -100,6 +100,10 @@ In short:
 - audit comments include exact head and verdict
 - owner decision remains a human GitHub decision during the report-only pilot
 
+For repositories that have started using Shirube concepts before full overlay
+adoption, use `docs/95_SHIRUBE_PARTIAL_ADOPTION_GUARD.md`. Misell itself is
+classified as `RAPID_LITE_REPORT_ONLY` once this PR is merged.
+
 ## Rollback
 
 Rollback is straightforward because the pilot is non-runtime:

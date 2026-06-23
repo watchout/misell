@@ -52,6 +52,7 @@ cell:
     - docs/README.md
     - docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
     - docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md
+    - docs/95_SHIRUBE_PARTIAL_ADOPTION_GUARD.md
     - README.md
     - package.json
   forbidden_paths:
@@ -76,6 +77,7 @@ cell:
     - workflow posts or updates one PR comment with Shirube summary
     - workflow uploads JSON artifacts for auditability
     - docs explain that existing Gate 0 and GitHub audit remain authoritative
+    - partial multi-repo adoption is explicitly classified and bounded by Gate Pack Bridge rules
 
 implementation_boundary:
   summary: Vendor the current Rapid/Lite report scripts, add Misell-specific .shirube artifacts, and add a non-blocking PR workflow.

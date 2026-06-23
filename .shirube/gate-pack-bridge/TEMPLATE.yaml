@@ -1,0 +1,40 @@
+# Use this block in a PR body or GitHub comment when a repository does not yet
+# have a .shirube overlay. It is a bridge, not a full Shirube adoption claim.
+shirube_gate_pack:
+  schema_version: shirube-gate-pack-bridge/v1
+  mode: partial_shirube_pilot
+  target_repo: owner/repo
+  target_pr: 0
+  control_source:
+    type: github_issue
+    ref: owner/control-repo#0
+  scope:
+    - "<this PR changes ...>"
+  non_scope:
+    - runtime architecture change
+    - DB migration
+    - branch protection
+    - required check activation
+  allowed_paths:
+    - "src/safe-area/**"
+  forbidden_paths:
+    - ".github/workflows/**"
+    - "migrations/**"
+    - ".env*"
+    - "secrets/**"
+  protected_surfaces:
+    touched: false
+    declared:
+      - none
+  validation:
+    commands:
+      - "npm test"
+      - "npm run lint"
+    result: PASS
+  exact_head_sha: "<PR_HEAD_SHA>"
+  owner_decision:
+    verdict: APPROVED_EXACT_HEAD
+    actor: "<owner>"
+    decision_ref: "<comment-url>"
+  post_merge:
+    required: true

@@ -179,6 +179,7 @@ npm audit --audit-level=moderate
 - docs/92_DETERMINISTIC_CONTROL_AND_DATA_POLICY_ADR.md
 - docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
 - docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md
+- docs/95_SHIRUBE_PARTIAL_ADOPTION_GUARD.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 

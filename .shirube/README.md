@@ -27,6 +27,11 @@ Normal development should use a per-PR control handoff:
 The detailed operating flow is documented in
 `docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md`.
 
+Partial multi-repo adoption rules are documented in
+`docs/95_SHIRUBE_PARTIAL_ADOPTION_GUARD.md`. Repositories without `.shirube`
+should use `.shirube/gate-pack-bridge/TEMPLATE.yaml` as a bridge and must not
+claim full Shirube V3 control.
+
 Promotion to required checks requires a later owner-approved PR after several
 real Misell PRs have run through this report-only workflow with acceptable false
 positive rate and runtime.
