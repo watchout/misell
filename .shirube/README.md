@@ -19,6 +19,10 @@ The workflow runs from the trusted base/default branch context. The PR head is
 checked out only under `pr/` for inspection, and Shirube scripts are executed
 from the trusted base checkout.
 
+Open PR evaluations use the PR base SHA as the trusted checkout. Merged PR
+comment re-evaluations use the current default branch SHA so bootstrap
+post-merge evidence can run after the gate scripts land on `main`.
+
 Normal development should use a per-PR control handoff:
 
 1. copy `.shirube/control-handoffs/TEMPLATE.rapid-lite.yaml`
