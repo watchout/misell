@@ -54,6 +54,11 @@ cell:
     - apps/cloud/public/campaign-project-ui.js
     - apps/cloud/public/style.css
     - tests/e2e/misell-ui.spec.js
+  protected_surfaces:
+    - existing_admin_ui_uses_authenticated_api
+    - existing_test_env_and_smoke_auth_tokens_only
+    - no_auth_or_permission_model_change
+    - no_queue_or_device_operation_change
   forbidden_paths:
     - .env
     - .env.*
