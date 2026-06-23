@@ -884,6 +884,7 @@ td small {
 .customer-offer-revision,
 .customer-access-create,
 .campaign-proposal-create,
+.campaign-project-create,
 .customer-proposal-action,
 .customer-context-form {
   display: grid;
@@ -895,15 +896,67 @@ td small {
 .customer-offer-revision button,
 .customer-access-create button,
 .campaign-proposal-create button,
+.campaign-project-create button,
 .customer-proposal-action button,
 .customer-context-form button {
   min-width: 120px;
 }
 
 .campaign-proposal-create textarea,
+.campaign-project-create textarea,
 .customer-proposal-action input,
 .customer-context-form textarea {
   grid-column: 1 / -1;
+}
+
+.campaign-project-create-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.campaign-project-table {
+  table-layout: fixed;
+}
+
+.campaign-project-scenes,
+.campaign-project-actions,
+.campaign-project-events,
+.campaign-project-validation {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-project-events small {
+  display: grid;
+  gap: 2px;
+}
+
+.campaign-project-scene {
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  padding: 8px;
+}
+
+.campaign-project-scene-heading,
+.campaign-project-scene textarea,
+.campaign-project-validation {
+  grid-column: 1 / -1;
+}
+
+.campaign-project-scene-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.campaign-project-validation small {
+  color: #b42318;
 }
 
 .admin-context-panel {

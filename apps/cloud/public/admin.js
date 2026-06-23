@@ -12,6 +12,7 @@
     storeAccessTokens: [],
     customerAccessTokens: [],
     campaignProposals: [],
+    campaignProjects: [],
     customerContextItems: [],
     issuedToken: null,
     issuedStoreAccessToken: null,
@@ -106,6 +107,28 @@
     cancelled: "取消"
   };
 
+  const CAMPAIGN_PROJECT_STATUS_LABELS = {
+    draft: "下書き",
+    validated: "検証済み",
+    archived: "アーカイブ",
+    deleted: "削除済み"
+  };
+
+  const CAMPAIGN_PROJECT_SCENE_STATUS_LABELS = {
+    draft: "下書き",
+    valid: "有効",
+    invalid: "要修正",
+    deleted: "削除済み"
+  };
+
+  const CAMPAIGN_SCENE_TYPE_OPTIONS = [
+    ["intro", "導入"],
+    ["offer", "訴求"],
+    ["cta", "CTA"],
+    ["proof", "根拠"],
+    ["reminder", "再告知"]
+  ];
+
   const ROLLOUT_STATUS_LABELS = {
     ready: "反映済み",
     pending: "未反映",
@@ -125,6 +148,7 @@
     storeAccessTokens: document.getElementById("store-access-tokens"),
     customerAccessTokens: document.getElementById("customer-access-tokens"),
     campaignProposals: document.getElementById("campaign-proposals"),
+    campaignProjects: document.getElementById("campaign-projects"),
     counterOrders: document.getElementById("counter-orders"),
     tokenResult: document.getElementById("token-result"),
     refresh: document.getElementById("refresh")
@@ -146,7 +170,7 @@
 
   async function loadDashboard() {
     const activeRolloutContentId = state.contentRollout?.content_manifest?.content_id || "";
-    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, customerContextItems, campaignProposals, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
+    const [summary, devices, deviceCommands, alerts, notifications, storeSettings, counterOrders, storeAccessTokens, customerAccessTokens, customerContextItems, campaignProposals, campaignProjects, releaseManifests, contentManifests, assets, logBundles, contentRollout] = await Promise.all([
       fetchJson("/api/admin/summary"),
       fetchJson("/api/admin/devices"),
       fetchJson("/api/admin/device-commands?limit=100").catch(() => ({ device_commands: [] })),
@@ -158,6 +182,7 @@
       fetchJson("/api/admin/customer-access-tokens?limit=100").catch(() => ({ customer_access_tokens: [] })),
       fetchJson("/api/admin/customer-context-items?limit=100&status=active").catch(() => ({ customer_context_items: [] })),
       fetchJson("/api/admin/campaign-proposals?limit=100").catch(() => ({ campaign_proposals: [] })),
+      fetchCampaignProjects().catch(() => ({ campaign_projects: [] })),
       fetchJson("/api/admin/release-manifests"),
       fetchJson("/api/admin/content-manifests"),
       fetchJson("/api/admin/assets"),
@@ -175,6 +200,7 @@
     state.customerAccessTokens = customerAccessTokens.customer_access_tokens || [];
     state.customerContextItems = customerContextItems.customer_context_items || [];
     state.campaignProposals = campaignProposals.campaign_proposals || [];
+    state.campaignProjects = campaignProjects.campaign_projects || [];
     state.assets = assets.assets || [];
     state.releaseManifests = releaseManifests.release_manifests || [];
     state.contentManifests = contentManifests.content_manifests || [];
@@ -186,6 +212,7 @@
     renderStoreAccessTokens(state.storeAccessTokens);
     renderCustomerAccessTokens(state.customerAccessTokens);
     renderCampaignProposals(state.campaignProposals);
+    renderCampaignProjects(state.campaignProjects);
     renderCounterOrders(state.counterOrders);
     renderReleaseManifests(state.releaseManifests);
     renderContentManifests(state.contentManifests);
@@ -201,6 +228,21 @@
       throw new Error(body.error || `${url} returned ${res.status}`);
     }
     return res.json();
+  }
+
+  async function fetchCampaignProjects() {
+    const list = await fetchJson("/api/admin/campaign-projects?limit=50");
+    const projects = list.campaign_projects || [];
+    const detailed = await Promise.all(projects.map(async (project) => {
+      if (!project.campaign_project_id) return project;
+      try {
+        const detail = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id)}`);
+        return detail.campaign_project || project;
+      } catch {
+        return project;
+      }
+    }));
+    return { campaign_projects: detailed };
   }
 
   function renderSummary(summary) {
@@ -1579,6 +1621,512 @@
     `;
   }
 
+  function renderCampaignProjects(projects) {
+    if (!els.campaignProjects) return;
+    const tenants = uniqueTenantsFromStores(state.storeSettings || []);
+    const stores = state.storeSettings || [];
+    const screenGroups = uniqueScreenGroupsFromDevices(state.devices || []);
+    const selectedProposals = (state.campaignProposals || []).filter((proposal) => proposal.status === "selected");
+    const selectedBriefs = selectedProposals.filter((proposal) => proposal.campaign_brief_id);
+    const proposalDisabled = selectedProposals.length === 0 ? " disabled" : "";
+    const briefDisabled = selectedBriefs.length === 0 ? " disabled" : "";
+    els.campaignProjects.innerHTML = `
+      <div class="campaign-project-create-grid">
+        <form class="campaign-project-create campaign-project-from-proposal">
+          <select name="campaign_proposal_id" aria-label="選択済み提案"${proposalDisabled} required>
+            <option value="">選択済み提案</option>
+            ${selectedProposals.map((proposal) => `
+              <option value="${escapeAttr(proposal.campaign_proposal_id)}">${escapeHtml(campaignProposalLabel(proposal))}</option>
+            `).join("")}
+          </select>
+          <input name="title" type="text" placeholder="プロジェクト名（空欄なら提案名）" aria-label="プロジェクト名">
+          <button type="submit"${proposalDisabled}>提案から作成</button>
+        </form>
+        <form class="campaign-project-create campaign-project-from-brief">
+          <select name="campaign_brief_id" aria-label="CampaignBrief"${briefDisabled} required>
+            <option value="">CampaignBrief</option>
+            ${selectedBriefs.map((proposal) => `
+              <option value="${escapeAttr(proposal.campaign_brief_id)}">${escapeHtml(campaignProposalLabel(proposal))}</option>
+            `).join("")}
+          </select>
+          <input name="title" type="text" placeholder="プロジェクト名（空欄なら提案名）" aria-label="プロジェクト名">
+          <button type="submit"${briefDisabled}>Briefから作成</button>
+        </form>
+        <form class="campaign-project-create campaign-project-free-input">
+          <select name="tenant_id" aria-label="顧客" required>
+            <option value="">顧客</option>
+            ${tenants.map((tenant) => `<option value="${escapeHtml(tenant.tenant_id || "")}">${escapeHtml(tenant.tenant_name || tenant.tenant_id || "")}</option>`).join("")}
+          </select>
+          <select name="store_id" aria-label="店舗" required>
+            <option value="">店舗</option>
+            ${stores.map((store) => `<option value="${escapeHtml(store.store_id || "")}" data-tenant-id="${escapeHtml(store.tenant_id || "")}">${escapeHtml(store.store_name || store.store_id || "")}</option>`).join("")}
+          </select>
+          <select name="screen_group_id" aria-label="画面グループ" required>
+            <option value="">画面グループ</option>
+            ${screenGroups.map((group) => `<option value="${escapeHtml(group.screen_group_id || "")}" data-store-id="${escapeHtml(group.store_id || "")}">${escapeHtml(group.screen_group_name || group.screen_group_id || "")}</option>`).join("")}
+          </select>
+          <input name="title" type="text" placeholder="プロジェクト名" aria-label="プロジェクト名" required>
+          <input name="objective" type="text" placeholder="目的" aria-label="目的" required>
+          <input name="target_audience" type="text" placeholder="対象" aria-label="対象" required>
+          <textarea name="store_context" rows="2" placeholder="店舗前提" aria-label="店舗前提" required></textarea>
+          <textarea name="offer_or_message" rows="2" placeholder="訴求内容" aria-label="訴求内容" required></textarea>
+          <input name="cta" type="text" placeholder="CTA" aria-label="CTA" required>
+          <textarea name="success_metrics" rows="2" placeholder="成功指標（1行1項目）" aria-label="成功指標"></textarea>
+          <textarea name="constraints" rows="2" placeholder="制約（1行1項目）" aria-label="制約"></textarea>
+          <button type="submit">入力から作成</button>
+        </form>
+      </div>
+      ${projects.length === 0 ? `<p class="empty">キャンペーンプロジェクトはまだありません。</p>` : `
+        <table class="campaign-project-table">
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Brief</th>
+              <th>Scenes</th>
+              <th>履歴</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${projects.slice(0, 50).map(renderCampaignProjectRow).join("")}
+          </tbody>
+        </table>
+      `}
+    `;
+    els.campaignProjects.querySelector(".campaign-project-from-proposal")?.addEventListener("submit", handleCampaignProjectFromProposal);
+    els.campaignProjects.querySelector(".campaign-project-from-brief")?.addEventListener("submit", handleCampaignProjectFromBrief);
+    els.campaignProjects.querySelector(".campaign-project-free-input")?.addEventListener("submit", handleCampaignProjectFreeInput);
+    els.campaignProjects.querySelectorAll("[data-campaign-project-validate]").forEach((button) => {
+      button.addEventListener("click", handleCampaignProjectValidate);
+    });
+    els.campaignProjects.querySelectorAll("[data-campaign-project-delete]").forEach((button) => {
+      button.addEventListener("click", handleCampaignProjectDelete);
+    });
+    els.campaignProjects.querySelectorAll(".campaign-project-scene-create").forEach((form) => {
+      form.addEventListener("submit", handleCampaignProjectSceneCreate);
+    });
+    els.campaignProjects.querySelectorAll(".campaign-project-scene-update").forEach((form) => {
+      form.addEventListener("submit", handleCampaignProjectSceneUpdate);
+    });
+    els.campaignProjects.querySelectorAll("[data-campaign-project-scene-delete]").forEach((button) => {
+      button.addEventListener("click", handleCampaignProjectSceneDelete);
+    });
+  }
+
+  function renderCampaignProjectRow(project) {
+    const scenes = project.scenes || [];
+    const events = project.events || [];
+    const errors = project.validation_errors || [];
+    return `
+      <tr>
+        <td>
+          <strong>${escapeHtml(project.title || project.campaign_project_id || "")}</strong>
+          <small>${escapeHtml(project.campaign_project_id || "")}</small>
+          <span class="update-status update-status-${escapeAttr(campaignProjectStatusClass(project.status))}">${escapeHtml(CAMPAIGN_PROJECT_STATUS_LABELS[project.status] || project.status || "")}</span>
+          <small>${escapeHtml(project.tenant_id || "")} / ${escapeHtml(project.store_id || "")} / ${escapeHtml(project.screen_group_id || "")}</small>
+        </td>
+        <td>
+          <small>${escapeHtml(project.source_type || "")}</small>
+          <small>${project.source_proposal_id ? `proposal ${escapeHtml(project.source_proposal_id)}` : ""}</small>
+          <small>${project.campaign_brief_id ? `brief ${escapeHtml(project.campaign_brief_id)}` : ""}</small>
+          <small>${escapeHtml(project.objective || "")}</small>
+        </td>
+        <td>
+          <div class="campaign-project-scenes">
+            ${scenes.length === 0 ? `<p class="empty">シーンはまだありません。</p>` : scenes.map((scene) => renderCampaignProjectScene(project, scene)).join("")}
+            ${renderCampaignProjectSceneCreateForm(project)}
+          </div>
+        </td>
+        <td>
+          ${events.length ? `
+            <div class="campaign-project-events">
+              ${events.slice(0, 6).map(renderCampaignProjectEvent).join("")}
+            </div>
+          ` : `<small>履歴なし</small>`}
+        </td>
+        <td>
+          <div class="campaign-project-actions">
+            <button class="secondary" type="button" data-campaign-project-validate="${escapeAttr(project.campaign_project_id)}">検証</button>
+            <button class="danger" type="button" data-campaign-project-delete="${escapeAttr(project.campaign_project_id)}">削除</button>
+          </div>
+          ${errors.length ? `<div class="campaign-project-validation">${errors.map(renderValidationError).join("")}</div>` : ""}
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderCampaignProjectEvent(event) {
+    return `
+      <small>
+        ${escapeHtml(event.action || "")}
+        ${event.campaign_project_scene_id ? `<span>${escapeHtml(event.campaign_project_scene_id)}</span>` : ""}
+        ${event.actor_id ? `<span>${escapeHtml(event.actor_id)}</span>` : ""}
+        <span>${escapeHtml(formatTime(event.created_at))}</span>
+      </small>
+    `;
+  }
+
+  function renderCampaignProjectScene(project, scene) {
+    const errors = scene.validation_errors || [];
+    return `
+      <form class="campaign-project-scene campaign-project-scene-update" data-project-id="${escapeAttr(project.campaign_project_id)}" data-scene-id="${escapeAttr(scene.campaign_project_scene_id)}">
+        <div class="campaign-project-scene-heading">
+          <strong>#${escapeHtml(scene.scene_order || "")} ${escapeHtml(scene.headline || "")}</strong>
+          <span class="update-status update-status-${escapeAttr(campaignProjectSceneStatusClass(scene.status))}">${escapeHtml(CAMPAIGN_PROJECT_SCENE_STATUS_LABELS[scene.status] || scene.status || "")}</span>
+        </div>
+        ${renderCampaignProjectSceneFields(scene, { includeOrder: true })}
+        ${errors.length ? `<div class="campaign-project-validation">${errors.map(renderValidationError).join("")}</div>` : ""}
+        <button type="submit">シーン保存</button>
+        <button class="danger" type="button" data-project-id="${escapeAttr(project.campaign_project_id)}" data-campaign-project-scene-delete="${escapeAttr(scene.campaign_project_scene_id)}">シーン削除</button>
+      </form>
+    `;
+  }
+
+  function renderCampaignProjectSceneCreateForm(project) {
+    return `
+      <form class="campaign-project-scene campaign-project-scene-create" data-project-id="${escapeAttr(project.campaign_project_id)}">
+        <div class="campaign-project-scene-heading">
+          <strong>シーン追加</strong>
+        </div>
+        ${renderCampaignProjectSceneFields({
+          scene_type: "offer",
+          headline: "",
+          body_text: "",
+          visual_direction: "",
+          cta_text: project.cta || "",
+          duration_seconds: 5,
+          asset_requirements: []
+        }, { includeOrder: false })}
+        <button type="submit">シーン追加</button>
+      </form>
+    `;
+  }
+
+  function renderCampaignProjectSceneFields(scene, options = {}) {
+    return `
+      ${options.includeOrder ? `<input name="scene_order" type="number" min="1" step="1" value="${escapeHtml(scene.scene_order || 1)}" aria-label="順番" required>` : ""}
+      <select name="scene_type" aria-label="シーン種別" required>
+        ${CAMPAIGN_SCENE_TYPE_OPTIONS.map(([value, label]) => (
+          `<option value="${escapeAttr(value)}"${value === scene.scene_type ? " selected" : ""}>${escapeHtml(label)}</option>`
+        )).join("")}
+      </select>
+      <input name="headline" type="text" value="${escapeHtml(scene.headline || "")}" placeholder="見出し" aria-label="見出し" required>
+      <textarea name="body_text" rows="2" placeholder="本文" aria-label="本文" required>${escapeHtml(scene.body_text || "")}</textarea>
+      <textarea name="visual_direction" rows="2" placeholder="ビジュアル指示" aria-label="ビジュアル指示" required>${escapeHtml(scene.visual_direction || "")}</textarea>
+      <input name="cta_text" type="text" value="${escapeHtml(scene.cta_text || "")}" placeholder="CTA" aria-label="CTA" required>
+      <input name="duration_seconds" type="number" min="1" step="1" value="${escapeHtml(scene.duration_seconds || 5)}" aria-label="秒数" required>
+      <textarea name="asset_requirements" rows="2" placeholder="必要素材（1行1項目）" aria-label="必要素材">${escapeHtml(listToText(scene.asset_requirements))}</textarea>
+    `;
+  }
+
+  function renderValidationError(error) {
+    return `<small>${escapeHtml(error.field || "")} ${escapeHtml(error.code || "")}: ${escapeHtml(error.message || "")}</small>`;
+  }
+
+  async function handleCampaignProjectFromProposal(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const proposal = campaignProposalById(form.elements.campaign_proposal_id.value);
+    if (!proposal) return;
+    button.disabled = true;
+    button.textContent = "作成中";
+    try {
+      await fetchJson("/api/admin/campaign-projects/from-proposal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaign_proposal_id: proposal.campaign_proposal_id,
+          title: form.elements.title.value || proposal.title || "",
+          scenes: defaultScenesFromProposal(proposal)
+        })
+      });
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "提案からプロジェクトを作成できませんでした。");
+      button.disabled = false;
+      button.textContent = "提案から作成";
+    }
+  }
+
+  async function handleCampaignProjectFromBrief(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const proposal = (state.campaignProposals || []).find((item) => item.campaign_brief_id === form.elements.campaign_brief_id.value);
+    if (!proposal) return;
+    button.disabled = true;
+    button.textContent = "作成中";
+    try {
+      await fetchJson("/api/admin/campaign-projects/from-brief", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaign_brief_id: proposal.campaign_brief_id,
+          title: form.elements.title.value || proposal.title || "",
+          scenes: defaultScenesFromProposal(proposal)
+        })
+      });
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "Briefからプロジェクトを作成できませんでした。");
+      button.disabled = false;
+      button.textContent = "Briefから作成";
+    }
+  }
+
+  async function handleCampaignProjectFreeInput(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    const brief = {
+      objective: form.elements.objective.value,
+      target_audience: form.elements.target_audience.value,
+      store_context: form.elements.store_context.value,
+      offer_or_message: form.elements.offer_or_message.value,
+      cta: form.elements.cta.value,
+      success_metrics: listFromText(form.elements.success_metrics.value),
+      constraints: listFromText(form.elements.constraints.value)
+    };
+    button.disabled = true;
+    button.textContent = "作成中";
+    try {
+      await fetchJson("/api/admin/campaign-projects/free-input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: form.elements.tenant_id.value,
+          store_id: form.elements.store_id.value,
+          screen_group_id: form.elements.screen_group_id.value,
+          title: form.elements.title.value,
+          ...brief,
+          scenes: defaultScenesFromBrief({
+            title: form.elements.title.value,
+            ...brief
+          })
+        })
+      });
+      form.reset();
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "入力からプロジェクトを作成できませんでした。");
+      button.disabled = false;
+      button.textContent = "入力から作成";
+    }
+  }
+
+  async function handleCampaignProjectValidate(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "検証中";
+    try {
+      const result = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(button.dataset.campaignProjectValidate || "")}/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      if (!result.valid) {
+        window.alert(`検証エラー: ${result.validation_errors?.length || 0}件`);
+      }
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "プロジェクト検証に失敗しました。");
+      button.disabled = false;
+      button.textContent = "検証";
+    }
+  }
+
+  async function handleCampaignProjectDelete(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(button.dataset.campaignProjectDelete || "")}`, {
+        method: "DELETE"
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "プロジェクト削除に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  async function handleCampaignProjectSceneCreate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    button.textContent = "追加中";
+    try {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/scenes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scenePayloadFromForm(form, { includeOrder: false }))
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "シーン追加に失敗しました。");
+      button.disabled = false;
+      button.textContent = "シーン追加";
+    }
+  }
+
+  async function handleCampaignProjectSceneUpdate(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    button.textContent = "保存中";
+    try {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/scenes/${encodeURIComponent(form.dataset.sceneId || "")}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scenePayloadFromForm(form, { includeOrder: true }))
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "シーン保存に失敗しました。");
+      button.disabled = false;
+      button.textContent = "シーン保存";
+    }
+  }
+
+  async function handleCampaignProjectSceneDelete(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(button.dataset.projectId || "")}/scenes/${encodeURIComponent(button.dataset.campaignProjectSceneDelete || "")}`, {
+        method: "DELETE"
+      });
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "シーン削除に失敗しました。");
+      button.disabled = false;
+    }
+  }
+
+  function campaignProposalById(proposalId) {
+    return (state.campaignProposals || []).find((proposal) => proposal.campaign_proposal_id === proposalId);
+  }
+
+  function campaignProposalLabel(proposal) {
+    return `${proposal.proposal_month || ""} ${proposal.title || proposal.campaign_proposal_id || ""} / ${proposal.store_id || ""} / ${proposal.screen_group_id || ""}`.trim();
+  }
+
+  function scenePayloadFromForm(form, options = {}) {
+    const payload = {
+      scene_type: form.elements.scene_type.value,
+      headline: form.elements.headline.value,
+      body_text: form.elements.body_text.value,
+      visual_direction: form.elements.visual_direction.value,
+      cta_text: form.elements.cta_text.value,
+      duration_seconds: Number.parseInt(form.elements.duration_seconds.value, 10) || 0,
+      asset_requirements: listFromText(form.elements.asset_requirements.value)
+    };
+    if (options.includeOrder && form.elements.scene_order) {
+      payload.scene_order = Number.parseInt(form.elements.scene_order.value, 10) || 0;
+    }
+    return payload;
+  }
+
+  function defaultScenesFromProposal(proposal) {
+    const outline = outlineTextItems(proposal.three_screen_outline);
+    const cta = safeText(proposal.qr_flow || proposal.cta || "QRコードから詳細を確認", 80);
+    return [
+      {
+        scene_order: 1,
+        scene_type: "intro",
+        headline: safeText(proposal.title || "キャンペーン告知", 80),
+        body_text: safeText(proposal.objective || "店舗の今月の案内をわかりやすく伝える", 300),
+        visual_direction: safeText(outline[0] || "店舗の雰囲気と対象商品の写真を大きく見せる", 300),
+        cta_text: cta,
+        duration_seconds: 5,
+        asset_requirements: ["operator_selected_image"]
+      },
+      {
+        scene_order: 2,
+        scene_type: "offer",
+        headline: safeText(proposal.target_audience || "おすすめ情報", 80),
+        body_text: safeText(proposal.expected_effect || proposal.objective || "来店中のお客様に見てもらいたい内容を短く伝える", 300),
+        visual_direction: safeText(outline[1] || outline[0] || "商品・サービスの利用シーンを中心に配置する", 300),
+        cta_text: cta,
+        duration_seconds: 5,
+        asset_requirements: ["operator_selected_image"]
+      },
+      {
+        scene_order: 3,
+        scene_type: "cta",
+        headline: "詳しくはこちら",
+        body_text: safeText(proposal.qr_flow || "画面のQRコードから詳細を確認できます", 300),
+        visual_direction: safeText(outline[2] || "QRコードと短い案内文を読みやすく配置する", 300),
+        cta_text: cta,
+        duration_seconds: 5,
+        asset_requirements: ["qr_code", "operator_selected_image"]
+      }
+    ];
+  }
+
+  function defaultScenesFromBrief(brief) {
+    const cta = safeText(brief.cta || "詳しく確認", 80);
+    return [
+      {
+        scene_order: 1,
+        scene_type: "intro",
+        headline: safeText(brief.title || brief.objective || "キャンペーン告知", 80),
+        body_text: safeText(brief.store_context || brief.objective || "店舗の前提を踏まえて案内する", 300),
+        visual_direction: "店舗写真または商品写真を中央に配置する",
+        cta_text: cta,
+        duration_seconds: 5,
+        asset_requirements: ["operator_selected_image"]
+      },
+      {
+        scene_order: 2,
+        scene_type: "offer",
+        headline: safeText(brief.target_audience || "おすすめ", 80),
+        body_text: safeText(brief.offer_or_message || brief.objective || "訴求内容を短く表示する", 300),
+        visual_direction: "訴求文と対象商品を並べて視認性を優先する",
+        cta_text: cta,
+        duration_seconds: 5,
+        asset_requirements: ["operator_selected_image"]
+      },
+      {
+        scene_order: 3,
+        scene_type: "cta",
+        headline: "詳しくはこちら",
+        body_text: safeText(brief.cta || "次の行動を案内する", 300),
+        visual_direction: "CTAとQR配置の余白を確保する",
+        cta_text: cta,
+        duration_seconds: 5,
+        asset_requirements: ["qr_code"]
+      }
+    ];
+  }
+
+  function outlineTextItems(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map((item) => {
+      if (typeof item === "string") return item;
+      return item?.copy || item?.headline || item?.body_text || "";
+    }).map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  function listFromText(value) {
+    return String(value || "").split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function listToText(value) {
+    if (!Array.isArray(value)) return "";
+    return value.map((item) => {
+      if (typeof item === "string") return item;
+      return JSON.stringify(item);
+    }).join("\n");
+  }
+
+  function safeText(value, maxLength) {
+    return String(value || "").trim().slice(0, maxLength);
+  }
+
   async function handleCampaignProposalCreate(event) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1894,6 +2442,19 @@
     if (status === "redeemed") return "succeeded";
     if (status === "cancelled" || status === "expired") return "failed";
     return "idle";
+  }
+
+  function campaignProjectStatusClass(status) {
+    if (status === "validated") return "success";
+    if (status === "deleted") return "failed";
+    if (status === "archived") return "idle";
+    return "pending";
+  }
+
+  function campaignProjectSceneStatusClass(status) {
+    if (status === "valid") return "success";
+    if (status === "invalid" || status === "deleted") return "failed";
+    return "pending";
   }
 
   function escapeHtml(value) {
