@@ -1,13 +1,16 @@
 # 94. Shirube V3 Development and Audit Flow
 
-Status: Accepted for pilot
+Status: Superseded for Misell by `docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`
 
 Date: 2026-06-23
 
 ## Purpose
 
-This document defines how Misell development and audit work should proceed while
-Shirube V3 Rapid/Lite is in report-only pilot mode.
+This document defines how Misell development and audit work proceeded while
+Shirube V3 Rapid/Lite was in report-only pilot mode.
+
+Current Misell PRs use the full operational GitHub-gated flow in
+`docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`.
 
 The flow changes the working discipline, not the merge authority. Existing Gate
 0, GitHub structured audit, and security/CEO gates remain authoritative until a

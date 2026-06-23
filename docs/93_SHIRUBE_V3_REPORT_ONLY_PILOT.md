@@ -1,6 +1,6 @@
 # 93. Shirube V3 Report-Only Pilot
 
-Status: Accepted for pilot
+Status: Superseded by `docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`
 
 Date: 2026-06-23
 
@@ -8,6 +8,10 @@ Date: 2026-06-23
 
 Misell will adopt Shirube V3 Rapid/Lite as a report-only governance and evidence
 layer before considering any required-check or branch-protection integration.
+
+This document records the initial pilot decision. Current Misell development
+uses the full operational flow in
+`docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`.
 
 The pilot is allowed because it does not change product runtime behavior,
 deployment, branch protection, required checks, security approval labels, or

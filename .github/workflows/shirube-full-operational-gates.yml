@@ -1,0 +1,274 @@
+name: Shirube Full Operational Gates
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  NODE_VERSION: "24"
+  RESULT_DIR: .shirube-full-operational
+  SHIRUBE_OWNER_ACTORS: watchout
+  SHIRUBE_AUDITOR_ACTORS: codex-audit,shirube-audit
+  SHIRUBE_AUDIT_COMMENT_AUTHORS: watchout
+  SHIRUBE_IMPLEMENTATION_ACTORS: codex,Yuji Kaneko
+  PR_CHECKOUT_DIR: pr
+
+jobs:
+  shirube-full-operational-gates:
+    name: Shirube Full Operational Gates
+    if: github.event_name == 'pull_request_target' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve PR metadata
+        id: pr
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            let pr = context.payload.pull_request;
+            if (!pr) {
+              const response = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: context.payload.issue.number,
+              });
+              pr = response.data;
+            }
+            core.setOutput("number", String(pr.number));
+            core.setOutput("base_ref", pr.base.ref);
+            core.setOutput("base_sha", pr.base.sha);
+            core.setOutput("head_sha", pr.head.sha);
+            core.setOutput("head_repo", pr.head.repo.full_name);
+            core.setOutput("body_b64", Buffer.from(pr.body || "", "utf8").toString("base64"));
+
+      - name: Checkout trusted base tools
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.pr.outputs.base_sha }}
+          fetch-depth: 1
+
+      - name: Checkout PR head for inspection only
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_sha }}
+          path: ${{ env.PR_CHECKOUT_DIR }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check YAML parser runtime
+        run: ruby --version
+
+      - name: Collect changed files and comments
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const { owner, repo } = context.repo;
+            const pull_number = Number("${{ steps.pr.outputs.number }}");
+            const resultDir = process.env.RESULT_DIR;
+            fs.mkdirSync(resultDir, { recursive: true });
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+            fs.writeFileSync(
+              path.join(resultDir, "changed-files.txt"),
+              files.map((file) => file.filename).sort().join("\n") + "\n",
+            );
+            fs.writeFileSync(path.join(resultDir, "input-collection.json"), JSON.stringify({
+              schema: "shirube-full-operational-input-collection/v1",
+              status: "PASS",
+              method: "github-rest-pulls-list-files",
+              changed_files_count: files.length,
+            }, null, 2) + "\n");
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pull_number,
+              per_page: 100,
+            });
+            fs.writeFileSync(path.join(resultDir, "pr-comments.json"), JSON.stringify(comments, null, 2) + "\n");
+
+      - name: Build PR handoff input
+        if: always()
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_BODY_B64: ${{ steps.pr.outputs.body_b64 }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const resultDir = process.env.RESULT_DIR;
+          const prRoot = process.env.PR_CHECKOUT_DIR;
+          const prBody = Buffer.from(process.env.PR_BODY_B64 || "", "base64").toString("utf8");
+          fs.mkdirSync(resultDir, { recursive: true });
+          fs.writeFileSync(`${resultDir}/raw-pr-body.md`, `${prBody.replace(/\n*$/u, "\n")}`);
+
+          const explicitHandoff = refFromBody(prBody, ["handoff_ref", "handoff", "control_handoff_ref", "control_handoff"]);
+          const sourceHandoff = explicitHandoff || ".shirube/control-handoff.yaml";
+          const prHandoff = path.join(prRoot, sourceHandoff);
+          const runtimeHandoff = path.join(resultDir, "control-handoff.runtime.yaml");
+          let finalBody = prBody.replace(/\n*$/u, "\n");
+          if (sourceHandoff && fs.existsSync(prHandoff)) {
+            const base = fs.readFileSync(prHandoff, "utf8");
+            fs.writeFileSync(runtimeHandoff, `${base.replace(/\n*$/u, "\n")}pr_head_sha: "${process.env.HEAD_SHA}"\n`);
+            finalBody = `handoff_ref: ${runtimeHandoff}\n${finalBody}`;
+          }
+          fs.writeFileSync(`${resultDir}/pr-body.for-shirube.md`, finalBody);
+          fs.writeFileSync(`${resultDir}/runtime-context.json`, JSON.stringify({
+            source_handoff: sourceHandoff,
+            pr_handoff: fs.existsSync(prHandoff) ? prHandoff : null,
+            runtime_handoff: fs.existsSync(runtimeHandoff) ? runtimeHandoff : null,
+            trusted_tool_source: "base_sha:${{ steps.pr.outputs.base_sha }}",
+            pr_head_inspection_root: prRoot,
+          }, null, 2) + "\n");
+
+          function refFromBody(body, keys) {
+            for (const key of keys) {
+              const pattern = new RegExp(`(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${escapeRegExp(key)})\\s*:\\s*([^\\n]+?)\\s*(?=\\n|$)`, "i");
+              const match = body.match(pattern);
+              if (match?.[1]) return match[1].trim().replace(/^`|`$/g, "");
+            }
+            return null;
+          }
+          function escapeRegExp(value) {
+            return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+          }
+          NODE
+
+      - name: Convert GitHub evidence
+        if: always()
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          node scripts/shirube/collect-github-pr-evidence.mjs \
+            --comments-json "$RESULT_DIR/pr-comments.json" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --owner-actors "$SHIRUBE_OWNER_ACTORS" \
+            --auditor-actors "$SHIRUBE_AUDITOR_ACTORS" \
+            --audit-comment-authors "$SHIRUBE_AUDIT_COMMENT_AUTHORS" \
+            --implementation-actors "$SHIRUBE_IMPLEMENTATION_ACTORS" \
+            --out-dir "$RESULT_DIR" > "$RESULT_DIR/github-pr-evidence.stdout.json"
+          if [ -f "$RESULT_DIR/owner-decision.yaml" ]; then
+            cp "$RESULT_DIR/pr-body.for-shirube.md" "$RESULT_DIR/pr-body.without-owner-ref.md"
+            printf 'owner_decision_ref: %s\n' "$RESULT_DIR/owner-decision.yaml" > "$RESULT_DIR/pr-body.for-shirube.md"
+            cat "$RESULT_DIR/pr-body.without-owner-ref.md" >> "$RESULT_DIR/pr-body.for-shirube.md"
+          fi
+
+      - name: Run Rapid/Lite report from trusted base tools
+        if: always()
+        run: |
+          INPUT_FAILURE_ARG=""
+          if [ -f "$RESULT_DIR/input-failure.json" ]; then
+            INPUT_FAILURE_ARG="--input-failure $RESULT_DIR/input-failure.json"
+          fi
+          node scripts/shirube/run-rapid-lite-report.mjs \
+            --result-dir "$RESULT_DIR" \
+            --changed-files "$RESULT_DIR/changed-files.txt" \
+            --pr-body "$RESULT_DIR/pr-body.for-shirube.md" \
+            --diff-root "$PR_CHECKOUT_DIR" \
+            $INPUT_FAILURE_ARG \
+            --format json > "$RESULT_DIR/rapid-lite-workflow-output.json"
+          cat "$RESULT_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run full operational gate from trusted base tools
+        if: always()
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          node -e 'const fs=require("fs"); const c=JSON.parse(fs.readFileSync(process.env.RESULT_DIR+"/runtime-context.json","utf8")); console.log(c.runtime_handoff || ".shirube/missing-control-handoff.yaml")' > "$RESULT_DIR/runtime-handoff-path.txt"
+          HANDOFF_REF="$(cat "$RESULT_DIR/runtime-handoff-path.txt")"
+          set +e
+          node scripts/shirube/check-full-operational-gates.mjs \
+            --result-dir "$RESULT_DIR" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --changed-files "$RESULT_DIR/changed-files.txt" \
+            --handoff "$HANDOFF_REF" \
+            --aggregate "$RESULT_DIR/aggregate.json" \
+            --github-evidence "$RESULT_DIR/github-pr-evidence.json" \
+            --audit "$RESULT_DIR/structured-audit.json" \
+            --owner-decision "$RESULT_DIR/owner-decision.yaml" > "$RESULT_DIR/full-operational-workflow-output.json"
+          echo "$?" > "$RESULT_DIR/full-operational-exit-code.txt"
+          set -e
+          cat "$RESULT_DIR/full-operational-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert PR comment
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- shirube-full-operational-gate/v1 -->";
+            const summary = fs.existsSync(".shirube-full-operational/full-operational-summary.md")
+              ? fs.readFileSync(".shirube-full-operational/full-operational-summary.md", "utf8")
+              : `${marker}\n\n## Shirube Full Operational Gate\n\nGate generation failed before summary creation.`;
+            const rapidLite = fs.existsSync(".shirube-full-operational/summary.md")
+              ? `\n<details><summary>Rapid/Lite sub-report</summary>\n\n${fs.readFileSync(".shirube-full-operational/summary.md", "utf8")}\n</details>\n`
+              : "";
+            const body = `${summary}${rapidLite}`;
+            const { owner, repo } = context.repo;
+            const issue_number = Number("${{ steps.pr.outputs.number }}");
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const previous = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload Shirube full operational artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shirube-full-operational-gates-${{ steps.pr.outputs.number }}
+          path: ${{ env.RESULT_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
+          include-hidden-files: true
+
+      - name: Enforce full operational gate
+        if: always()
+        run: |
+          if [ ! -f "$RESULT_DIR/full-operational-gate.json" ]; then
+            echo "Missing full-operational-gate.json"
+            exit 1
+          fi
+          cat "$RESULT_DIR/full-operational-gate.json"
+          node <<'NODE'
+          const fs = require("fs");
+          const report = JSON.parse(fs.readFileSync(`${process.env.RESULT_DIR}/full-operational-gate.json`, "utf8"));
+          if (report.would_block) {
+            console.error("Shirube full operational gate blocked this PR.");
+            process.exit(1);
+          }
+          NODE

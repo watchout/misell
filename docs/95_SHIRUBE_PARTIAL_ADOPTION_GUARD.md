@@ -1,6 +1,6 @@
 # 95. Shirube Partial Adoption Guard
 
-Status: Accepted for pilot
+Status: Historical bridge; Misell is superseded by `docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`
 
 Date: 2026-06-23
 
@@ -8,6 +8,10 @@ Date: 2026-06-23
 
 Misell and sibling repositories may use Shirube V3 concepts before full overlay
 adoption, but partial use must be explicitly classified and bounded.
+
+Misell itself is no longer intended to stay in partial/report-only mode after
+the full operational adoption PR. This document remains useful for sibling
+repositories that have not yet adopted a full gate.
 
 Do not describe a repository as `Shirube V3 complete`, `enforced`, or `fully
 controlled` unless a later owner-approved overlay/enforcement PR has actually
@@ -26,7 +30,8 @@ Every repository using Shirube concepts must be classified as one of:
 - `NOT_SHIRUBE_CONTROLLED`: Shirube-like review may happen, but the repo is not
   under Shirube control.
 
-Misell's status after PR #182 is `RAPID_LITE_REPORT_ONLY`.
+Misell's status after PR #182 was `RAPID_LITE_REPORT_ONLY`. After the full
+operational adoption PR, Misell's target status is `FULL_SHIRUBE_OPERATIONAL`.
 
 ## Minimum PR Evidence
 
