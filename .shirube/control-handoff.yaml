@@ -45,10 +45,13 @@ cell:
     - security/CEO gate replacement
   allowed_paths:
     - .github/workflows/shirube-rapid-lite-gates-report.yml
+    - .github/pull_request_template.md
+    - .gitignore
     - .shirube/**
     - scripts/shirube/**
     - docs/README.md
     - docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+    - docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md
     - README.md
     - package.json
   forbidden_paths:

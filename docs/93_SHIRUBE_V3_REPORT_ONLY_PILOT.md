@@ -87,6 +87,19 @@ run through the report-only workflow and the owner should confirm:
 Graduation must be a separate PR. That PR must explicitly state which checks
 become required and must not bundle product feature work.
 
+## Development and Audit Flow
+
+Misell development and audit work should follow
+`docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md` after this pilot is merged.
+
+In short:
+
+- every normal PR gets a repo-local Rapid/Lite control handoff
+- the PR body includes `handoff_ref`
+- implementation stays inside the handoff boundary
+- audit comments include exact head and verdict
+- owner decision remains a human GitHub decision during the report-only pilot
+
 ## Rollback
 
 Rollback is straightforward because the pilot is non-runtime:

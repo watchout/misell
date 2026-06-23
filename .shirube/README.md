@@ -17,6 +17,16 @@ handoff evidence, owner decision gaps, hard-delete risk, LLM-authority wording,
 duplicated logic, and scattered configurable values without slowing normal
 Misell PR flow.
 
+Normal development should use a per-PR control handoff:
+
+1. copy `.shirube/control-handoffs/TEMPLATE.rapid-lite.yaml`
+2. fill a concrete file under `.shirube/control-handoffs/`
+3. add `handoff_ref: .shirube/control-handoffs/<file>.yaml` to the PR body
+4. post structured audits using `.shirube/audit-templates/structured-audit.md`
+
+The detailed operating flow is documented in
+`docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md`.
+
 Promotion to required checks requires a later owner-approved PR after several
 real Misell PRs have run through this report-only workflow with acceptable false
 positive rate and runtime.
