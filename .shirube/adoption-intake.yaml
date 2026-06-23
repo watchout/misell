@@ -1,0 +1,17 @@
+schema_version: shirube-adoption-intake/v1
+adoption_id: ADOPT-MISELL-SHIRUBE-V3-RAPID-LITE-001
+lane: adoption_intake
+repo: watchout/misell
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+profile: hotel-lite
+disposition: retrofit_accelerate
+owner:
+  role: repo_owner
+  actor: watchout
+existing_state_scan_ref: .shirube/existing-state-scan.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: user-request-2026-06-23-shirube-v3-report-only-pilot
+gap_fill_plan_ref: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+spec_reconciliation_ref: null
+next_safe_cell_ref: CELL-MISELL-SHIRUBE-V3-REPORT-ONLY-001
+control_handoff_ref: .shirube/control-handoff.yaml

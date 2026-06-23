@@ -1,0 +1,23 @@
+schema_version: shirube-framework-lock/v1
+framework: watchout/ai-dev-framework
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+commit: c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+version_label: Shirube v3.2 Rapid/Lite report-only pilot
+mode: rapid-lite
+profile: hotel-lite
+locked_at: 2026-06-23T06:07:39Z
+source_url: https://github.com/watchout/ai-dev-framework
+vendored_paths:
+  - scripts/shirube/lib.mjs
+  - scripts/shirube/check-adoption.mjs
+  - scripts/shirube/check-gate-contract.mjs
+  - scripts/shirube/check-design-rules.mjs
+  - scripts/shirube/check-lifecycle.mjs
+  - scripts/shirube/run-rapid-lite-report.mjs
+  - .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+local_paths:
+  - scripts/shirube/run-rapid-lite-local.mjs
+local_patches:
+  - scripts/shirube/check-design-rules.mjs skips design-rule-pack file content during text-pattern checks to avoid rule-pack self-matching in the pilot PR.
+  - scripts/shirube/check-design-rules.mjs treats scripts/shirube as tool/config surface so vendored checker patterns do not self-trigger pilot design rules.
+enforce_pinned_ref: false

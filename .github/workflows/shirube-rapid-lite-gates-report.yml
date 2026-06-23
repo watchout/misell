@@ -1,0 +1,167 @@
+name: Shirube Rapid/Lite Gates Report
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  NODE_VERSION: "24"
+  RESULT_DIR: .shirube-rapid-lite
+
+jobs:
+  shirube-rapid-lite-gates-report:
+    name: Shirube Rapid/Lite Gates Report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check YAML parser runtime
+        run: ruby --version
+
+      - name: Collect PR inputs
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "$RESULT_DIR"
+          node <<'NODE'
+          const { execFileSync } = require("child_process");
+          const fs = require("fs");
+          const path = require("path");
+
+          const resultDir = process.env.RESULT_DIR;
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+          const prBody = event.pull_request?.body ?? "";
+          const runtimeHandoff = path.join(resultDir, "control-handoff.runtime.yaml");
+
+          if (fs.existsSync(".shirube/control-handoff.yaml")) {
+            const base = fs.readFileSync(".shirube/control-handoff.yaml", "utf8");
+            fs.writeFileSync(runtimeHandoff, `${base.replace(/\n*$/u, "\n")}pr_head_sha: "${process.env.HEAD_SHA}"\n`);
+          }
+          fs.writeFileSync(
+            `${resultDir}/pr-body.md`,
+            `${prBody.replace(/\n*$/u, "\n")}${fs.existsSync(runtimeHandoff) ? `\nhandoff_ref: ${runtimeHandoff}\n` : ""}`,
+          );
+
+          const attempts = [
+            {
+              label: "base-head-sha-three-dot",
+              args: ["diff", "--name-only", `${process.env.BASE_SHA}...${process.env.HEAD_SHA}`],
+            },
+            {
+              label: "base-head-sha-two-dot",
+              args: ["diff", "--name-only", process.env.BASE_SHA, process.env.HEAD_SHA],
+            },
+            {
+              label: "origin-base-three-dot",
+              before: ["fetch", "--no-tags", "--prune", "origin", process.env.BASE_REF],
+              args: ["diff", "--name-only", `origin/${process.env.BASE_REF}...HEAD`],
+            },
+            {
+              label: "head-parent",
+              args: ["diff", "--name-only", "HEAD^", "HEAD"],
+            },
+          ];
+          const errors = [];
+          for (const attempt of attempts) {
+            try {
+              if (attempt.before) execFileSync("git", attempt.before, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+              const stdout = execFileSync("git", attempt.args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+              fs.writeFileSync(`${resultDir}/changed-files.txt`, stdout);
+              fs.writeFileSync(`${resultDir}/input-collection.json`, JSON.stringify({
+                schema: "shirube-rapid-lite-input-collection/v1",
+                status: "PASS",
+                method: attempt.label,
+              }, null, 2) + "\n");
+              process.exit(0);
+            } catch (error) {
+              errors.push({
+                method: attempt.label,
+                message: error.stderr?.toString?.().trim() || error.message,
+              });
+            }
+          }
+          fs.writeFileSync(`${resultDir}/changed-files.txt`, "");
+          fs.writeFileSync(`${resultDir}/input-failure.json`, JSON.stringify({
+            schema: "shirube-rapid-lite-input-collection/v1",
+            status: "FAILURE",
+            code: "changed_files_collection_failed",
+            message: "Unable to collect PR changed files from available merge-base strategies.",
+            attempts: errors,
+          }, null, 2) + "\n");
+          NODE
+
+      - name: Run Rapid/Lite gates
+        run: |
+          INPUT_FAILURE_ARG=""
+          if [ -f "$RESULT_DIR/input-failure.json" ]; then
+            INPUT_FAILURE_ARG="--input-failure $RESULT_DIR/input-failure.json"
+          fi
+          node scripts/shirube/run-rapid-lite-report.mjs \
+            --result-dir "$RESULT_DIR" \
+            --changed-files "$RESULT_DIR/changed-files.txt" \
+            --pr-body "$RESULT_DIR/pr-body.md" \
+            --diff-root . \
+            $INPUT_FAILURE_ARG \
+            --format json > "$RESULT_DIR/workflow-output.json"
+          cat "$RESULT_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RESULT_DIR/aggregate.json"
+
+      - name: Upsert PR comment
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- shirube-rapid-lite-gates-report/v1 -->";
+            const body = fs.existsSync(".shirube-rapid-lite/summary.md")
+              ? fs.readFileSync(".shirube-rapid-lite/summary.md", "utf8")
+              : `${marker}\n\n## Shirube Rapid/Lite Gates Report\n\nReport generation failed before summary creation.`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const previous = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload Rapid/Lite gate JSON artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shirube-rapid-lite-gates-${{ github.event.pull_request.number }}
+          path: ${{ env.RESULT_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
+
+      - name: Report-only completion
+        if: always()
+        run: |
+          echo "Shirube Rapid/Lite gates are report-only in this pilot."
+          echo "PASS, PASS_WITH_WARN, and BLOCKED verdicts are recorded as PR evidence without failing this workflow."
+          exit 0
