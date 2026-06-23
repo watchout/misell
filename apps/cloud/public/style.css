@@ -66,6 +66,22 @@ button.danger {
   background: #a83228;
 }
 
+.admin-link,
+.campaign-project-preview-link {
+  align-items: center;
+  background: #52616f;
+  border-radius: 6px;
+  color: #ffffff;
+  display: inline-flex;
+  min-height: 36px;
+  padding: 0 14px;
+}
+
+.admin-link:hover,
+.campaign-project-preview-link:hover {
+  text-decoration: none;
+}
+
 select,
 input,
 textarea {
@@ -959,6 +975,106 @@ td small {
   color: #b42318;
 }
 
+.campaign-preview-page main {
+  display: grid;
+  gap: 16px;
+}
+
+.campaign-preview-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.campaign-preview-summary {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #d8dee4;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px 24px;
+}
+
+.campaign-preview-summary div,
+.campaign-preview-scenes,
+.campaign-preview-scene-list {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-preview-workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+}
+
+.campaign-preview-scenes {
+  align-content: start;
+}
+
+.campaign-preview-stage {
+  aspect-ratio: 16 / 5;
+  background: #111827;
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.campaign-preview-panel {
+  align-content: center;
+  background: #f8fafb;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 24px;
+}
+
+.campaign-preview-panel span {
+  color: #52616f;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.campaign-preview-panel h2 {
+  font-size: 28px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.campaign-preview-panel p {
+  line-height: 1.6;
+  margin: 0;
+}
+
+.campaign-preview-panel-left {
+  background: #e8f1f5;
+}
+
+.campaign-preview-panel-center {
+  background: #ffffff;
+}
+
+.campaign-preview-panel-right {
+  background: #f5efe6;
+}
+
+.campaign-preview-scene-list {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.campaign-preview-scene-summary {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
 .admin-context-panel {
   margin-bottom: 12px;
 }
@@ -1042,6 +1158,26 @@ pre {
   .customer-offer-revision,
   .customer-access-create {
     grid-template-columns: 1fr;
+  }
+
+  .campaign-preview-summary,
+  .campaign-preview-workspace,
+  .campaign-preview-stage {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-preview-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .campaign-preview-stage {
+    aspect-ratio: auto;
+    min-height: 0;
+  }
+
+  .campaign-preview-panel h2 {
+    font-size: 22px;
   }
 
   .order-item-row > strong {

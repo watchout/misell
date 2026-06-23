@@ -686,6 +686,16 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   expect(campaignProjectDetail.json.campaign_project.status).toBe("validated");
   expect(campaignProjectDetail.json.campaign_project.scenes.every((scene) => scene.status === "valid")).toBeTruthy();
   expect(campaignProjectDetail.json.campaign_project.events.some((event) => event.action === "project.validated")).toBeTruthy();
+  const campaignPreviewPromise = context.waitForEvent("page");
+  await page.locator(`[data-campaign-project-preview="${campaignProjectId}"]`).click();
+  const campaignPreview = await campaignPreviewPromise;
+  wirePage(campaignPreview, "campaign-preview");
+  await campaignPreview.waitForLoadState("domcontentloaded");
+  await expect(campaignPreview.locator("h1")).toContainText("Browser campaign project");
+  await expect(campaignPreview.locator(".campaign-preview-stage")).toContainText("Browser edited scene");
+  await expect(campaignPreview.locator(".campaign-preview-panel")).toHaveCount(3);
+  await campaignPreview.screenshot({ path: path.join(screenshotsDir, "cloud-campaign-project-preview.png"), fullPage: true });
+  await campaignPreview.close();
 
   action("Create and soft-delete free-input campaign project through cloud admin UI");
   const freeProjectForm = page.locator("#campaign-projects form.campaign-project-free-input");
