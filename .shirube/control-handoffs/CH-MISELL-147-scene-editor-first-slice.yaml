@@ -54,6 +54,9 @@ cell:
     - apps/cloud/public/campaign-project-ui.js
     - apps/cloud/public/style.css
     - tests/e2e/misell-ui.spec.js
+  protected_surfaces:
+    - existing_admin_static_html_guard
+    - server_js_contains_existing_auth_tokens_but_auth_model_is_unchanged
   forbidden_paths:
     - .env
     - .env.*
@@ -83,6 +86,7 @@ cell:
 implementation_boundary:
   summary: Use existing CampaignProject admin APIs and requireAdminAuth; add only a dedicated editor surface and E2E coverage.
   expected_pr_count: 1
+  protected_surface_note: This slice touches an authenticated admin static HTML route in server.js, but only reuses existing requireAdminAuth and does not change auth/RBAC behavior.
   forbidden_operations:
     - merge
     - approve
