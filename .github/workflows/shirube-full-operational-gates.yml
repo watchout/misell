@@ -41,17 +41,32 @@ jobs:
               });
               pr = response.data;
             }
+            let trustedRef = pr.base.sha;
+            let trustedToolSource = `base_sha:${pr.base.sha}`;
+            if (context.eventName === "issue_comment" && pr.merged) {
+              const defaultBranch = context.payload.repository.default_branch;
+              const branch = await github.rest.repos.getBranch({
+                owner,
+                repo,
+                branch: defaultBranch,
+              });
+              trustedRef = branch.data.commit.sha;
+              trustedToolSource = `default_branch:${defaultBranch}@${trustedRef}`;
+            }
             core.setOutput("number", String(pr.number));
             core.setOutput("base_ref", pr.base.ref);
             core.setOutput("base_sha", pr.base.sha);
+            core.setOutput("trusted_ref", trustedRef);
+            core.setOutput("trusted_tool_source", trustedToolSource);
             core.setOutput("head_sha", pr.head.sha);
             core.setOutput("head_repo", pr.head.repo.full_name);
+            core.setOutput("merged", String(Boolean(pr.merged)));
             core.setOutput("body_b64", Buffer.from(pr.body || "", "utf8").toString("base64"));
 
       - name: Checkout trusted base tools
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.pr.outputs.base_sha }}
+          ref: ${{ steps.pr.outputs.trusted_ref }}
           fetch-depth: 1
 
       - name: Checkout PR head for inspection only
@@ -137,7 +152,7 @@ jobs:
             source_handoff: sourceHandoff,
             pr_handoff: fs.existsSync(prHandoff) ? prHandoff : null,
             runtime_handoff: fs.existsSync(runtimeHandoff) ? runtimeHandoff : null,
-            trusted_tool_source: "base_sha:${{ steps.pr.outputs.base_sha }}",
+            trusted_tool_source: "${{ steps.pr.outputs.trusted_tool_source }}",
             pr_head_inspection_root: prRoot,
           }, null, 2) + "\n");
 

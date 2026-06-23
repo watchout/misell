@@ -53,6 +53,11 @@ The workflow uses `pull_request_target` for PR updates and `issue_comment` for
 PR comments. Audit or owner decision comments therefore cause the trusted
 base-branch workflow to re-evaluate against the current PR head.
 
+For open PRs, the trusted tool checkout is the PR base SHA. For comments on a
+merged PR, the trusted tool checkout is the current default branch SHA, because
+the PR's stored base SHA may predate this workflow during bootstrap or
+post-merge evidence collection.
+
 ## Structured Audit Requirement
 
 Audits must use `.shirube/audit-templates/structured-audit.md`.

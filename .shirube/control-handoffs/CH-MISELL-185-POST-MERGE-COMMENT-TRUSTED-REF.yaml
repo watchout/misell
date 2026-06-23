@@ -1,0 +1,138 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-185-POST-MERGE-COMMENT-TRUSTED-REF
+parent_ssot: https://github.com/watchout/misell/issues/184
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/pull/185#issuecomment-4784309523
+premise_confirmation_ref: https://github.com/watchout/misell/pull/185#issuecomment-4784334292
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/184
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+full_operational_adoption: true
+governance_change:
+  type: shirube_post_merge_re_evaluation_fix
+  protected_surfaces:
+    - github_actions_workflow
+    - shirube_gate_enforcement
+  branch_protection_mutation: false
+  required_check_settings_mutation: false
+
+rps_scope:
+  shirube_owns:
+    - trusted tool checkout selection for Shirube workflow events
+    - post-merge issue_comment re-evaluation behavior
+    - structured audit and owner exact-head evidence for this PR
+  shirube_does_not_own:
+    - product runtime behavior
+    - production deployment
+    - secrets
+    - DB migration or customer data
+    - branch protection/ruleset mutation in this PR
+
+cell:
+  CELL-ID: CELL-MISELL-185-POST-MERGE-COMMENT-TRUSTED-REF
+  cell_type: protected_stop
+  risk_class: R3
+  goal: Fix Shirube post-merge issue_comment re-evaluation so merged PR comments execute trusted default-branch gate tools.
+  non_scope:
+    - product runtime behavior changes
+    - DB migration
+    - deployment or production operation
+    - secret read or write
+    - branch protection/ruleset mutation through API
+    - external AI call
+    - feature implementation
+    - change to audit or owner admissibility policy
+  allowed_paths:
+    - .github/workflows/shirube-full-operational-gates.yml
+    - .shirube/README.md
+    - .shirube/control-handoffs/CH-MISELL-185-POST-MERGE-COMMENT-TRUSTED-REF.yaml
+    - docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - apps/**
+    - packages/**
+    - '**/migrations/**'
+    - '**/migration/**'
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+  protected_surfaces:
+    - github_actions_workflow
+    - shirube_gate_enforcement
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - product runtime path touched
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - missing owner APPROVED_EXACT_HEAD decision for exact head
+    - full operational smoke fails
+  acceptance_criteria:
+    - Open PR events continue to execute trusted tools from the PR base SHA.
+    - Merged PR issue_comment events execute trusted tools from the current default branch SHA.
+    - PR head remains inspection-only and is not used to execute Shirube gate scripts.
+    - Post-merge issue_comment re-evaluation can run after Shirube scripts first land on main.
+
+implementation_boundary:
+  summary: Change the trusted checkout ref selection for merged PR issue_comment events and document the bootstrap behavior.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge without owner exact-head decision
+    - approve own audit
+    - branch protection mutation
+    - ruleset mutation
+    - production or deploy mutation
+    - secret read or write
+    - product runtime edit
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for workflow and handoff
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - PR_head_SHA
+    - changed_files
+    - validation_commands
+    - validation_results
+    - structured_audit_comment
+    - owner_decision
+  acceptance_tests:
+    - workflow syntax parses
+    - full operational smoke still passes
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_issue_comment_re_evaluation
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
