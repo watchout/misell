@@ -402,6 +402,14 @@ app.get("/admin/devices/:device_id", requireAdminAuth, (req, res) => {
   res.send(renderDeviceDetailPage(device));
 });
 
+app.get("/admin/campaign-projects/:campaign_project_id/preview", requireAdminAuth, (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "campaign-project-preview.html"));
+});
+
+app.get("/campaign-project-preview.html", requireAdminAuth, (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "campaign-project-preview.html"));
+});
+
 app.use(express.static(PUBLIC_DIR, { index: false }));
 
 app.get("/api/admin/summary", requireAdminAuth, (req, res) => {
