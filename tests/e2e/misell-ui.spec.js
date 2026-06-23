@@ -634,6 +634,76 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(page.locator("#summary")).toContainText("正常");
   await page.screenshot({ path: path.join(screenshotsDir, "cloud-admin-dashboard.png"), fullPage: true });
 
+  action("Create campaign generator project through cloud admin UI");
+  const selectedProposal = await authedRequest(cloudBase, "/api/admin/campaign-proposals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      campaign_proposal_id: "cpr-browser-selected",
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      screen_group_id: "SG-BROWSER",
+      proposal_month: "2026-07",
+      title: "Browser selected proposal",
+      objective: "店頭で新しい季節メニューを案内する",
+      target_audience: "ランチ利用のお客様",
+      three_screen_outline: [
+        { order: 1, copy: "季節メニューの写真を大きく見せる" },
+        { order: 2, copy: "利用シーンと特徴を短く伝える" },
+        { order: 3, copy: "QRコードで詳細確認へ案内する" }
+      ],
+      qr_flow: "QRコードで詳細を見る",
+      expected_effect: "店頭での認知を増やす",
+      status: "selected"
+    })
+  });
+  expect(selectedProposal.status, selectedProposal.text).toBe(201);
+  await page.locator("#refresh").click();
+  await expect(page.locator("#campaign-projects")).toContainText("Browser selected proposal", { timeout: 5000 });
+  const projectFromProposal = page.locator("#campaign-projects form.campaign-project-from-proposal");
+  await projectFromProposal.locator("select[name='campaign_proposal_id']").selectOption("cpr-browser-selected");
+  await projectFromProposal.locator("input[name='title']").fill("Browser campaign project");
+  await projectFromProposal.locator("button[type='submit']").click();
+  await expect(page.locator("#campaign-projects")).toContainText("Browser campaign project", { timeout: 5000 });
+  let campaignProjects = await authedRequest(cloudBase, "/api/admin/campaign-projects?tenant_id=TEN-BROWSER&store_id=STO-BROWSER&screen_group_id=SG-BROWSER");
+  let campaignProject = campaignProjects.json.campaign_projects.find((project) => project.title === "Browser campaign project");
+  expect(campaignProject).toBeTruthy();
+  const campaignProjectId = campaignProject.campaign_project_id;
+  expect(campaignProject.no_external_ai).toBe(true);
+  expect(campaignProject.no_content_manifest_creation).toBe(true);
+  expect(campaignProject.no_publish).toBe(true);
+  const sceneForm = page.locator(`form.campaign-project-scene-update[data-project-id="${campaignProjectId}"]`).first();
+  await sceneForm.locator("input[name='headline']").fill("Browser edited scene");
+  await sceneForm.locator("button[type='submit']").click();
+  await expect(page.locator("#campaign-projects")).toContainText("Browser edited scene", { timeout: 5000 });
+  await page.locator(`button[data-campaign-project-validate="${campaignProjectId}"]`).click();
+  await expect(page.locator("#campaign-projects")).toContainText("検証済み", { timeout: 5000 });
+  const campaignProjectDetail = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}`);
+  expect(campaignProjectDetail.status, campaignProjectDetail.text).toBe(200);
+  expect(campaignProjectDetail.json.campaign_project.status).toBe("validated");
+  expect(campaignProjectDetail.json.campaign_project.scenes.every((scene) => scene.status === "valid")).toBeTruthy();
+
+  action("Create and soft-delete free-input campaign project through cloud admin UI");
+  const freeProjectForm = page.locator("#campaign-projects form.campaign-project-free-input");
+  await freeProjectForm.locator("select[name='tenant_id']").selectOption("TEN-BROWSER");
+  await freeProjectForm.locator("select[name='store_id']").selectOption("STO-BROWSER");
+  await freeProjectForm.locator("select[name='screen_group_id']").selectOption("SG-BROWSER");
+  await freeProjectForm.locator("input[name='title']").fill("Browser free input project");
+  await freeProjectForm.locator("input[name='objective']").fill("店内のおすすめをわかりやすく案内する");
+  await freeProjectForm.locator("input[name='target_audience']").fill("夕方の来店客");
+  await freeProjectForm.locator("textarea[name='store_context']").fill("駅前店舗で短時間の視聴が多い");
+  await freeProjectForm.locator("textarea[name='offer_or_message']").fill("今週のおすすめセットを紹介する");
+  await freeProjectForm.locator("input[name='cta']").fill("QRコードで詳細を見る");
+  await freeProjectForm.locator("textarea[name='success_metrics']").fill("QR scan\n店頭問い合わせ");
+  await freeProjectForm.locator("textarea[name='constraints']").fill("価格表記は税込\n写真は店舗素材を使う");
+  await freeProjectForm.locator("button[type='submit']").click();
+  await expect(page.locator("#campaign-projects")).toContainText("Browser free input project", { timeout: 5000 });
+  campaignProjects = await authedRequest(cloudBase, "/api/admin/campaign-projects?tenant_id=TEN-BROWSER&store_id=STO-BROWSER&screen_group_id=SG-BROWSER");
+  campaignProject = campaignProjects.json.campaign_projects.find((project) => project.title === "Browser free input project");
+  expect(campaignProject).toBeTruthy();
+  await page.locator(`button[data-campaign-project-delete="${campaignProject.campaign_project_id}"]`).click();
+  await expect(page.locator("#campaign-projects")).not.toContainText("Browser free input project", { timeout: 5000 });
+
   action("Update device status and notes through dashboard form");
   const deviceForm = page.locator("form.device-action").first();
   await deviceForm.locator("select[name='status']").selectOption("maintenance");
