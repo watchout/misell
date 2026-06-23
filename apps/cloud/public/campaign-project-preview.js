@@ -1,4 +1,6 @@
 (function () {
+  if (new URLSearchParams(window.location.search).get("editor") === "1") return;
+
   const root = document.getElementById("campaign-preview-root");
   const title = document.getElementById("campaign-preview-title");
   const state = {

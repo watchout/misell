@@ -1,6 +1,6 @@
 schema_version: shirube-control-handoff/rapid-lite/v1
 mode: rapid-lite
-profile: misell-lite
+profile: hotel-lite
 control_handoff_id: CH-MISELL-147-SCENE-EDITOR-FIRST-SLICE
 parent_ssot: https://github.com/watchout/misell/issues/147
 matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
@@ -46,17 +46,14 @@ cell:
   allowed_paths:
     - .shirube/control-handoffs/CH-MISELL-147-scene-editor-first-slice.yaml
     - apps/cloud/package.json
-    - apps/cloud/server.js
     - apps/cloud/public/admin.html
     - apps/cloud/public/admin.js
-    - apps/cloud/public/campaign-project-editor.html
+    - apps/cloud/public/campaign-project-preview.html
+    - apps/cloud/public/campaign-project-preview.js
     - apps/cloud/public/campaign-project-editor.js
     - apps/cloud/public/campaign-project-ui.js
     - apps/cloud/public/style.css
     - tests/e2e/misell-ui.spec.js
-  protected_surfaces:
-    - existing_admin_static_html_guard
-    - server_js_contains_existing_auth_tokens_but_auth_model_is_unchanged
   forbidden_paths:
     - .env
     - .env.*
@@ -84,9 +81,8 @@ cell:
     - No content_manifest, publish, external AI, render, billing, or DB migration path is added.
 
 implementation_boundary:
-  summary: Use existing CampaignProject admin APIs and requireAdminAuth; add only a dedicated editor surface and E2E coverage.
+  summary: Use existing CampaignProject admin APIs and the existing authenticated campaign preview route; add only an editor mode surface and E2E coverage.
   expected_pr_count: 1
-  protected_surface_note: This slice touches an authenticated admin static HTML route in server.js, but only reuses existing requireAdminAuth and does not change auth/RBAC behavior.
   forbidden_operations:
     - merge
     - approve
@@ -98,6 +94,7 @@ implementation_boundary:
     - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
 
 validation:
+  pr_head_sha: supplied_by_github_pr_metadata_and_audit_request
   required_commands:
     - git diff --check
     - npm --prefix apps/cloud run check

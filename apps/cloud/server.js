@@ -375,10 +375,6 @@ app.get("/", (req, res) => {
   res.redirect("/admin");
 });
 
-function sendPublicHtml(res, filename) {
-  res.sendFile(path.join(PUBLIC_DIR, filename));
-}
-
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
@@ -389,11 +385,11 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/admin", requireAdminAuth, (req, res) => {
-  sendPublicHtml(res, "admin.html");
+  res.sendFile(path.join(PUBLIC_DIR, "admin.html"));
 });
 
 app.get("/admin.html", requireAdminAuth, (req, res) => {
-  sendPublicHtml(res, "admin.html");
+  res.sendFile(path.join(PUBLIC_DIR, "admin.html"));
 });
 
 app.get("/admin/devices/:device_id", requireAdminAuth, (req, res) => {
@@ -407,19 +403,11 @@ app.get("/admin/devices/:device_id", requireAdminAuth, (req, res) => {
 });
 
 app.get("/admin/campaign-projects/:campaign_project_id/preview", requireAdminAuth, (req, res) => {
-  sendPublicHtml(res, "campaign-project-preview.html");
-});
-
-app.get("/admin/campaign-projects/:campaign_project_id/editor", requireAdminAuth, (req, res) => {
-  sendPublicHtml(res, "campaign-project-editor.html");
+  res.sendFile(path.join(PUBLIC_DIR, "campaign-project-preview.html"));
 });
 
 app.get("/campaign-project-preview.html", requireAdminAuth, (req, res) => {
-  sendPublicHtml(res, "campaign-project-preview.html");
-});
-
-app.get("/campaign-project-editor.html", requireAdminAuth, (req, res) => {
-  sendPublicHtml(res, "campaign-project-editor.html");
+  res.sendFile(path.join(PUBLIC_DIR, "campaign-project-preview.html"));
 });
 
 app.use(express.static(PUBLIC_DIR, { index: false }));

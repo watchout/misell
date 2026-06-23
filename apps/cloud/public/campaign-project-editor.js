@@ -1,6 +1,8 @@
 (function () {
-  const root = document.getElementById("campaign-editor-root");
-  const title = document.getElementById("campaign-editor-title");
+  if (new URLSearchParams(window.location.search).get("editor") !== "1") return;
+
+  const root = document.getElementById("campaign-editor-root") || document.getElementById("campaign-preview-root");
+  const title = document.getElementById("campaign-editor-title") || document.getElementById("campaign-preview-title");
   const previewLink = document.getElementById("campaign-editor-preview-link");
   const state = {
     project: null,
@@ -39,7 +41,10 @@
     const scenes = activeScenes(project);
     const selected = selectedScene(scenes);
     title.textContent = project.title || project.campaign_project_id || "Scene Editor";
-    previewLink.href = `/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview`;
+    document.body.classList.add("campaign-editor-page");
+    if (previewLink) {
+      previewLink.href = `/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview`;
+    }
     root.innerHTML = `
       <section class="campaign-editor-summary">
         <div>
@@ -292,7 +297,7 @@
   }
 
   function projectIdFromPath() {
-    const match = window.location.pathname.match(/\/admin\/campaign-projects\/([^/]+)\/editor\/?$/);
+    const match = window.location.pathname.match(/\/admin\/campaign-projects\/([^/]+)\/preview\/?$/);
     return match ? decodeURIComponent(match[1]) : "";
   }
 
