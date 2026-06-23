@@ -26,6 +26,15 @@ const {
   assertNoAutomaticExternalAi,
   buildContextSnapshotSourceSummary
 } = require("./lib/ai-campaign-context-contract");
+const {
+  CAMPAIGN_PROJECT_STATUSES,
+  CAMPAIGN_PROJECT_SCENE_STATUSES,
+  CAMPAIGN_PROJECT_SOURCE_TYPES,
+  normalizeCampaignBriefInput,
+  normalizeSceneDraftInput,
+  validateSceneDraft,
+  assertNoOutOfScopeCampaignGeneratorInput
+} = require("./lib/campaign-generator-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -156,6 +165,9 @@ const CUSTOMER_EDIT_ROLES = new Set(["customer_admin", "customer_editor"]);
 const CAMPAIGN_PROPOSAL_STATUS = new Set(["draft", "proposed", "selected", "held", "rejected", "expired"]);
 const CUSTOMER_CAMPAIGN_PROPOSAL_STATUS = new Set(["selected", "held", "rejected"]);
 const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["proposed", "selected", "held", "rejected"]);
+const CAMPAIGN_PROJECT_STATUS = new Set(CAMPAIGN_PROJECT_STATUSES);
+const CAMPAIGN_PROJECT_SCENE_STATUS = new Set(CAMPAIGN_PROJECT_SCENE_STATUSES);
+const CAMPAIGN_PROJECT_SOURCE_TYPE = new Set(CAMPAIGN_PROJECT_SOURCE_TYPES);
 const CUSTOMER_CONTEXT_CATEGORIES = new Set(CONTEXT_CATEGORIES);
 const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(VISIBILITY_SCOPES);
 const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(SOURCE_OWNERS);
@@ -664,6 +676,96 @@ app.post("/api/admin/campaign-proposals", requireAdminAuth, (req, res, next) => 
 app.get("/api/admin/campaign-proposals/:campaign_proposal_id/events", requireAdminAuth, (req, res, next) => {
   try {
     res.json({ ok: true, campaign_proposal_events: listCampaignProposalEvents(cleanId(req.params.campaign_proposal_id)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-projects", requireAdminAuth, (req, res, next) => {
+  try {
+    res.json({ ok: true, campaign_projects: listCampaignProjects(req.query || {}) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/from-proposal", requireAdminAuth, (req, res, next) => {
+  try {
+    const project = createCampaignProjectFromProposal(req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, campaign_project: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/from-brief", requireAdminAuth, (req, res, next) => {
+  try {
+    const project = createCampaignProjectFromBrief(req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, campaign_project: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/free-input", requireAdminAuth, (req, res, next) => {
+  try {
+    const project = createCampaignProjectFromFreeInput(req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, campaign_project: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-projects/:campaign_project_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const project = getCampaignProject(cleanId(req.params.campaign_project_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeScenes: true, includeEvents: true });
+    if (!project) throw requestError("Campaign project not found", 404);
+    res.json({ ok: true, campaign_project: project });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/scenes", requireAdminAuth, (req, res, next) => {
+  try {
+    const scene = createCampaignProjectScene(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, campaign_project_scene: scene });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const scene = updateCampaignProjectScene(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, campaign_project_scene: scene });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/validate", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = validateCampaignProject(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const scene = softDeleteCampaignProjectScene(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.adminActor);
+    res.json({ ok: true, campaign_project_scene: scene });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/campaign-projects/:campaign_project_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const project = softDeleteCampaignProject(cleanId(req.params.campaign_project_id), req.adminActor);
+    res.json({ ok: true, campaign_project: project });
   } catch (error) {
     next(error);
   }
@@ -3595,6 +3697,91 @@ function schemaMigrations() {
             ON customer_context_source_assets(customer_context_item_id, status, created_at DESC);
           CREATE INDEX IF NOT EXISTS idx_customer_context_source_assets_scope
             ON customer_context_source_assets(tenant_id, store_id, screen_group_id, visibility_scope, status, created_at DESC);
+        `);
+      }
+    },
+    {
+      version: 11,
+      name: "campaign_generator_project_foundation",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS campaign_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_project_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_brief_id TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL,
+            source_proposal_id TEXT NOT NULL DEFAULT '',
+            source_context_snapshot_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            objective TEXT NOT NULL DEFAULT '',
+            target_audience TEXT NOT NULL DEFAULT '',
+            store_context TEXT NOT NULL DEFAULT '',
+            offer_or_message TEXT NOT NULL DEFAULT '',
+            cta TEXT NOT NULL DEFAULT '',
+            success_metrics_json TEXT NOT NULL DEFAULT '[]',
+            constraints_json TEXT NOT NULL DEFAULT '[]',
+            campaign_brief_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'draft',
+            validation_status TEXT NOT NULL DEFAULT 'draft',
+            validation_errors_json TEXT NOT NULL DEFAULT '[]',
+            created_by_user_id TEXT NOT NULL DEFAULT '',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS campaign_project_scenes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_project_scene_id TEXT NOT NULL UNIQUE,
+            campaign_project_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            scene_order INTEGER NOT NULL,
+            scene_type TEXT NOT NULL,
+            headline TEXT NOT NULL DEFAULT '',
+            body_text TEXT NOT NULL DEFAULT '',
+            visual_direction TEXT NOT NULL DEFAULT '',
+            cta_text TEXT NOT NULL DEFAULT '',
+            duration_seconds INTEGER NOT NULL DEFAULT 0,
+            asset_requirements_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'draft',
+            validation_status TEXT NOT NULL DEFAULT 'draft',
+            validation_errors_json TEXT NOT NULL DEFAULT '[]',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(campaign_project_id, scene_order),
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT
+          );
+
+          CREATE TABLE IF NOT EXISTS campaign_project_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_project_event_id TEXT NOT NULL UNIQUE,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_scene_id TEXT NOT NULL DEFAULT '',
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_type TEXT NOT NULL DEFAULT 'admin',
+            actor_id TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_campaign_projects_scope
+            ON campaign_projects(tenant_id, store_id, screen_group_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaign_projects_source_proposal
+            ON campaign_projects(source_proposal_id, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_campaign_project_scenes_project
+            ON campaign_project_scenes(campaign_project_id, status, scene_order);
+          CREATE INDEX IF NOT EXISTS idx_campaign_project_events_project
+            ON campaign_project_events(campaign_project_id, created_at DESC);
         `);
       }
     }
@@ -6903,6 +7090,622 @@ function listCampaignProposalEvents(campaignProposalId) {
   `).all(cleanId(campaignProposalId)).map(publicCampaignProposalEvent);
 }
 
+function createCampaignProjectFromProposal(input, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const proposalId = cleanId(input.campaign_proposal_id || input.campaignProposalId);
+  if (!proposalId) throw requestError("campaign_proposal_id is required", 400);
+  const proposal = getCampaignProposal(proposalId);
+  if (!proposal) throw requestError("Campaign proposal not found", 404);
+  if (proposal.status !== "selected") throw requestError("Campaign proposal must be selected before project creation", 400);
+  assertCampaignProjectInputScope(input, proposal, "Campaign proposal");
+  const brief = createCampaignBriefStub(proposal.campaign_proposal_id, "admin", actor.actor_id || "admin");
+  const campaignBrief = normalizeCampaignBriefForProject(input.brief || input, briefDefaultsFromProposal(proposal, brief, actor));
+  return insertCampaignProject({
+    input,
+    scope: {
+      tenant_id: proposal.tenant_id,
+      store_id: proposal.store_id,
+      screen_group_id: proposal.screen_group_id
+    },
+    source_type: "campaign_proposal",
+    source_proposal_id: proposal.campaign_proposal_id,
+    source_context_snapshot_id: proposal.context_snapshot_id,
+    campaign_brief_id: brief.campaign_brief_id,
+    title: cleanString(input.title || proposal.title).slice(0, 200) || campaignBrief.objective,
+    campaignBrief,
+    scenes: input.scenes || []
+  }, actor);
+}
+
+function createCampaignProjectFromBrief(input, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const briefId = cleanId(input.campaign_brief_id || input.campaignBriefId);
+  if (!briefId) throw requestError("campaign_brief_id is required", 400);
+  const brief = getCampaignBrief(briefId);
+  if (!brief) throw requestError("Campaign brief not found", 404);
+  assertCampaignProjectInputScope(input, brief, "Campaign brief");
+  const proposal = getCampaignProposal(brief.campaign_proposal_id);
+  if (!proposal) throw requestError("Campaign brief source proposal not found", 404);
+  if (proposal.status !== "selected") throw requestError("Campaign brief source proposal must be selected before project creation", 400);
+  const campaignBrief = normalizeCampaignBriefForProject(input.brief || input, briefDefaultsFromProposal(proposal, brief, actor));
+  return insertCampaignProject({
+    input,
+    scope: {
+      tenant_id: brief.tenant_id,
+      store_id: brief.store_id,
+      screen_group_id: brief.screen_group_id
+    },
+    source_type: "campaign_brief",
+    source_proposal_id: proposal.campaign_proposal_id,
+    source_context_snapshot_id: brief.context_snapshot_id,
+    campaign_brief_id: brief.campaign_brief_id,
+    title: cleanString(input.title || proposal.title).slice(0, 200) || campaignBrief.objective,
+    campaignBrief,
+    scenes: input.scenes || []
+  }, actor);
+}
+
+function createCampaignProjectFromFreeInput(input, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const scope = normalizeCampaignScope(input, { requireStore: true, requireScreenGroup: true });
+  const sourceContextSnapshotId = cleanId(input.source_context_snapshot_id || input.sourceContextSnapshotId || input.context_snapshot_id || input.contextSnapshotId);
+  if (sourceContextSnapshotId) getCustomerContextSnapshot(sourceContextSnapshotId, scope);
+  const campaignBrief = normalizeCampaignBriefForProject(input.brief || input, {
+    source_context_snapshot_id: sourceContextSnapshotId,
+    created_by_user_id: actor.actor_id || "admin"
+  });
+  return insertCampaignProject({
+    input,
+    scope,
+    source_type: "free_input",
+    source_proposal_id: "",
+    source_context_snapshot_id: campaignBrief.source_context_snapshot_id,
+    campaign_brief_id: "",
+    title: cleanString(input.title).slice(0, 200) || campaignBrief.objective,
+    campaignBrief,
+    scenes: input.scenes || []
+  }, actor);
+}
+
+function insertCampaignProject({ input, scope, source_type: sourceType, source_proposal_id: sourceProposalId, source_context_snapshot_id: sourceContextSnapshotId, campaign_brief_id: campaignBriefId, title, campaignBrief, scenes }, actor = {}) {
+  if (!CAMPAIGN_PROJECT_SOURCE_TYPE.has(sourceType)) {
+    throw requestError(`source_type must be one of: ${Array.from(CAMPAIGN_PROJECT_SOURCE_TYPE).join(", ")}`, 400);
+  }
+  const project = db.transaction(() => {
+    const now = nowIso();
+    const projectId = cleanId(input.campaign_project_id || input.campaignProjectId) ||
+      nextEntityId("cgp", `${scope.store_id}-${scope.screen_group_id}`);
+    db.prepare(`
+      INSERT INTO campaign_projects (
+        campaign_project_id, tenant_id, store_id, screen_group_id,
+        campaign_brief_id, source_type, source_proposal_id, source_context_snapshot_id,
+        title, objective, target_audience, store_context, offer_or_message, cta,
+        success_metrics_json, constraints_json, campaign_brief_json,
+        status, validation_status, validation_errors_json,
+        created_by_user_id, deleted_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'draft', '[]', ?, NULL, ?, ?)
+    `).run(
+      projectId,
+      scope.tenant_id,
+      scope.store_id,
+      scope.screen_group_id,
+      cleanId(campaignBriefId),
+      sourceType,
+      cleanId(sourceProposalId),
+      cleanId(sourceContextSnapshotId),
+      cleanString(title).slice(0, 200) || "Campaign Project",
+      campaignBrief.objective,
+      campaignBrief.target_audience,
+      campaignBrief.store_context,
+      campaignBrief.offer_or_message,
+      campaignBrief.cta,
+      safeJsonStringify(campaignBrief.success_metrics, 10000),
+      safeJsonStringify(campaignBrief.constraints, 10000),
+      safeJsonStringify({
+        schema_version: 1,
+        ...campaignBrief,
+        no_external_ai: true,
+        no_media_generation: true,
+        no_content_manifest_creation: true,
+        no_publish: true
+      }, 40000),
+      cleanString(campaignBrief.created_by_user_id || actor.actor_id || "admin").slice(0, 120),
+      now,
+      now
+    );
+    const sceneInputs = normalizeCampaignProjectSceneInputs(scenes);
+    for (const sceneInput of sceneInputs) {
+      insertCampaignProjectScene(projectId, scope, sceneInput, now);
+    }
+    recordCampaignProjectEvent(projectId, "", "project.created", "admin", actor.actor_id || "admin", {
+      source_type: sourceType,
+      source_proposal_id: cleanId(sourceProposalId),
+      campaign_brief_id: cleanId(campaignBriefId),
+      no_external_ai: true,
+      no_media_generation: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return getCampaignProject(projectId, null, { includeScenes: true, includeEvents: true });
+  })();
+  recordAuditLog("admin", actor.actor_id || "admin", "campaign_project.create", "campaign_project", project.campaign_project_id, null, project, {
+    tenant_id: project.tenant_id,
+    store_id: project.store_id,
+    screen_group_id: project.screen_group_id,
+    source_type: project.source_type,
+    no_external_ai: true,
+    no_content_manifest_creation: true
+  }, project.created_at || nowIso());
+  return project;
+}
+
+function listCampaignProjects(query = {}) {
+  const scope = normalizeCampaignProjectScopeQuery(query);
+  const status = cleanString(query.status);
+  if (status && !CAMPAIGN_PROJECT_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(CAMPAIGN_PROJECT_STATUS).join(", ")}`, 400);
+  }
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM campaign_projects
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR screen_group_id = ?)
+      AND (? = '' OR status = ?)
+      AND (? = 1 OR status != 'deleted')
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(
+    scope.tenant_id, scope.tenant_id,
+    scope.store_id, scope.store_id,
+    scope.screen_group_id, scope.screen_group_id,
+    status, status,
+    includeDeleted ? 1 : 0,
+    limit
+  ).map(publicCampaignProject);
+}
+
+function getCampaignProject(projectId, scope = null, options = {}) {
+  const row = db.prepare("SELECT * FROM campaign_projects WHERE campaign_project_id = ?").get(cleanId(projectId));
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Campaign project");
+  return publicCampaignProject(row, options);
+}
+
+function createCampaignProjectScene(projectId, input, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const projectRow = getCampaignProjectRow(projectId);
+  if (!projectRow) throw requestError("Campaign project not found", 404);
+  if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+  const scene = db.transaction(() => {
+    const now = nowIso();
+    const sceneInput = normalizeSceneForStorage(input, {
+      scene_order: nextCampaignProjectSceneOrder(projectRow.campaign_project_id)
+    });
+    const inserted = insertCampaignProjectScene(projectRow.campaign_project_id, projectRow, sceneInput, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, inserted.campaign_project_scene_id, "scene.created", "admin", actor.actor_id || "admin", {
+      scene_order: inserted.scene_order
+    }, now);
+    touchCampaignProjectDraft(projectRow.campaign_project_id, now);
+    return inserted;
+  })();
+  return scene;
+}
+
+function updateCampaignProjectScene(projectId, sceneId, input, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const scene = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const existing = getCampaignProjectSceneRow(sceneId);
+    if (!existing || cleanId(existing.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+      throw requestError("Campaign project scene not found", 404);
+    }
+    if (existing.status === "deleted") throw requestError("Campaign project scene is deleted", 400);
+    const normalized = normalizeSceneForStorage(input, publicCampaignProjectScene(existing));
+    assertCampaignProjectSceneOrderAvailable(projectRow.campaign_project_id, normalized.scene_order, existing.campaign_project_scene_id);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE campaign_project_scenes SET
+        scene_order = ?,
+        scene_type = ?,
+        headline = ?,
+        body_text = ?,
+        visual_direction = ?,
+        cta_text = ?,
+        duration_seconds = ?,
+        asset_requirements_json = ?,
+        status = 'draft',
+        validation_status = 'draft',
+        validation_errors_json = '[]',
+        updated_at = ?
+      WHERE campaign_project_scene_id = ?
+    `).run(
+      normalized.scene_order,
+      normalized.scene_type,
+      normalized.headline,
+      normalized.body_text,
+      normalized.visual_direction,
+      normalized.cta_text,
+      normalized.duration_seconds,
+      safeJsonStringify(normalized.asset_requirements, 10000),
+      now,
+      existing.campaign_project_scene_id
+    );
+    touchCampaignProjectDraft(projectRow.campaign_project_id, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, existing.campaign_project_scene_id, "scene.updated", "admin", actor.actor_id || "admin", {
+      scene_order: normalized.scene_order
+    }, now);
+    return publicCampaignProjectScene(getCampaignProjectSceneRow(existing.campaign_project_scene_id));
+  })();
+  return scene;
+}
+
+function validateCampaignProject(projectId, input = {}, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const result = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const now = nowIso();
+    const projectErrors = validateCampaignProjectSource(projectRow);
+    const scenes = db.prepare(`
+      SELECT * FROM campaign_project_scenes
+      WHERE campaign_project_id = ?
+      ORDER BY scene_order ASC, id ASC
+    `).all(projectRow.campaign_project_id);
+    const activeScenes = scenes.filter((scene) => scene.status !== "deleted");
+    if (activeScenes.length === 0) {
+      projectErrors.push({ field: "scenes", code: "required", message: "at least one scene draft is required" });
+    }
+    const validatedScenes = [];
+    for (const sceneRow of activeScenes) {
+      const validation = validateSceneDraft(publicCampaignProjectScene(sceneRow));
+      const nextStatus = validation.valid ? "valid" : "invalid";
+      db.prepare(`
+        UPDATE campaign_project_scenes SET
+          status = ?,
+          validation_status = ?,
+          validation_errors_json = ?,
+          updated_at = ?
+        WHERE campaign_project_scene_id = ?
+      `).run(
+        nextStatus,
+        nextStatus,
+        safeJsonStringify(validation.errors, 10000),
+        now,
+        sceneRow.campaign_project_scene_id
+      );
+      validatedScenes.push(publicCampaignProjectScene(getCampaignProjectSceneRow(sceneRow.campaign_project_scene_id)));
+    }
+    const sceneErrors = validatedScenes.flatMap((scene) => scene.validation_errors.map((error) => ({
+      ...error,
+      campaign_project_scene_id: scene.campaign_project_scene_id,
+      scene_order: scene.scene_order
+    })));
+    const allErrors = [...projectErrors, ...sceneErrors];
+    const valid = allErrors.length === 0;
+    const projectStatus = valid ? "validated" : "draft";
+    const validationStatus = valid ? "valid" : "invalid";
+    db.prepare(`
+      UPDATE campaign_projects SET
+        status = ?,
+        validation_status = ?,
+        validation_errors_json = ?,
+        updated_at = ?
+      WHERE campaign_project_id = ?
+    `).run(
+      projectStatus,
+      validationStatus,
+      safeJsonStringify(projectErrors, 10000),
+      now,
+      projectRow.campaign_project_id
+    );
+    recordCampaignProjectEvent(projectRow.campaign_project_id, "", "project.validated", "admin", actor.actor_id || "admin", {
+      valid,
+      error_count: allErrors.length,
+      scene_count: activeScenes.length,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return {
+      valid,
+      validation_errors: allErrors,
+      campaign_project: getCampaignProject(projectRow.campaign_project_id, null, { includeScenes: true, includeEvents: true })
+    };
+  })();
+  return result;
+}
+
+function softDeleteCampaignProject(projectId, actor = {}) {
+  const project = db.transaction(() => {
+    const existing = getCampaignProjectRow(projectId);
+    if (!existing) throw requestError("Campaign project not found", 404);
+    if (existing.status === "deleted") return publicCampaignProject(existing, { includeScenes: true, includeEvents: true });
+    const now = nowIso();
+    db.prepare(`
+      UPDATE campaign_projects SET
+        status = 'deleted',
+        deleted_at = ?,
+        updated_at = ?
+      WHERE campaign_project_id = ?
+    `).run(now, now, existing.campaign_project_id);
+    recordCampaignProjectEvent(existing.campaign_project_id, "", "project.deleted", "admin", actor.actor_id || "admin", {}, now);
+    return getCampaignProject(existing.campaign_project_id, null, { includeScenes: true, includeEvents: true });
+  })();
+  return project;
+}
+
+function softDeleteCampaignProjectScene(projectId, sceneId, actor = {}) {
+  const scene = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    const existing = getCampaignProjectSceneRow(sceneId);
+    if (!existing || cleanId(existing.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+      throw requestError("Campaign project scene not found", 404);
+    }
+    if (existing.status === "deleted") return publicCampaignProjectScene(existing);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE campaign_project_scenes SET
+        status = 'deleted',
+        validation_status = 'deleted',
+        deleted_at = ?,
+        updated_at = ?
+      WHERE campaign_project_scene_id = ?
+    `).run(now, now, existing.campaign_project_scene_id);
+    touchCampaignProjectDraft(projectRow.campaign_project_id, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, existing.campaign_project_scene_id, "scene.deleted", "admin", actor.actor_id || "admin", {}, now);
+    return publicCampaignProjectScene(getCampaignProjectSceneRow(existing.campaign_project_scene_id));
+  })();
+  return scene;
+}
+
+function getCampaignBrief(briefId) {
+  const row = db.prepare("SELECT * FROM campaign_briefs WHERE campaign_brief_id = ?").get(cleanId(briefId));
+  return row ? publicCampaignBrief(row) : null;
+}
+
+function getCampaignProjectRow(projectId) {
+  return db.prepare("SELECT * FROM campaign_projects WHERE campaign_project_id = ?").get(cleanId(projectId));
+}
+
+function getCampaignProjectSceneRow(sceneId) {
+  return db.prepare("SELECT * FROM campaign_project_scenes WHERE campaign_project_scene_id = ?").get(cleanId(sceneId));
+}
+
+function insertCampaignProjectScene(projectId, scope, input, createdAt = nowIso()) {
+  const normalized = normalizeSceneForStorage(input, {});
+  assertCampaignProjectSceneOrderAvailable(projectId, normalized.scene_order);
+  const sceneId = cleanId(input.campaign_project_scene_id || input.campaignProjectSceneId) ||
+    nextEntityId("cps", `${projectId}-${normalized.scene_order}`);
+  db.prepare(`
+    INSERT INTO campaign_project_scenes (
+      campaign_project_scene_id, campaign_project_id, tenant_id, store_id, screen_group_id,
+      scene_order, scene_type, headline, body_text, visual_direction, cta_text,
+      duration_seconds, asset_requirements_json, status, validation_status,
+      validation_errors_json, deleted_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'draft', '[]', NULL, ?, ?)
+  `).run(
+    sceneId,
+    cleanId(projectId),
+    cleanId(scope.tenant_id),
+    cleanId(scope.store_id),
+    cleanId(scope.screen_group_id),
+    normalized.scene_order,
+    normalized.scene_type,
+    normalized.headline,
+    normalized.body_text,
+    normalized.visual_direction,
+    normalized.cta_text,
+    normalized.duration_seconds,
+    safeJsonStringify(normalized.asset_requirements, 10000),
+    createdAt,
+    createdAt
+  );
+  return publicCampaignProjectScene(getCampaignProjectSceneRow(sceneId));
+}
+
+function normalizeCampaignProjectSceneInputs(scenes) {
+  if (scenes === undefined || scenes === null || scenes === "") return [];
+  if (!Array.isArray(scenes)) throw requestError("scenes must be an array", 400);
+  return scenes.map((scene, index) => normalizeSceneForStorage(scene, { scene_order: index + 1 }));
+}
+
+function normalizeSceneForStorage(input, defaults = {}) {
+  try {
+    const scene = normalizeSceneDraftInput(input, defaults);
+    if (!scene.scene_order) scene.scene_order = defaults.scene_order || 1;
+    if (!CAMPAIGN_PROJECT_SCENE_STATUS.has(scene.validation_status)) scene.validation_status = "draft";
+    return scene;
+  } catch (error) {
+    throw requestError(error.message || "Scene draft is invalid", 400);
+  }
+}
+
+function nextCampaignProjectSceneOrder(projectId) {
+  const row = db.prepare(`
+    SELECT MAX(scene_order) AS max_scene_order
+    FROM campaign_project_scenes
+    WHERE campaign_project_id = ?
+  `).get(cleanId(projectId));
+  return Math.max(0, asInteger(row?.max_scene_order) || 0) + 1;
+}
+
+function assertCampaignProjectSceneOrderAvailable(projectId, sceneOrder, excludeSceneId = "") {
+  if (!Number.isSafeInteger(sceneOrder) || sceneOrder < 1) {
+    throw requestError("scene_order must be a positive integer", 400);
+  }
+  const existing = db.prepare(`
+    SELECT campaign_project_scene_id, status
+    FROM campaign_project_scenes
+    WHERE campaign_project_id = ?
+      AND scene_order = ?
+      AND (? = '' OR campaign_project_scene_id != ?)
+    LIMIT 1
+  `).get(cleanId(projectId), sceneOrder, cleanId(excludeSceneId), cleanId(excludeSceneId));
+  if (existing) {
+    throw requestError("scene_order is already used by this campaign project and cannot be reused after soft delete", 409);
+  }
+}
+
+function normalizeCampaignBriefForProject(input, defaults = {}) {
+  let brief;
+  try {
+    brief = normalizeCampaignBriefInput(input, defaults);
+  } catch (error) {
+    throw requestError(error.message || "Campaign brief input is invalid", 400);
+  }
+  for (const field of ["objective", "target_audience", "store_context", "offer_or_message", "cta"]) {
+    if (!cleanString(brief[field])) throw requestError(`${field} is required`, 400);
+  }
+  return brief;
+}
+
+function briefDefaultsFromProposal(proposal, brief = {}, actor = {}) {
+  const briefPayload = brief?.brief || {};
+  return {
+    objective: proposal.objective || briefPayload.objective,
+    target_audience: proposal.target_audience || briefPayload.target_audience,
+    store_context: briefPayload.store_context || `context_snapshot:${proposal.context_snapshot_id}`,
+    offer_or_message: briefPayload.offer_or_message || proposal.expected_effect || proposal.title,
+    cta: briefPayload.cta || proposal.qr_flow || "QRから詳細を確認",
+    success_metrics: briefPayload.success_metrics || ["play_count", "qr_scan_count", "counter_order_count"],
+    constraints: briefPayload.constraints || proposal.required_assets || [],
+    source_proposal_id: proposal.campaign_proposal_id,
+    source_context_snapshot_id: proposal.context_snapshot_id,
+    created_by_user_id: briefPayload.created_by_user_id || actor.actor_id || proposal.created_by_user_id || "admin"
+  };
+}
+
+function validateCampaignProjectSource(projectRow) {
+  const errors = [];
+  if (projectRow.source_type && !CAMPAIGN_PROJECT_SOURCE_TYPE.has(projectRow.source_type)) {
+    errors.push({ field: "source_type", code: "invalid", message: "project source_type is invalid" });
+  }
+  if (projectRow.source_proposal_id) {
+    const proposal = getCampaignProposal(projectRow.source_proposal_id);
+    if (!proposal) {
+      errors.push({ field: "source_proposal_id", code: "missing", message: "source proposal was not found" });
+    } else {
+      if (proposal.status !== "selected") {
+        errors.push({ field: "source_proposal_id", code: "non_selected_proposal", message: "source proposal must be selected" });
+      }
+      collectScopeMismatchErrors(errors, projectRow, proposal, "source_proposal");
+    }
+  }
+  if (projectRow.campaign_brief_id) {
+    const brief = getCampaignBrief(projectRow.campaign_brief_id);
+    if (!brief) {
+      errors.push({ field: "campaign_brief_id", code: "missing", message: "campaign brief was not found" });
+    } else {
+      collectScopeMismatchErrors(errors, projectRow, brief, "campaign_brief");
+    }
+  }
+  const sceneScopeRows = db.prepare(`
+    SELECT campaign_project_scene_id, tenant_id, store_id, screen_group_id
+    FROM campaign_project_scenes
+    WHERE campaign_project_id = ?
+      AND status != 'deleted'
+  `).all(projectRow.campaign_project_id);
+  for (const scene of sceneScopeRows) {
+    collectScopeMismatchErrors(errors, projectRow, scene, `scene:${scene.campaign_project_scene_id}`);
+  }
+  return errors;
+}
+
+function collectScopeMismatchErrors(errors, projectRow, source, label) {
+  for (const field of ["tenant_id", "store_id", "screen_group_id"]) {
+    if (cleanId(projectRow[field]) !== cleanId(source[field])) {
+      errors.push({
+        field,
+        code: "scope_mismatch",
+        message: `${label} ${field} does not match project scope`
+      });
+    }
+  }
+}
+
+function assertCampaignProjectInputScope(input = {}, source, sourceName) {
+  const hasScope = Boolean(input.tenant_id || input.tenantId || input.store_id || input.storeId || input.screen_group_id || input.screenGroupId);
+  if (!hasScope) return;
+  const scope = normalizeCampaignScope(input, { requireStore: false, allowEmptyTenant: true });
+  if (scope.tenant_id && scope.tenant_id !== cleanId(source.tenant_id)) throw requestError(`${sourceName} is outside tenant scope`, 403);
+  if (scope.store_id && scope.store_id !== cleanId(source.store_id)) throw requestError(`${sourceName} is outside store scope`, 403);
+  if (scope.screen_group_id && scope.screen_group_id !== cleanId(source.screen_group_id)) throw requestError(`${sourceName} is outside screen group scope`, 403);
+}
+
+function normalizeCampaignProjectScopeQuery(query = {}) {
+  return normalizeCampaignScope(query, { requireStore: false, allowEmptyTenant: true });
+}
+
+function touchCampaignProjectDraft(projectId, updatedAt = nowIso()) {
+  db.prepare(`
+    UPDATE campaign_projects SET
+      status = CASE WHEN status = 'validated' THEN 'draft' ELSE status END,
+      validation_status = 'draft',
+      validation_errors_json = '[]',
+      updated_at = ?
+    WHERE campaign_project_id = ?
+      AND status != 'deleted'
+  `).run(updatedAt, cleanId(projectId));
+}
+
+function recordCampaignProjectEvent(projectId, sceneId, action, actorType, actorId, metadata = {}, createdAt = nowIso()) {
+  const project = getCampaignProjectRow(projectId);
+  if (!project) throw requestError("Campaign project not found", 404);
+  const eventId = nextEntityId("cge", `${projectId}-${action}`);
+  db.prepare(`
+    INSERT INTO campaign_project_events (
+      campaign_project_event_id, campaign_project_id, campaign_project_scene_id,
+      tenant_id, store_id, screen_group_id, action, actor_type, actor_id,
+      metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    eventId,
+    project.campaign_project_id,
+    cleanId(sceneId),
+    project.tenant_id,
+    project.store_id,
+    project.screen_group_id,
+    cleanString(action).slice(0, 120),
+    cleanString(actorType || "admin").slice(0, 80),
+    cleanString(actorId).slice(0, 120),
+    safeJsonStringify(metadata || {}, 10000),
+    createdAt
+  );
+  return eventId;
+}
+
+function listCampaignProjectEvents(projectId) {
+  return db.prepare(`
+    SELECT * FROM campaign_project_events
+    WHERE campaign_project_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 100
+  `).all(cleanId(projectId)).map(publicCampaignProjectEvent);
+}
+
+function listCampaignProjectScenes(projectId, options = {}) {
+  const includeDeleted = Boolean(options.includeDeleted);
+  return db.prepare(`
+    SELECT * FROM campaign_project_scenes
+    WHERE campaign_project_id = ?
+      AND (? = 1 OR status != 'deleted')
+    ORDER BY scene_order ASC, id ASC
+  `).all(cleanId(projectId), includeDeleted ? 1 : 0).map(publicCampaignProjectScene);
+}
+
+function assertCampaignGeneratorInput(input) {
+  try {
+    assertNoOutOfScopeCampaignGeneratorInput(input);
+  } catch (error) {
+    throw requestError(error.message || "Campaign Generator input is out of scope", 400);
+  }
+}
+
 function publicCustomerContextItem(row) {
   return {
     customer_context_item_id: cleanId(row.customer_context_item_id),
@@ -7034,6 +7837,86 @@ function publicCampaignBrief(row) {
     brief: parseJson(row.brief_json || "{}", {}),
     created_at: cleanString(row.created_at),
     updated_at: cleanString(row.updated_at)
+  };
+}
+
+function publicCampaignProject(row, options = {}) {
+  const project = {
+    campaign_project_id: cleanId(row.campaign_project_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_brief_id: cleanId(row.campaign_brief_id),
+    source_type: cleanString(row.source_type),
+    source_proposal_id: cleanId(row.source_proposal_id),
+    source_context_snapshot_id: cleanId(row.source_context_snapshot_id),
+    title: cleanString(row.title),
+    objective: cleanString(row.objective),
+    target_audience: cleanString(row.target_audience),
+    store_context: cleanString(row.store_context),
+    offer_or_message: cleanString(row.offer_or_message),
+    cta: cleanString(row.cta),
+    success_metrics: parseJson(row.success_metrics_json || "[]", []),
+    constraints: parseJson(row.constraints_json || "[]", []),
+    campaign_brief: parseJson(row.campaign_brief_json || "{}", {}),
+    status: cleanString(row.status),
+    validation_status: cleanString(row.validation_status),
+    validation_errors: parseJson(row.validation_errors_json || "[]", []),
+    created_by_user_id: cleanString(row.created_by_user_id),
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    no_external_ai: true,
+    no_media_generation: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  };
+  if (options.includeScenes) {
+    project.scenes = listCampaignProjectScenes(project.campaign_project_id, { includeDeleted: options.includeDeletedScenes });
+  }
+  if (options.includeEvents) {
+    project.events = listCampaignProjectEvents(project.campaign_project_id);
+  }
+  return project;
+}
+
+function publicCampaignProjectScene(row) {
+  return {
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    scene_order: asInteger(row.scene_order) || 0,
+    scene_type: cleanString(row.scene_type),
+    headline: cleanString(row.headline),
+    body_text: cleanString(row.body_text),
+    visual_direction: cleanString(row.visual_direction),
+    cta_text: cleanString(row.cta_text),
+    duration_seconds: asInteger(row.duration_seconds) || 0,
+    asset_requirements: parseJson(row.asset_requirements_json || "[]", []),
+    status: cleanString(row.status),
+    validation_status: cleanString(row.validation_status),
+    validation_errors: parseJson(row.validation_errors_json || "[]", []),
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function publicCampaignProjectEvent(row) {
+  return {
+    campaign_project_event_id: cleanId(row.campaign_project_event_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    action: cleanString(row.action),
+    actor_type: cleanString(row.actor_type),
+    actor_id: cleanString(row.actor_id),
+    metadata: parseJson(row.metadata_json || "{}", {}),
+    created_at: cleanString(row.created_at)
   };
 }
 

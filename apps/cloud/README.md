@@ -162,6 +162,25 @@ No customer/admin download API is exposed in this slice. The stored file path is
 not returned in API responses or context snapshots; snapshots include only
 source asset IDs, usage notes, processing status, and `external_ai_used=false`.
 
+## Campaign Generator Foundation
+
+The first #146 slice turns normalized CampaignBrief inputs into editable
+CampaignProject and Scene draft records. It supports project creation from a
+selected campaign proposal, an existing campaign brief, or admin/operator free
+input.
+
+Project status is one of `draft`, `validated`, `archived`, or `deleted`. Scene
+status is one of `draft`, `valid`, `invalid`, or `deleted`. Deletes are soft
+deletes.
+
+Scene validation is deterministic and rejects missing required scene fields,
+`duration_seconds <= 0`, missing CTA text, guaranteed outcome or definitive
+performance claims, direct PII in scene text, non-selected proposal sources, and
+tenant/store/screen-group scope mismatches.
+
+This foundation slice does not call external AI, does not generate media, does
+not render, does not create `content_manifest` rows, and does not publish.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
@@ -193,6 +212,7 @@ npm run check
 npm run smoke:counter-order-ux
 npm run smoke:customer-reporting-access
 npm run smoke:ai-campaign-proposals
+npm run smoke:campaign-generator-foundation
 npm audit --audit-level=moderate
 ```
 
