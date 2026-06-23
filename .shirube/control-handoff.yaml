@@ -1,0 +1,131 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-SHIRUBE-V3-REPORT-ONLY-001
+parent_ssot: https://github.com/watchout/ai-dev-framework/issues/458
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: user-request-2026-06-23-shirube-v3-report-only-pilot
+premise_confirmation_ref: user-request-2026-06-23-shirube-v3-report-only-pilot
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/pulls
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - report-only PR evidence for Rapid/Lite pilot checks
+    - machine-readable handoff/adoption/lifecycle artifacts under .shirube
+    - advisory detection for deterministic-control policy drift
+  shirube_does_not_own:
+    - existing Misell Gate 0 required checks
+    - branch protection or required-check configuration
+    - security/CEO approval labels and protected authorization decisions
+    - runtime product behavior, DB migrations, device operations, deployment, or release decisions
+
+cell:
+  CELL-ID: CELL-MISELL-SHIRUBE-V3-REPORT-ONLY-001
+  cell_type: scaffold
+  risk_class: R1
+  goal: Add Shirube V3 Rapid/Lite report-only pilot evidence without replacing Misell Gate 0.
+  non_scope:
+    - required check activation
+    - branch protection or ruleset changes
+    - production or deployment changes
+    - runtime product behavior changes
+    - DB migrations
+    - external write operations outside GitHub PR comments/artifacts
+    - security/CEO gate replacement
+  allowed_paths:
+    - .github/workflows/shirube-rapid-lite-gates-report.yml
+    - .github/pull_request_template.md
+    - .gitignore
+    - .shirube/**
+    - scripts/shirube/**
+    - docs/README.md
+    - docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+    - docs/94_SHIRUBE_V3_DEVELOPMENT_AND_AUDIT_FLOW.md
+    - docs/95_SHIRUBE_PARTIAL_ADOPTION_GUARD.md
+    - README.md
+    - package.json
+  forbidden_paths:
+    - apps/**
+    - deploy/**
+    - .env
+    - .env.*
+    - secrets/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+  protected_surfaces:
+    - report_only_workflow
+  stop_conditions:
+    - any existing Gate 0 job is modified or removed
+    - branch protection or required checks are changed
+    - Shirube workflow exits nonzero for BLOCKED findings
+    - product runtime files under apps are changed
+    - security/CEO gate authority is weakened
+  acceptance_criteria:
+    - Rapid/Lite workflow runs on pull_request only
+    - workflow always exits zero in report-only pilot mode
+    - workflow posts or updates one PR comment with Shirube summary
+    - workflow uploads JSON artifacts for auditability
+    - docs explain that existing Gate 0 and GitHub audit remain authoritative
+    - partial multi-repo adoption is explicitly classified and bounded by Gate Pack Bridge rules
+
+implementation_boundary:
+  summary: Vendor the current Rapid/Lite report scripts, add Misell-specific .shirube artifacts, and add a non-blocking PR workflow.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  required_commands:
+    - node scripts/shirube/run-rapid-lite-report.mjs --result-dir .shirube-rapid-lite --changed-files .shirube-rapid-lite/changed-files.txt --pr-body .shirube-rapid-lite/pr-body.md --diff-root . --format json
+    - git diff --check
+  required_evidence:
+    - PR_head_SHA injected by GitHub workflow runtime handoff
+    - changed_files collected by GitHub workflow
+    - validation_commands listed in this handoff
+    - validation_results in PR body or audit comment
+    - owner_decision remains GitHub human review, not Shirube automation
+  acceptance_tests:
+    - report-only workflow is not included in Gate 0 needs
+    - report-only workflow final step exits zero
+    - .shirube artifacts contain no pending placeholders
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: .shirube/control-handoff.yaml

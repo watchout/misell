@@ -1,0 +1,47 @@
+schema_version: shirube-existing-state-scan/v1
+scan_id: EXISTING-STATE-MISELL-SHIRUBE-V3-RAPID-LITE-001
+repo: watchout/misell
+observed_at: 2026-06-23T06:07:39Z
+specs:
+  - path: docs/47_ARCHITECTURE_BOUNDARIES_AND_MVP_GATES.md
+    status: active
+    authority: input_only
+  - path: docs/83_CLOUD_LOCAL_BACKUP_AND_ROLLBACK_SPEC.md
+    status: active
+    authority: input_only
+  - path: docs/84_DEVICE_REMOTE_OPERATIONS_AND_RECOVERY_SPEC.md
+    status: active
+    authority: input_only
+  - path: docs/91_CANONICAL_DOMAIN_VOCABULARY_ADR.md
+    status: active
+    authority: input_only
+  - path: docs/92_DETERMINISTIC_CONTROL_AND_DATA_POLICY_ADR.md
+    status: active
+    authority: input_only
+implementation:
+  - path: apps/cloud/**
+    status: active
+  - path: apps/player/**
+    status: active
+  - path: scripts/ci/**
+    status: active
+  - path: .github/workflows/ci.yml
+    status: active
+tests:
+  - path: apps/cloud/scripts/smoke-*.mjs
+    status: active
+  - path: apps/player/scripts/smoke-*.js
+    status: active
+  - path: tests/e2e/**
+    status: active
+  - path: scripts/ci/*.test.js
+    status: active
+legacy_sources:
+  - path: README.md
+    status: active
+    authority: input_only
+known_drift: []
+unsafe_changes: []
+llm_truth_claims: []
+unknowns:
+  - Shirube V3 strict enforcement graduation remains upstream work and is intentionally out of scope for this pilot.

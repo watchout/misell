@@ -1,0 +1,220 @@
+schema_version: shirube-repo-spec/v1
+repo_id: watchout/misell
+canonical_core: watchout/misell@dcad933ca7f4a17458a0987483c3c23082a1bb19
+purpose: >
+  Misell is a connected signage, local player, Cloud management, reporting,
+  customer context, campaign proposal, and campaign generator product. This
+  repository contains the product code, smoke tests, documentation, and GitHub
+  CI used to develop the MVP.
+non_goals:
+  - Shirube must not replace Misell Gate 0 during the report-only pilot.
+  - Shirube must not decide merge, security, CEO approval, publish, billing, deletion, RBAC, or deployment outcomes.
+  - Shirube must not activate branch protection, required checks, production deployment, external runners, or auto-merge.
+scope:
+  - report-only governance evidence
+  - Rapid/Lite handoff and lifecycle artifacts
+  - advisory detection of deterministic-control policy drift
+design_principles:
+  - Existing Misell Gate 0 remains authoritative for mechanical CI.
+  - GitHub audit comments remain authoritative for semantic review.
+  - Security and CEO approval labels remain authoritative for protected routes.
+  - LLM output is draft or evidence only; deterministic code and human authority control decisions.
+  - Business data uses soft delete by default unless a bounded retention/purge exception is documented.
+  - Shared helpers should own validation, scope checks, state transitions, token/file handling, audit writes, and config parsing.
+  - Variable business values should live in DB, env, or centralized config/contract helpers.
+development_flow: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+required_gates:
+  - repo_spec
+  - existing_gate_0
+  - github_structured_audit
+operating_model:
+  readiness:
+    purpose: Confirm the repo premise and report-only adoption state.
+    gates: [repo_spec, adoption_intake]
+    report_only: true
+    stop_condition: Report-only findings are advisory until owner-approved graduation.
+  dev_loop:
+    purpose: Surface scope drift, missing evidence, and policy warnings on PRs.
+    gates: [rapid_lite_gate_contract, design_rules, lifecycle]
+    report_only: true
+    stop_condition: Do not continue if a human audit or existing Gate 0 blocks the PR.
+  change_flow:
+    purpose: Keep Shirube changes scoped to evidence and detection until pilot graduation.
+    gates: [repo_spec, control_handoff]
+    report_only: true
+    stop_condition: Required-check activation, branch protection, or runtime behavior changes are out of scope.
+  phase_control:
+    purpose: Track pilot lifecycle without blocking merges.
+    state_ref: .shirube/lifecycle-state.yaml
+    transition_ref: null
+    report_only: true
+gate_catalog:
+  repo_spec:
+    purpose: Validate repository premise and authority boundaries.
+    script: scripts/shirube/check-repo-spec.mjs
+    responsible_role: repo_owner
+    required_evidence:
+      - .shirube/repo-spec.yaml
+  rapid_lite_gate_contract:
+    purpose: Validate Rapid/Lite control handoff, diff scope, and evidence shape.
+    script: scripts/shirube/check-gate-contract.mjs
+    responsible_role: implementation_owner
+    required_evidence:
+      - .shirube/control-handoff.yaml
+  design_rules:
+    purpose: Detect deterministic-control policy drift.
+    script: scripts/shirube/check-design-rules.mjs
+    responsible_role: implementation_owner
+    required_evidence:
+      - .shirube/design-rule-packs/shirube-default-design-rules.yaml
+required_evidence:
+  repo_spec:
+    - .shirube/repo-spec.yaml
+  planning:
+    - .shirube/adoption-intake.yaml
+    - .shirube/existing-state-scan.yaml
+    - .shirube/control-handoff.yaml
+  merge:
+    - exact head evidence from GitHub PR
+    - existing Gate 0 success
+    - structured audit comment when requested
+risk_tier_policy:
+  R0:
+    gates: [existing Gate 0]
+    merge_authority: owner merge only
+  R1:
+    gates: [existing Gate 0, Shirube report-only evidence]
+    merge_authority: owner merge
+  R2:
+    gates: [existing Gate 0, semantic audit, Shirube report-only evidence]
+    merge_authority: owner merge
+  R3:
+    gates: [existing Gate 0, semantic audit, security or CEO approval when labeled]
+    merge_authority: protected human authority
+  route:ceo-approval:
+    gates: [CEO ratification, protected governance review]
+    merge_authority: CEO-ratified route only
+waiver_policy:
+  allowed: true
+  requirements:
+    - waiver must target a specific Cell and check
+    - waiver must include reason, compensating controls, approver, expiry, and follow-up issue
+post_merge_policy:
+  required: true
+  no_done_without_post_merge_evidence: true
+remediation_contract:
+  applies_to: [WARN, BLOCK]
+  fields:
+    - verdict
+    - current_phase
+    - blocked_reason
+    - missing_prerequisites
+    - required_next_actions
+    - responsible_role
+    - allowed_next_phases
+    - forbidden_next_phases
+    - required_evidence
+    - observed_evidence
+    - reference_docs
+audit_assignment:
+  schema_version: shirube-audit-assignment/v1
+  source_ref: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+  author_must_not_audit_own_artifact: true
+  roles:
+    spec:
+      responsibility: dispatch_author_only
+      may_audit: false
+    arc:
+      responsibility: design_input_and_encode_only
+      may_audit: false
+    codex_audit:
+      responsibility: formal_audit_gate
+      may_audit: true
+    bridge:
+      responsibility: machine_admissibility_gate
+    cto:
+      responsibility: r3_r4_governance_authority
+    ceo:
+      responsibility: route_ceo_approval_and_rps_confirmation
+confirmation_evidence:
+  rps_readiness:
+    required: true
+    authority_role: CEO
+    authority_actor: watchout
+    canonical_artifact_path: .shirube/repo-spec.yaml
+    accepted_sinks:
+      - repository_file
+      - github_issue_comment
+      - github_pr_comment
+    github_marker: shirube:rps-confirmation/v1
+    verdict: CONFIRMED
+    decision_ref: user-request-2026-06-23-shirube-v3-report-only-pilot
+roles:
+  spec: repo_owner
+  arc: architecture_owner
+  design_reviewer: codex_audit
+  impl_runner: codex
+  impl_reviewer: codex_audit
+  release_owner: repo_owner
+codeowners_ref: null
+audit_responsibilities: >
+  Shirube report-only output is advisory. Formal merge/audit readiness remains
+  GitHub PR review, structured audit comments, and existing Gate 0.
+shared_terminology:
+  Cell: Bounded implementation unit.
+  Tenant: Top-level customer/account boundary.
+  Store: Physical or operational location.
+  ScreenGroup: Grouping of screen slots and devices.
+  Device: Local player endpoint.
+security_assumptions: >
+  Shirube does not grant permissions, execute remote device commands, mutate
+  production systems, read secrets, or approve protected security changes.
+privacy_assumptions: >
+  Shirube report-only checks operate on repository files and PR metadata. They
+  do not inspect production customer data or backup artifacts.
+data_boundaries:
+  - repository files and PR metadata only
+  - no production database, backup, or customer file access
+dependency_boundaries:
+  - vendored Rapid/Lite scripts are locked to watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+  - GitHub Actions comments/artifacts are the only external write in the pilot
+forbidden_actions:
+  - activate Shirube as a required check
+  - change branch protection or rulesets
+  - replace existing Gate 0
+  - weaken security/CEO gates
+  - perform runtime product, DB, deployment, or device operation changes
+ai_usage_classification: assisted
+soc2_categories:
+  - Security
+  - Confidentiality
+  - Processing Integrity
+iso42001_applicability: true
+agent_permission_boundary:
+  allowed_paths:
+    - .shirube/**
+    - scripts/shirube/**
+    - .github/workflows/shirube-rapid-lite-gates-report.yml
+    - docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+  allowed_commands:
+    - git diff --check
+    - node scripts/shirube/run-rapid-lite-report.mjs
+    - npm run shirube:rapid-lite-report
+  forbidden_commands:
+    - git push --force
+    - gh api repos/*/branches/*/protection
+    - gh api repos/*/rulesets
+  allowed_mcp_tools: []
+  approval_required_mcp_tools: []
+  forbidden_mcp_tools: []
+remediation:
+  repo-spec:
+    on_fail: Update .shirube/repo-spec.yaml or keep finding as report-only pilot evidence.
+    doc_ref: docs/93_SHIRUBE_V3_REPORT_ONLY_PILOT.md

@@ -9,6 +9,7 @@ playwright-report/
 evidence/
 apps/player/evidence/
 apps/cloud/evidence/
+.shirube-rapid-lite/
 
 logs/*.jsonl
 logs/*.log
