@@ -1,0 +1,134 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: misell-lite
+control_handoff_id: CH-MISELL-147-SCENE-EDITOR-FIRST-SLICE
+parent_ssot: https://github.com/watchout/misell/issues/147
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4776734660
+premise_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4766080369
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/147
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - Rapid/Lite report-only evidence for this PR
+    - diff scope and handoff consistency checks
+  shirube_does_not_own:
+    - existing Misell Gate 0 required checks
+    - branch protection or required-check configuration
+    - security/CEO approval labels and protected authorization decisions
+    - production deployment or runtime operations
+
+cell:
+  CELL-ID: CELL-MISELL-147-SCENE-EDITOR-FIRST-SLICE
+  cell_type: integration_lite
+  risk_class: R2
+  goal: Add an internal admin Scene Editor page for existing CampaignProject scenes without publish, rendering, external AI, billing, or DB migration.
+  non_scope:
+    - DB migration or schema change
+    - new auth/RBAC model or customer editing
+    - external preview/share token
+    - external AI call or AI regeneration
+    - media generation, rendering, or MP4 export
+    - content_manifest creation
+    - publish or schedule handoff
+    - billing or credit ledger
+  allowed_paths:
+    - .shirube/control-handoffs/CH-MISELL-147-scene-editor-first-slice.yaml
+    - apps/cloud/package.json
+    - apps/cloud/server.js
+    - apps/cloud/public/admin.html
+    - apps/cloud/public/admin.js
+    - apps/cloud/public/campaign-project-editor.html
+    - apps/cloud/public/campaign-project-editor.js
+    - apps/cloud/public/campaign-project-ui.js
+    - apps/cloud/public/style.css
+    - tests/e2e/misell-ui.spec.js
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/cloud/migrations/**
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - DB migration or schema change needed
+    - new auth/RBAC behavior needed
+    - content manifest, publish, rendering, external preview, or external AI path introduced
+    - missing exact head evidence
+    - missing validation evidence
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Admin can open a dedicated editor page from a CampaignProject.
+    - Editor lists existing non-deleted scenes and keeps a 3-screen/wide preview visible.
+    - Admin can edit existing scene draft fields and save through existing scene update API.
+    - Editor can trigger existing project validation and show scene validation status/errors.
+    - E2E covers dedicated editor scene editing and preview text update.
+    - No content_manifest, publish, external AI, render, billing, or DB migration path is added.
+
+implementation_boundary:
+  summary: Use existing CampaignProject admin APIs and requireAdminAuth; add only a dedicated editor surface and E2E coverage.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - npm --prefix apps/cloud run check
+    - npm run test:e2e
+    - npm run test:ci
+  required_evidence:
+    - PR_head_SHA
+    - changed_files
+    - validation_commands
+    - validation_results
+    - owner_decision
+  acceptance_tests:
+    - dedicated editor page can save a scene edit
+    - editor preview reflects saved scene text
+    - existing Campaign Generator foundation smoke remains green through test:ci
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff

@@ -1075,6 +1075,136 @@ td small {
   padding: 10px;
 }
 
+.campaign-editor-page main {
+  display: grid;
+  gap: 16px;
+}
+
+.campaign-editor-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.campaign-editor-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.campaign-editor-summary,
+.campaign-editor-workspace,
+.campaign-editor-events {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+}
+
+.campaign-editor-summary {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.campaign-editor-summary div,
+.campaign-editor-events,
+.campaign-editor-events small {
+  display: grid;
+  gap: 6px;
+}
+
+.campaign-editor-status {
+  background: #e8f1f5;
+  border: 1px solid #b7d1df;
+  border-radius: 8px;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.campaign-editor-workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(160px, 220px) minmax(280px, 1fr) minmax(260px, 340px);
+  padding: 14px;
+}
+
+.campaign-editor-scenes,
+.campaign-editor-form,
+.campaign-editor-panel {
+  align-content: start;
+  display: grid;
+  gap: 10px;
+}
+
+.campaign-editor-scenes button {
+  align-items: start;
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  min-height: 76px;
+  text-align: left;
+}
+
+.campaign-editor-scenes button strong {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.campaign-editor-stage {
+  aspect-ratio: 16 / 5;
+  background: #111827;
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.campaign-editor-stage-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.campaign-editor-form label,
+.campaign-editor-form-head,
+.campaign-editor-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.campaign-editor-form-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.campaign-editor-form label {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.campaign-editor-form label input,
+.campaign-editor-form label select,
+.campaign-editor-form label textarea {
+  font-size: 14px;
+  font-weight: 400;
+  width: 100%;
+}
+
+.campaign-editor-actions {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.campaign-editor-events {
+  padding: 14px;
+}
+
+.campaign-editor-events h2 {
+  margin: 0;
+}
+
 .admin-context-panel {
   margin-bottom: 12px;
 }
@@ -1162,16 +1292,21 @@ pre {
 
   .campaign-preview-summary,
   .campaign-preview-workspace,
-  .campaign-preview-stage {
+  .campaign-preview-stage,
+  .campaign-editor-summary,
+  .campaign-editor-workspace,
+  .campaign-editor-stage {
     grid-template-columns: 1fr;
   }
 
-  .campaign-preview-summary {
+  .campaign-preview-summary,
+  .campaign-editor-summary {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .campaign-preview-stage {
+  .campaign-preview-stage,
+  .campaign-editor-stage {
     aspect-ratio: auto;
     min-height: 0;
   }

@@ -406,8 +406,16 @@ app.get("/admin/campaign-projects/:campaign_project_id/preview", requireAdminAut
   res.sendFile(path.join(PUBLIC_DIR, "campaign-project-preview.html"));
 });
 
+app.get("/admin/campaign-projects/:campaign_project_id/editor", requireAdminAuth, (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "campaign-project-editor.html"));
+});
+
 app.get("/campaign-project-preview.html", requireAdminAuth, (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "campaign-project-preview.html"));
+});
+
+app.get("/campaign-project-editor.html", requireAdminAuth, (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "campaign-project-editor.html"));
 });
 
 app.use(express.static(PUBLIC_DIR, { index: false }));

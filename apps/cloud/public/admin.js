@@ -121,13 +121,7 @@
     deleted: "削除済み"
   };
 
-  const CAMPAIGN_SCENE_TYPE_OPTIONS = [
-    ["intro", "導入"],
-    ["offer", "訴求"],
-    ["cta", "CTA"],
-    ["proof", "根拠"],
-    ["reminder", "再告知"]
-  ];
+  const CAMPAIGN_SCENE_TYPE_OPTIONS = window.MisellCampaignProjectUi?.sceneTypeOptions || [];
 
   const ROLLOUT_STATUS_LABELS = {
     ready: "反映済み",
@@ -1746,6 +1740,7 @@
         </td>
         <td>
           <div class="campaign-project-actions">
+            <a class="campaign-project-preview-link" href="/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/editor" target="_blank" rel="noreferrer" data-campaign-project-editor="${escapeAttr(project.campaign_project_id)}">編集</a>
             <a class="campaign-project-preview-link" href="/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview" target="_blank" rel="noreferrer" data-campaign-project-preview="${escapeAttr(project.campaign_project_id)}">プレビュー</a>
             <button class="secondary" type="button" data-campaign-project-validate="${escapeAttr(project.campaign_project_id)}">検証</button>
             <button class="danger" type="button" data-campaign-project-delete="${escapeAttr(project.campaign_project_id)}">削除</button>
