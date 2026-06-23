@@ -665,6 +665,7 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await projectFromProposal.locator("input[name='title']").fill("Browser campaign project");
   await projectFromProposal.locator("button[type='submit']").click();
   await expect(page.locator("#campaign-projects")).toContainText("Browser campaign project", { timeout: 5000 });
+  await expect(page.locator("#campaign-projects")).toContainText("project.created", { timeout: 5000 });
   let campaignProjects = await authedRequest(cloudBase, "/api/admin/campaign-projects?tenant_id=TEN-BROWSER&store_id=STO-BROWSER&screen_group_id=SG-BROWSER");
   let campaignProject = campaignProjects.json.campaign_projects.find((project) => project.title === "Browser campaign project");
   expect(campaignProject).toBeTruthy();
@@ -676,12 +677,15 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await sceneForm.locator("input[name='headline']").fill("Browser edited scene");
   await sceneForm.locator("button[type='submit']").click();
   await expect(page.locator("#campaign-projects")).toContainText("Browser edited scene", { timeout: 5000 });
+  await expect(page.locator("#campaign-projects")).toContainText("scene.updated", { timeout: 5000 });
   await page.locator(`button[data-campaign-project-validate="${campaignProjectId}"]`).click();
   await expect(page.locator("#campaign-projects")).toContainText("検証済み", { timeout: 5000 });
+  await expect(page.locator("#campaign-projects")).toContainText("project.validated", { timeout: 5000 });
   const campaignProjectDetail = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}`);
   expect(campaignProjectDetail.status, campaignProjectDetail.text).toBe(200);
   expect(campaignProjectDetail.json.campaign_project.status).toBe("validated");
   expect(campaignProjectDetail.json.campaign_project.scenes.every((scene) => scene.status === "valid")).toBeTruthy();
+  expect(campaignProjectDetail.json.campaign_project.events.some((event) => event.action === "project.validated")).toBeTruthy();
 
   action("Create and soft-delete free-input campaign project through cloud admin UI");
   const freeProjectForm = page.locator("#campaign-projects form.campaign-project-free-input");

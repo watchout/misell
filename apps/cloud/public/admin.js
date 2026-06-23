@@ -1683,6 +1683,7 @@
               <th>Project</th>
               <th>Brief</th>
               <th>Scenes</th>
+              <th>履歴</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -1714,6 +1715,7 @@
 
   function renderCampaignProjectRow(project) {
     const scenes = project.scenes || [];
+    const events = project.events || [];
     const errors = project.validation_errors || [];
     return `
       <tr>
@@ -1736,6 +1738,13 @@
           </div>
         </td>
         <td>
+          ${events.length ? `
+            <div class="campaign-project-events">
+              ${events.slice(0, 6).map(renderCampaignProjectEvent).join("")}
+            </div>
+          ` : `<small>履歴なし</small>`}
+        </td>
+        <td>
           <div class="campaign-project-actions">
             <button class="secondary" type="button" data-campaign-project-validate="${escapeAttr(project.campaign_project_id)}">検証</button>
             <button class="danger" type="button" data-campaign-project-delete="${escapeAttr(project.campaign_project_id)}">削除</button>
@@ -1743,6 +1752,17 @@
           ${errors.length ? `<div class="campaign-project-validation">${errors.map(renderValidationError).join("")}</div>` : ""}
         </td>
       </tr>
+    `;
+  }
+
+  function renderCampaignProjectEvent(event) {
+    return `
+      <small>
+        ${escapeHtml(event.action || "")}
+        ${event.campaign_project_scene_id ? `<span>${escapeHtml(event.campaign_project_scene_id)}</span>` : ""}
+        ${event.actor_id ? `<span>${escapeHtml(event.actor_id)}</span>` : ""}
+        <span>${escapeHtml(formatTime(event.created_at))}</span>
+      </small>
     `;
   }
 

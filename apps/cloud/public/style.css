@@ -921,9 +921,15 @@ td small {
 
 .campaign-project-scenes,
 .campaign-project-actions,
+.campaign-project-events,
 .campaign-project-validation {
   display: grid;
   gap: 8px;
+}
+
+.campaign-project-events small {
+  display: grid;
+  gap: 2px;
 }
 
 .campaign-project-scene {
