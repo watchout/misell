@@ -217,13 +217,24 @@ async function main() {
     }
     await expectAdminError("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}?tenant_id=${records.otherTenantId}`, null, 403, "tenant scope");
 
-    const sceneToDelete = projectFromProposal.data.campaign_project.scenes[0];
+    const sceneToDelete = projectFromProposal.data.campaign_project.scenes.reduce((highest, scene) => (
+      scene.scene_order > highest.scene_order ? scene : highest
+    ), projectFromProposal.data.campaign_project.scenes[0]);
     const deletedScene = await admin("DELETE", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}`);
     if (deletedScene.data.campaign_project_scene.status !== "deleted") throw new Error(`scene was not soft deleted: ${deletedScene.text}`);
     const afterSceneDelete = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}`);
     if (afterSceneDelete.data.campaign_project.scenes.some((scene) => scene.campaign_project_scene_id === sceneToDelete.campaign_project_scene_id)) {
       throw new Error("deleted scene should be hidden from project detail by default");
     }
+    const { scene_order: _ignoredSceneOrder, ...replacementSceneInput } = validScenes("replacement")[0];
+    const replacementScene = await admin("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes`, replacementSceneInput);
+    if (replacementScene.data.campaign_project_scene.scene_order !== sceneToDelete.scene_order + 1) {
+      throw new Error(`replacement scene should not reuse deleted scene_order: ${replacementScene.text}`);
+    }
+    await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes`, {
+      ...replacementSceneInput,
+      scene_order: sceneToDelete.scene_order
+    }, 409, "cannot be reused");
     const deletedProject = await admin("DELETE", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}`);
     if (deletedProject.data.campaign_project.status !== "deleted" || !deletedProject.data.campaign_project.deleted_at) {
       throw new Error(`project was not soft deleted: ${deletedProject.text}`);
@@ -257,6 +268,7 @@ async function main() {
       non_selected_proposal_validation_fail: true,
       tenant_store_screen_group_isolation: true,
       soft_delete: true,
+      scene_order_no_reuse_after_soft_delete: true,
       no_external_ai: true,
       no_media_generation: true,
       no_content_manifest_creation: true,

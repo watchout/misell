@@ -7305,6 +7305,7 @@ function updateCampaignProjectScene(projectId, sceneId, input, actor = {}) {
     }
     if (existing.status === "deleted") throw requestError("Campaign project scene is deleted", 400);
     const normalized = normalizeSceneForStorage(input, publicCampaignProjectScene(existing));
+    assertCampaignProjectSceneOrderAvailable(projectRow.campaign_project_id, normalized.scene_order, existing.campaign_project_scene_id);
     const now = nowIso();
     db.prepare(`
       UPDATE campaign_project_scenes SET
@@ -7477,6 +7478,7 @@ function getCampaignProjectSceneRow(sceneId) {
 
 function insertCampaignProjectScene(projectId, scope, input, createdAt = nowIso()) {
   const normalized = normalizeSceneForStorage(input, {});
+  assertCampaignProjectSceneOrderAvailable(projectId, normalized.scene_order);
   const sceneId = cleanId(input.campaign_project_scene_id || input.campaignProjectSceneId) ||
     nextEntityId("cps", `${projectId}-${normalized.scene_order}`);
   db.prepare(`
@@ -7528,9 +7530,25 @@ function nextCampaignProjectSceneOrder(projectId) {
     SELECT MAX(scene_order) AS max_scene_order
     FROM campaign_project_scenes
     WHERE campaign_project_id = ?
-      AND status != 'deleted'
   `).get(cleanId(projectId));
   return Math.max(0, asInteger(row?.max_scene_order) || 0) + 1;
+}
+
+function assertCampaignProjectSceneOrderAvailable(projectId, sceneOrder, excludeSceneId = "") {
+  if (!Number.isSafeInteger(sceneOrder) || sceneOrder < 1) {
+    throw requestError("scene_order must be a positive integer", 400);
+  }
+  const existing = db.prepare(`
+    SELECT campaign_project_scene_id, status
+    FROM campaign_project_scenes
+    WHERE campaign_project_id = ?
+      AND scene_order = ?
+      AND (? = '' OR campaign_project_scene_id != ?)
+    LIMIT 1
+  `).get(cleanId(projectId), sceneOrder, cleanId(excludeSceneId), cleanId(excludeSceneId));
+  if (existing) {
+    throw requestError("scene_order is already used by this campaign project and cannot be reused after soft delete", 409);
+  }
 }
 
 function normalizeCampaignBriefForProject(input, defaults = {}) {
