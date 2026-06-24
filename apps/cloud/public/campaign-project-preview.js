@@ -1,8 +1,10 @@
 (function () {
-  if (new URLSearchParams(window.location.search).get("editor") === "1") return;
+  const query = new URLSearchParams(window.location.search);
+  if (query.get("editor") === "1") return;
 
   const root = document.getElementById("campaign-preview-root");
   const title = document.getElementById("campaign-preview-title");
+  const isDisplayMode = query.get("display") === "1";
   const REQUIRED_SCENE_FIELDS = Object.freeze([
     ["scene_type", "種別"],
     ["headline", "見出し"],
@@ -28,6 +30,8 @@
     state.project = response.campaign_project;
     const scenes = activeScenes(state.project);
     state.selectedSceneId = scenes[0]?.campaign_project_scene_id || "";
+    state.isPlaying = isDisplayMode && scenes.length > 1;
+    document.body.classList.toggle("campaign-preview-display-mode", isDisplayMode);
     render();
   }
 
@@ -48,6 +52,15 @@
     const totalDuration = scenes.reduce((sum, scene) => sum + sceneDurationSeconds(scene), 0);
     const readiness = deriveReadiness(project, scenes);
     title.textContent = project.title || project.campaign_project_id || "Campaign Preview";
+    if (isDisplayMode) {
+      root.innerHTML = `
+        <section class="campaign-preview-display" aria-label="Campaign display preview">
+          ${selected ? renderDisplayScene(project, selected, selectedIndex, scenes.length) : `<p class="empty">プレビューできるシーンがありません。</p>`}
+        </section>
+      `;
+      schedulePlaybackTimer();
+      return;
+    }
     root.innerHTML = `
       <section class="campaign-preview-summary">
         <div>
@@ -71,6 +84,7 @@
           <button class="secondary" type="button" data-preview-pause${state.isPlaying ? "" : " disabled"}>一時停止</button>
           <button class="secondary" type="button" data-preview-restart${selected ? "" : " disabled"}>最初から</button>
           <button class="secondary" type="button" data-preview-next${selected ? "" : " disabled"}>次へ</button>
+          <a class="campaign-project-preview-link" href="${escapeHtml(displayPreviewHref(project))}" target="_blank" rel="noreferrer" data-preview-display-mode>表示モード</a>
         </div>
       </section>
       ${renderReadinessPanel(readiness)}
@@ -207,6 +221,32 @@
     `;
   }
 
+  function renderDisplayScene(project, scene, selectedIndex, sceneCount) {
+    return `
+      <div class="campaign-preview-stage campaign-preview-display-stage" data-scene-id="${escapeAttr(scene.campaign_project_scene_id)}">
+        <section class="campaign-preview-panel campaign-preview-panel-left">
+          <span>LEFT</span>
+          <strong>${escapeHtml(scene.visual_direction || project.store_context || "")}</strong>
+          ${assetRequirements(scene).map((item) => `<small>${escapeHtml(item)}</small>`).join("")}
+        </section>
+        <section class="campaign-preview-panel campaign-preview-panel-center">
+          <span>CENTER</span>
+          <h2>${escapeHtml(scene.headline || "")}</h2>
+          <p>${escapeHtml(scene.body_text || "")}</p>
+        </section>
+        <section class="campaign-preview-panel campaign-preview-panel-right">
+          <span>RIGHT</span>
+          <strong>${escapeHtml(scene.cta_text || project.cta || "")}</strong>
+          <small>${escapeHtml(String(scene.duration_seconds || 0))}秒</small>
+        </section>
+      </div>
+      <div class="campaign-preview-display-overlay">
+        <strong>${escapeHtml(project.title || "")}</strong>
+        <span>${escapeHtml(String(selectedIndex + 1))} / ${escapeHtml(String(sceneCount))}</span>
+      </div>
+    `;
+  }
+
   function renderSceneSummary(scene) {
     return `
       <article class="campaign-preview-scene-summary">
@@ -296,6 +336,10 @@
   function projectIdFromPath() {
     const match = window.location.pathname.match(/\/admin\/campaign-projects\/([^/]+)\/preview\/?$/);
     return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function displayPreviewHref(project) {
+    return `/admin/campaign-projects/${encodeURIComponent(project?.campaign_project_id || projectIdFromPath())}/preview?display=1`;
   }
 
   function escapeHtml(value) {

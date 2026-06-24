@@ -209,6 +209,14 @@ for operator review. The panel is browser-only guidance; it does not call
 mutation APIs, create `content_manifest` rows, publish content, render media,
 call AI providers, or consume credits.
 
+Preview display mode is available on the same authenticated admin preview route
+with `?display=1`. It hides operator chrome and shows the current scene in a
+full-screen signage-like layout while reusing `scene_order` and
+`duration_seconds` for browser-only run-through playback. It is still an
+internal preview and does not create an external share URL, mutate data, create
+`content_manifest` rows, publish content, render media, call AI providers, or
+consume credits.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
