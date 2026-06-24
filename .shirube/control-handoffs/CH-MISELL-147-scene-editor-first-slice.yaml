@@ -21,10 +21,11 @@ next_role: implementation
 
 rps_scope:
   shirube_owns:
-    - Rapid/Lite report-only evidence for this PR
+    - full operational gate evidence for this PR
+    - structured audit exact-head admissibility
+    - owner exact-head decision admissibility
     - diff scope and handoff consistency checks
   shirube_does_not_own:
-    - existing Misell Gate 0 required checks
     - branch protection or required-check configuration
     - security/CEO approval labels and protected authorization decisions
     - production deployment or runtime operations
@@ -76,6 +77,7 @@ cell:
     - content manifest, publish, rendering, external preview, or external AI path introduced
     - missing exact head evidence
     - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
     - owner decision missing before merge
   acceptance_criteria:
     - Admin can open a dedicated editor page from a CampaignProject.
@@ -105,11 +107,13 @@ validation:
     - npm --prefix apps/cloud run check
     - npm run test:e2e
     - npm run test:ci
+    - Shirube Full Operational Gates
   required_evidence:
     - PR_head_SHA
     - changed_files
     - validation_commands
     - validation_results
+    - structured_audit_comment
     - owner_decision
   acceptance_tests:
     - dedicated editor page can save a scene edit
