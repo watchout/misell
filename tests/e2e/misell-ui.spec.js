@@ -722,12 +722,22 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.regeneration_requested", { timeout: 5000 });
   await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.copy_regeneration_requested", { timeout: 5000 });
   await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.qr_cta_regeneration_requested", { timeout: 5000 });
+  const editorSceneCount = await campaignEditor.locator("[data-editor-scene-id]").count();
+  await campaignEditor.locator("[data-editor-duplicate-scene]").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("複製しました", { timeout: 5000 });
+  await expect(campaignEditor.locator("[data-editor-scene-id]")).toHaveCount(editorSceneCount + 1);
+  await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.duplicated", { timeout: 5000 });
+  await campaignEditor.locator("[data-editor-reorder-scene='up']").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("上へ移動しました", { timeout: 5000 });
+  await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.reordered", { timeout: 5000 });
   const campaignProjectAfterEditor = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}`);
   expect(campaignProjectAfterEditor.status, campaignProjectAfterEditor.text).toBe(200);
   expect(campaignProjectAfterEditor.json.campaign_project.scenes.some((scene) => scene.headline === "Browser editor scene")).toBeTruthy();
   expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.regeneration_requested" && event.metadata.request_status === "manual_required")).toBeTruthy();
   expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.copy_regeneration_requested" && event.metadata.no_external_ai === true)).toBeTruthy();
   expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.qr_cta_regeneration_requested" && event.metadata.no_credit_consumption === true)).toBeTruthy();
+  expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.duplicated" && event.metadata.no_publish === true)).toBeTruthy();
+  expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.reordered" && event.metadata.no_content_manifest_creation === true)).toBeTruthy();
   await campaignEditor.screenshot({ path: path.join(screenshotsDir, "cloud-campaign-project-editor.png"), fullPage: true });
   await campaignEditor.close();
 

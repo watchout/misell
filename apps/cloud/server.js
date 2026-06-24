@@ -758,6 +758,24 @@ app.patch("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_pr
   }
 });
 
+app.post("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id/reorder", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = reorderCampaignProjectScene(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id/duplicate", requireAdminAuth, (req, res, next) => {
+  try {
+    const scene = duplicateCampaignProjectScene(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, campaign_project_scene: scene });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id/regeneration-requests", requireAdminAuth, (req, res, next) => {
   try {
     const request = createCampaignProjectRegenerationRequest(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
@@ -7364,6 +7382,104 @@ function updateCampaignProjectScene(projectId, sceneId, input, actor = {}) {
     return publicCampaignProjectScene(getCampaignProjectSceneRow(existing.campaign_project_scene_id));
   })();
   return scene;
+}
+
+function reorderCampaignProjectScene(projectId, sceneId, input = {}, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const direction = cleanString(input.direction).toLowerCase();
+  if (!["up", "down"].includes(direction)) throw requestError("direction must be up or down", 400);
+  return db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const sceneRow = getCampaignProjectSceneRow(sceneId);
+    if (!sceneRow || cleanId(sceneRow.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+      throw requestError("Campaign project scene not found", 404);
+    }
+    if (sceneRow.status === "deleted") throw requestError("Campaign project scene is deleted", 400);
+    const activeScenes = db.prepare(`
+      SELECT campaign_project_scene_id, scene_order
+      FROM campaign_project_scenes
+      WHERE campaign_project_id = ?
+        AND status != 'deleted'
+      ORDER BY scene_order ASC, id ASC
+    `).all(projectRow.campaign_project_id);
+    const currentIndex = activeScenes.findIndex((scene) => scene.campaign_project_scene_id === sceneRow.campaign_project_scene_id);
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    const targetScene = activeScenes[targetIndex];
+    if (currentIndex < 0 || !targetScene) throw requestError(`scene cannot move ${direction}`, 409);
+    const now = nowIso();
+    const temporaryOrder = nextCampaignProjectSceneOrder(projectRow.campaign_project_id);
+    db.prepare(`
+      UPDATE campaign_project_scenes
+      SET scene_order = ?, updated_at = ?
+      WHERE campaign_project_scene_id = ?
+    `).run(temporaryOrder, now, sceneRow.campaign_project_scene_id);
+    db.prepare(`
+      UPDATE campaign_project_scenes
+      SET scene_order = ?, updated_at = ?
+      WHERE campaign_project_scene_id = ?
+    `).run(sceneRow.scene_order, now, targetScene.campaign_project_scene_id);
+    db.prepare(`
+      UPDATE campaign_project_scenes
+      SET scene_order = ?, updated_at = ?
+      WHERE campaign_project_scene_id = ?
+    `).run(targetScene.scene_order, now, sceneRow.campaign_project_scene_id);
+    touchCampaignProjectDraft(projectRow.campaign_project_id, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, sceneRow.campaign_project_scene_id, "scene.reordered", "admin", actor.actor_id || "admin", {
+      direction,
+      from_order: asInteger(sceneRow.scene_order) || 0,
+      to_order: asInteger(targetScene.scene_order) || 0,
+      swapped_with_scene_id: targetScene.campaign_project_scene_id,
+      swapped_with_order: asInteger(targetScene.scene_order) || 0,
+      temporary_order: temporaryOrder,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_credit_consumption: true,
+      no_external_ai: true
+    }, now);
+    return {
+      campaign_project_scene: publicCampaignProjectScene(getCampaignProjectSceneRow(sceneRow.campaign_project_scene_id)),
+      campaign_project: getCampaignProject(projectRow.campaign_project_id, null, { includeScenes: true, includeEvents: true })
+    };
+  })();
+}
+
+function duplicateCampaignProjectScene(projectId, sceneId, input = {}, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  return db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const sourceRow = getCampaignProjectSceneRow(sceneId);
+    if (!sourceRow || cleanId(sourceRow.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+      throw requestError("Campaign project scene not found", 404);
+    }
+    if (sourceRow.status === "deleted") throw requestError("Campaign project scene is deleted", 400);
+    const sourceScene = publicCampaignProjectScene(sourceRow);
+    const now = nowIso();
+    const duplicate = insertCampaignProjectScene(projectRow.campaign_project_id, projectRow, {
+      scene_order: nextCampaignProjectSceneOrder(projectRow.campaign_project_id),
+      scene_type: sourceScene.scene_type,
+      headline: sourceScene.headline,
+      body_text: sourceScene.body_text,
+      visual_direction: sourceScene.visual_direction,
+      cta_text: sourceScene.cta_text,
+      duration_seconds: sourceScene.duration_seconds,
+      asset_requirements: sourceScene.asset_requirements
+    }, now);
+    touchCampaignProjectDraft(projectRow.campaign_project_id, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, duplicate.campaign_project_scene_id, "scene.duplicated", "admin", actor.actor_id || "admin", {
+      source_scene_id: sourceScene.campaign_project_scene_id,
+      source_scene_order: asInteger(sourceScene.scene_order) || 0,
+      new_scene_order: asInteger(duplicate.scene_order) || 0,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_credit_consumption: true,
+      no_external_ai: true
+    }, now);
+    return duplicate;
+  })();
 }
 
 function createCampaignProjectRegenerationRequest(projectId, sceneId, input = {}, actor = {}) {

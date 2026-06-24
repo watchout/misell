@@ -129,6 +129,46 @@ async function main() {
     if (!validateFree.data.valid || validateFree.data.campaign_project.status !== "validated") {
       throw new Error(`free input project did not validate: ${validateFree.text}`);
     }
+    const reorderSourceScene = validateFree.data.campaign_project.scenes.find((scene) => scene.scene_order === 2);
+    const reorderSwapScene = validateFree.data.campaign_project.scenes.find((scene) => scene.scene_order === 1);
+    const reorderUp = await admin("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${reorderSourceScene.campaign_project_scene_id}/reorder`, {
+      direction: "up"
+    });
+    if (reorderUp.data.campaign_project_scene.scene_order !== 1) {
+      throw new Error(`scene did not move up: ${reorderUp.text}`);
+    }
+    if (reorderUp.data.campaign_project.status !== "draft" || reorderUp.data.campaign_project.validation_status !== "draft") {
+      throw new Error(`reorder should return project to draft state: ${reorderUp.text}`);
+    }
+    const reorderUpScenes = reorderUp.data.campaign_project.scenes;
+    if (reorderUpScenes.find((scene) => scene.campaign_project_scene_id === reorderSwapScene.campaign_project_scene_id)?.scene_order !== 2) {
+      throw new Error(`swap scene did not move down: ${reorderUp.text}`);
+    }
+    const reorderEvent = reorderUp.data.campaign_project.events.find((event) => event.action === "scene.reordered");
+    if (!reorderEvent || reorderEvent.metadata?.direction !== "up" || reorderEvent.metadata?.no_content_manifest_creation !== true) {
+      throw new Error(`reorder event missing or unsafe: ${reorderUp.text}`);
+    }
+    const reorderDown = await admin("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${reorderSourceScene.campaign_project_scene_id}/reorder`, {
+      direction: "down"
+    });
+    if (reorderDown.data.campaign_project_scene.scene_order !== 2) {
+      throw new Error(`scene did not move down: ${reorderDown.text}`);
+    }
+    await expectAdminError("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${reorderSwapScene.campaign_project_scene_id}/reorder`, {
+      direction: "up"
+    }, 409, "cannot move up");
+    const duplicateScene = await admin("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${reorderSourceScene.campaign_project_scene_id}/duplicate`, {});
+    if (duplicateScene.data.campaign_project_scene.scene_order <= 3 || duplicateScene.data.campaign_project_scene.status !== "draft") {
+      throw new Error(`duplicate scene should be a fresh draft with a new order: ${duplicateScene.text}`);
+    }
+    if (sceneMutationSnapshot(duplicateScene.data.campaign_project_scene).headline !== sceneMutationSnapshot(reorderSourceScene).headline) {
+      throw new Error(`duplicate scene did not copy source content: ${duplicateScene.text}`);
+    }
+    const projectAfterDuplicate = await admin("GET", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}`);
+    const duplicateEvent = projectAfterDuplicate.data.campaign_project.events.find((event) => event.action === "scene.duplicated");
+    if (!duplicateEvent || duplicateEvent.metadata?.source_scene_id !== reorderSourceScene.campaign_project_scene_id || duplicateEvent.metadata?.no_publish !== true) {
+      throw new Error(`duplicate event missing or unsafe: ${projectAfterDuplicate.text}`);
+    }
 
     const invalidProject = await admin("POST", "/api/admin/campaign-projects/free-input", {
       tenant_id: records.tenantId,
@@ -267,6 +307,10 @@ async function main() {
     if (afterSceneDelete.data.campaign_project.scenes.some((scene) => scene.campaign_project_scene_id === sceneToDelete.campaign_project_scene_id)) {
       throw new Error("deleted scene should be hidden from project detail by default");
     }
+    await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}/reorder`, {
+      direction: "up"
+    }, 400, "deleted");
+    await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}/duplicate`, {}, 400, "deleted");
     const { scene_order: _ignoredSceneOrder, ...replacementSceneInput } = validScenes("replacement")[0];
     const replacementScene = await admin("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes`, replacementSceneInput);
     if (replacementScene.data.campaign_project_scene.scene_order !== sceneToDelete.scene_order + 1) {
@@ -284,6 +328,10 @@ async function main() {
       request_type: "scene_regeneration",
       reason: "deleted project should reject"
     }, 400, "deleted");
+    await expectAdminError("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${freeInputProject.data.campaign_project.scenes[0].campaign_project_scene_id}/reorder`, {
+      direction: "down"
+    }, 400, "deleted");
+    await expectAdminError("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${freeInputProject.data.campaign_project.scenes[0].campaign_project_scene_id}/duplicate`, {}, 400, "deleted");
     const postDeleteList = await admin("GET", `/api/admin/campaign-projects?tenant_id=${records.tenantId}&store_id=${records.storeId}&screen_group_id=${records.screenGroupId}`);
     if (postDeleteList.data.campaign_projects.some((project) => project.campaign_project_id === freeInputProject.data.campaign_project.campaign_project_id)) {
       throw new Error("deleted project should be hidden from default list");
@@ -315,6 +363,8 @@ async function main() {
       tenant_store_screen_group_isolation: true,
       soft_delete: true,
       scene_order_no_reuse_after_soft_delete: true,
+      scene_reorder_adjacent_swap: true,
+      scene_duplicate_draft: true,
       regeneration_request_stub: true,
       regeneration_request_visible_events: true,
       no_external_ai: true,

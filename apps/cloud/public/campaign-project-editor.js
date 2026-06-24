@@ -67,7 +67,7 @@
           ${selected ? renderPreview(project, selected) : `<div class="campaign-editor-stage"><p class="empty">プレビューできるシーンがありません。</p></div>`}
         </section>
         <section class="campaign-editor-panel" aria-label="Scene editor">
-          ${selected ? renderEditorForm(project, selected) : `<p class="empty">編集できるシーンがありません。</p>`}
+          ${selected ? renderEditorForm(project, selected, scenes) : `<p class="empty">編集できるシーンがありません。</p>`}
         </section>
       </section>
       <section class="campaign-editor-events" aria-label="Project events">
@@ -83,6 +83,10 @@
       });
     });
     root.querySelector("[data-editor-validate]")?.addEventListener("click", handleValidateProject);
+    root.querySelectorAll("[data-editor-reorder-scene]").forEach((button) => {
+      button.addEventListener("click", handleReorderScene);
+    });
+    root.querySelector("[data-editor-duplicate-scene]")?.addEventListener("click", handleDuplicateScene);
     root.querySelectorAll("[data-editor-regeneration-request]").forEach((button) => {
       button.addEventListener("click", handleRegenerationRequest);
     });
@@ -132,8 +136,11 @@
     `;
   }
 
-  function renderEditorForm(project, scene) {
+  function renderEditorForm(project, scene, scenes) {
     const errors = scene.validation_errors || [];
+    const sceneIndex = scenes.findIndex((entry) => entry.campaign_project_scene_id === scene.campaign_project_scene_id);
+    const canMoveUp = sceneIndex > 0;
+    const canMoveDown = sceneIndex >= 0 && sceneIndex < scenes.length - 1;
     return `
       <form class="campaign-editor-form" data-project-id="${escapeAttr(project.campaign_project_id)}" data-scene-id="${escapeAttr(scene.campaign_project_scene_id)}">
         <div class="campaign-editor-form-head">
@@ -193,6 +200,9 @@
         </section>
         <div class="campaign-editor-actions">
           <button type="submit">保存</button>
+          <button class="secondary" type="button" data-editor-reorder-scene="up"${canMoveUp ? "" : " disabled"}>上へ</button>
+          <button class="secondary" type="button" data-editor-reorder-scene="down"${canMoveDown ? "" : " disabled"}>下へ</button>
+          <button class="secondary" type="button" data-editor-duplicate-scene>複製</button>
           <button class="secondary" type="button" data-editor-validate="${escapeAttr(project.campaign_project_id)}">プロジェクト検証</button>
           <a class="campaign-project-preview-link" href="/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview" target="_blank" rel="noreferrer">プレビューを開く</a>
         </div>
@@ -217,6 +227,56 @@
     } catch (error) {
       state.message = error.message || "シーン保存に失敗しました。";
       render();
+    }
+  }
+
+  async function handleReorderScene(event) {
+    const button = event.currentTarget;
+    const form = button.closest("form.campaign-editor-form");
+    if (!form) return;
+    const direction = button.dataset.editorReorderScene || "";
+    const previousText = button.textContent;
+    button.disabled = true;
+    button.textContent = "移動中";
+    try {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/scenes/${encodeURIComponent(form.dataset.sceneId || "")}/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction })
+      });
+      state.message = direction === "up" ? "シーンを上へ移動しました。" : "シーンを下へ移動しました。";
+      await loadEditor({ selectedSceneId: form.dataset.sceneId || "" });
+    } catch (error) {
+      state.message = error.message || "シーンの並び替えに失敗しました。";
+      render();
+    } finally {
+      button.disabled = false;
+      button.textContent = previousText;
+    }
+  }
+
+  async function handleDuplicateScene(event) {
+    const button = event.currentTarget;
+    const form = button.closest("form.campaign-editor-form");
+    if (!form) return;
+    const previousText = button.textContent;
+    button.disabled = true;
+    button.textContent = "複製中";
+    try {
+      const result = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/scenes/${encodeURIComponent(form.dataset.sceneId || "")}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const duplicateId = result.campaign_project_scene?.campaign_project_scene_id || form.dataset.sceneId || "";
+      state.message = "シーンを複製しました。";
+      await loadEditor({ selectedSceneId: duplicateId });
+    } catch (error) {
+      state.message = error.message || "シーンの複製に失敗しました。";
+      render();
+    } finally {
+      button.disabled = false;
+      button.textContent = previousText;
     }
   }
 
@@ -299,12 +359,16 @@
     const metadata = event.metadata || {};
     const requestType = metadata.request_type ? regenerationRequestLabel(metadata.request_type) : "";
     const requestStatus = metadata.request_status || "";
+    const reorder = event.action === "scene.reordered" ? `${metadata.from_order || ""}->${metadata.to_order || ""}` : "";
+    const duplicate = event.action === "scene.duplicated" ? `from ${metadata.source_scene_order || ""}` : "";
     return `
       <small>
         ${escapeHtml(event.action || "")}
         ${event.campaign_project_scene_id ? `<span>${escapeHtml(event.campaign_project_scene_id)}</span>` : ""}
         ${requestType ? `<span>${escapeHtml(requestType)}</span>` : ""}
         ${requestStatus ? `<span>${escapeHtml(requestStatus)}</span>` : ""}
+        ${reorder ? `<span>${escapeHtml(reorder)}</span>` : ""}
+        ${duplicate ? `<span>${escapeHtml(duplicate)}</span>` : ""}
         ${event.actor_id ? `<span>${escapeHtml(event.actor_id)}</span>` : ""}
         <span>${escapeHtml(event.created_at || "")}</span>
       </small>
