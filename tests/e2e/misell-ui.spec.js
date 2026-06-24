@@ -710,9 +710,24 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(campaignEditor.locator(".campaign-editor-stage")).toContainText("Browser editor scene", { timeout: 5000 });
   await campaignEditor.locator("[data-editor-validate]").click();
   await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("検証に通りました", { timeout: 5000 });
+  await campaignEditor.locator("form.campaign-editor-form textarea[name='request_reason']").fill("Browser partial regeneration request");
+  await campaignEditor.locator("[data-editor-regeneration-request='scene_regeneration']").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("記録しました", { timeout: 5000 });
+  await campaignEditor.locator("form.campaign-editor-form textarea[name='request_reason']").fill("Browser copy regeneration request");
+  await campaignEditor.locator("[data-editor-regeneration-request='copy_regeneration']").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("記録しました", { timeout: 5000 });
+  await campaignEditor.locator("form.campaign-editor-form textarea[name='request_reason']").fill("Browser QR CTA regeneration request");
+  await campaignEditor.locator("[data-editor-regeneration-request='qr_cta_regeneration']").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("記録しました", { timeout: 5000 });
+  await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.regeneration_requested", { timeout: 5000 });
+  await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.copy_regeneration_requested", { timeout: 5000 });
+  await expect(campaignEditor.locator(".campaign-editor-events")).toContainText("scene.qr_cta_regeneration_requested", { timeout: 5000 });
   const campaignProjectAfterEditor = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}`);
   expect(campaignProjectAfterEditor.status, campaignProjectAfterEditor.text).toBe(200);
   expect(campaignProjectAfterEditor.json.campaign_project.scenes.some((scene) => scene.headline === "Browser editor scene")).toBeTruthy();
+  expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.regeneration_requested" && event.metadata.request_status === "manual_required")).toBeTruthy();
+  expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.copy_regeneration_requested" && event.metadata.no_external_ai === true)).toBeTruthy();
+  expect(campaignProjectAfterEditor.json.campaign_project.events.some((event) => event.action === "scene.qr_cta_regeneration_requested" && event.metadata.no_credit_consumption === true)).toBeTruthy();
   await campaignEditor.screenshot({ path: path.join(screenshotsDir, "cloud-campaign-project-editor.png"), fullPage: true });
   await campaignEditor.close();
 

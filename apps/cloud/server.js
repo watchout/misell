@@ -168,6 +168,12 @@ const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["proposed", "selected
 const CAMPAIGN_PROJECT_STATUS = new Set(CAMPAIGN_PROJECT_STATUSES);
 const CAMPAIGN_PROJECT_SCENE_STATUS = new Set(CAMPAIGN_PROJECT_SCENE_STATUSES);
 const CAMPAIGN_PROJECT_SOURCE_TYPE = new Set(CAMPAIGN_PROJECT_SOURCE_TYPES);
+const CAMPAIGN_PROJECT_REGENERATION_REQUEST_TYPES = new Set(["scene_regeneration", "copy_regeneration", "qr_cta_regeneration"]);
+const CAMPAIGN_PROJECT_REGENERATION_ACTIONS = Object.freeze({
+  scene_regeneration: "scene.regeneration_requested",
+  copy_regeneration: "scene.copy_regeneration_requested",
+  qr_cta_regeneration: "scene.qr_cta_regeneration_requested"
+});
 const CUSTOMER_CONTEXT_CATEGORIES = new Set(CONTEXT_CATEGORIES);
 const CUSTOMER_CONTEXT_VISIBILITY_SCOPES = new Set(VISIBILITY_SCOPES);
 const CUSTOMER_CONTEXT_SOURCE_OWNERS = new Set(SOURCE_OWNERS);
@@ -747,6 +753,15 @@ app.patch("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_pr
   try {
     const scene = updateCampaignProjectScene(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
     res.json({ ok: true, campaign_project_scene: scene });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id/regeneration-requests", requireAdminAuth, (req, res, next) => {
+  try {
+    const request = createCampaignProjectRegenerationRequest(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, regeneration_request: request });
   } catch (error) {
     next(error);
   }
@@ -7351,6 +7366,82 @@ function updateCampaignProjectScene(projectId, sceneId, input, actor = {}) {
   return scene;
 }
 
+function createCampaignProjectRegenerationRequest(projectId, sceneId, input = {}, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const requestType = cleanString(input.request_type || input.requestType).slice(0, 80);
+  if (!CAMPAIGN_PROJECT_REGENERATION_REQUEST_TYPES.has(requestType)) {
+    throw requestError(`request_type must be one of: ${Array.from(CAMPAIGN_PROJECT_REGENERATION_REQUEST_TYPES).join(", ")}`, 400);
+  }
+  const request = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const sceneRow = getCampaignProjectSceneRow(sceneId);
+    if (!sceneRow || cleanId(sceneRow.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+      throw requestError("Campaign project scene not found", 404);
+    }
+    if (sceneRow.status === "deleted") throw requestError("Campaign project scene is deleted", 400);
+    const now = nowIso();
+    const actorId = actor.actor_id || "admin";
+    const reason = cleanString(input.reason || input.request_reason || input.requestReason).slice(0, 1000);
+    const metadata = {
+      request_type: requestType,
+      request_status: "manual_required",
+      reason,
+      scene_order: asInteger(sceneRow.scene_order) || 0,
+      no_external_ai: true,
+      no_provider_job: true,
+      no_generated_output: true,
+      no_scene_mutation: true,
+      no_media_generation: true,
+      no_render: true,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_credit_consumption: true,
+      no_billing: true
+    };
+    const eventId = recordCampaignProjectEvent(
+      projectRow.campaign_project_id,
+      sceneRow.campaign_project_scene_id,
+      CAMPAIGN_PROJECT_REGENERATION_ACTIONS[requestType],
+      "admin",
+      actorId,
+      metadata,
+      now
+    );
+    recordAuditLog("admin", actorId, "campaign_project.regeneration_request", "campaign_project_scene", sceneRow.campaign_project_scene_id, null, null, {
+      tenant_id: projectRow.tenant_id,
+      store_id: projectRow.store_id,
+      screen_group_id: projectRow.screen_group_id,
+      campaign_project_id: projectRow.campaign_project_id,
+      campaign_project_event_id: eventId,
+      request_type: requestType,
+      request_status: "manual_required",
+      no_external_ai: true,
+      no_scene_mutation: true,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_credit_consumption: true
+    }, now);
+    return {
+      campaign_project_event_id: eventId,
+      campaign_project_id: projectRow.campaign_project_id,
+      campaign_project_scene_id: sceneRow.campaign_project_scene_id,
+      request_type: requestType,
+      status: "manual_required",
+      reason,
+      created_at: now,
+      no_external_ai: true,
+      no_scene_mutation: true,
+      no_generated_output: true,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_credit_consumption: true
+    };
+  })();
+  return request;
+}
+
 function validateCampaignProject(projectId, input = {}, actor = {}) {
   assertCampaignGeneratorInput(input);
   const result = db.transaction(() => {
@@ -8286,15 +8377,32 @@ function addHeartbeatMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
 }
 
 function addPlaylogMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
+  const rows = listReportPlaylogRows(criteria, `
+    tenant_id, store_id, device_id, campaign_id, content_id,
+    event_type, result, duration
+  `);
+  for (const item of rows) {
+    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
+    row.play_event_count += 1;
+    if (isReportPlayStarted(item)) row.play_started_count += 1;
+    if (isReportPlayCompleted(item)) row.play_completed_count += 1;
+    if (isReportPlayFailed(item)) row.play_failed_count += 1;
+    row.play_duration_seconds += Math.max(0, asInteger(item.duration) || 0);
+  }
+}
+
+function listReportPlaylogRows(criteria, selectColumns) {
   const range = reportBroadIsoRange(criteria);
-  const rows = db.prepare(`
+  const eventAt = "COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at)";
+  return db.prepare(`
     SELECT
-      tenant_id, store_id, device_id, campaign_id, content_id,
-      event_type, result, duration,
-      COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) AS event_at
+      ${selectColumns},
+      ${eventAt} AS event_at
     FROM playlogs
-    WHERE COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) >= ?
-      AND COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) < ?
+    WHERE ${eventAt} >= ?
+      AND ${eventAt} < ?
       AND (? = '' OR tenant_id = ?)
       AND (? = '' OR store_id = ?)
       AND (? = '' OR campaign_id = ?)
@@ -8311,16 +8419,6 @@ function addPlaylogMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
     criteria.content_id,
     criteria.content_id
   );
-  for (const item of rows) {
-    const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.event_at, settingsCache);
-    if (!reportDateInRange(metricDate, criteria)) continue;
-    const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
-    row.play_event_count += 1;
-    if (isReportPlayStarted(item)) row.play_started_count += 1;
-    if (isReportPlayCompleted(item)) row.play_completed_count += 1;
-    if (isReportPlayFailed(item)) row.play_failed_count += 1;
-    row.play_duration_seconds += Math.max(0, asInteger(item.duration) || 0);
-  }
 }
 
 function addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
@@ -8355,8 +8453,27 @@ function addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
 }
 
 function addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
-  const rows = db.prepare(`
-    SELECT tenant_id, store_id, campaign_id, content_id, business_date, status, total_amount
+  const rows = listReportCounterOrderRows(criteria, "tenant_id, store_id, campaign_id, content_id, business_date, status, total_amount");
+  for (const item of rows) {
+    if (!reportDateInRange(item.business_date, criteria)) continue;
+    const row = getOrCreateReportDailyMetricRow(criteria, item, item.business_date, rowsByKey, settingsCache, generatedAt);
+    const amount = Math.max(0, asInteger(item.total_amount) || 0);
+    row.counter_orders_issued_count += 1;
+    row.counter_order_total_amount += amount;
+    if (item.status === "redeemed") {
+      row.counter_orders_redeemed_count += 1;
+      row.counter_order_redeemed_amount += amount;
+    } else if (item.status === "cancelled") {
+      row.counter_orders_cancelled_count += 1;
+    } else if (item.status === "expired") {
+      row.counter_orders_expired_count += 1;
+    }
+  }
+}
+
+function listReportCounterOrderRows(criteria, selectColumns) {
+  return db.prepare(`
+    SELECT ${selectColumns}
     FROM counter_orders
     WHERE business_date >= ?
       AND business_date <= ?
@@ -8376,21 +8493,6 @@ function addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt)
     criteria.content_id,
     criteria.content_id
   );
-  for (const item of rows) {
-    if (!reportDateInRange(item.business_date, criteria)) continue;
-    const row = getOrCreateReportDailyMetricRow(criteria, item, item.business_date, rowsByKey, settingsCache, generatedAt);
-    const amount = Math.max(0, asInteger(item.total_amount) || 0);
-    row.counter_orders_issued_count += 1;
-    row.counter_order_total_amount += amount;
-    if (item.status === "redeemed") {
-      row.counter_orders_redeemed_count += 1;
-      row.counter_order_redeemed_amount += amount;
-    } else if (item.status === "cancelled") {
-      row.counter_orders_cancelled_count += 1;
-    } else if (item.status === "expired") {
-      row.counter_orders_expired_count += 1;
-    }
-  }
 }
 
 function addErrorMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
@@ -8540,31 +8642,10 @@ function finalizeReportMetricSummary(summary) {
 }
 
 function buildReportContentBreakdown(criteria) {
-  const range = reportBroadIsoRange(criteria);
-  const rows = db.prepare(`
-    SELECT
-      store_id, campaign_id, content_id, playlist_version, playlist_item_id,
-      asset_id, layout, event_type, result, duration,
-      COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) AS event_at
-    FROM playlogs
-    WHERE COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) >= ?
-      AND COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at) < ?
-      AND (? = '' OR tenant_id = ?)
-      AND (? = '' OR store_id = ?)
-      AND (? = '' OR campaign_id = ?)
-      AND (? = '' OR content_id = ?)
-  `).all(
-    range.from,
-    range.to,
-    criteria.tenant_id,
-    criteria.tenant_id,
-    criteria.store_id,
-    criteria.store_id,
-    criteria.campaign_id,
-    criteria.campaign_id,
-    criteria.content_id,
-    criteria.content_id
-  );
+  const rows = listReportPlaylogRows(criteria, `
+    store_id, campaign_id, content_id, playlist_version, playlist_item_id,
+    asset_id, layout, event_type, result, duration
+  `);
   const settingsCache = new Map();
   const groups = new Map();
   for (const row of rows) {
@@ -8664,29 +8745,10 @@ function buildReportQrBreakdown(criteria) {
 }
 
 function buildReportOrderBreakdown(criteria) {
-  const rows = db.prepare(`
-    SELECT
-      store_id, campaign_id, content_id, offer_id, offer_revision_id,
-      status, business_date, total_amount
-    FROM counter_orders
-    WHERE business_date >= ?
-      AND business_date <= ?
-      AND (? = '' OR tenant_id = ?)
-      AND (? = '' OR store_id = ?)
-      AND (? = '' OR campaign_id = ?)
-      AND (? = '' OR content_id = ?)
-  `).all(
-    criteria.from,
-    criteria.to,
-    criteria.tenant_id,
-    criteria.tenant_id,
-    criteria.store_id,
-    criteria.store_id,
-    criteria.campaign_id,
-    criteria.campaign_id,
-    criteria.content_id,
-    criteria.content_id
-  );
+  const rows = listReportCounterOrderRows(criteria, `
+    store_id, campaign_id, content_id, offer_id, offer_revision_id,
+    status, business_date, total_amount
+  `);
   const groups = new Map();
   for (const row of rows) {
     const key = [

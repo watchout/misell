@@ -83,6 +83,9 @@
       });
     });
     root.querySelector("[data-editor-validate]")?.addEventListener("click", handleValidateProject);
+    root.querySelectorAll("[data-editor-regeneration-request]").forEach((button) => {
+      button.addEventListener("click", handleRegenerationRequest);
+    });
     root.querySelector("form.campaign-editor-form")?.addEventListener("submit", handleSaveScene);
   }
 
@@ -175,6 +178,19 @@
           <textarea name="asset_requirements" rows="3">${escapeHtml(listToText(scene.asset_requirements))}</textarea>
         </label>
         ${errors.length ? `<div class="campaign-project-validation">${errors.map(renderValidationError).join("")}</div>` : ""}
+        <section class="campaign-editor-regeneration" aria-label="Regeneration request">
+          <strong>再生成リクエスト</strong>
+          <label>
+            理由
+            <textarea name="request_reason" rows="2" placeholder="修正したい観点を記録">${escapeHtml(defaultRegenerationReason(scene))}</textarea>
+          </label>
+          <div class="campaign-editor-regeneration-actions">
+            ${regenerationRequestTypes().map(([requestType, label]) => (
+              `<button class="secondary" type="button" data-editor-regeneration-request="${escapeAttr(requestType)}">${escapeHtml(label)}</button>`
+            )).join("")}
+          </div>
+          <small>この操作は依頼履歴だけを記録し、AI生成・scene更新・公開・課金は行いません。</small>
+        </section>
         <div class="campaign-editor-actions">
           <button type="submit">保存</button>
           <button class="secondary" type="button" data-editor-validate="${escapeAttr(project.campaign_project_id)}">プロジェクト検証</button>
@@ -201,6 +217,33 @@
     } catch (error) {
       state.message = error.message || "シーン保存に失敗しました。";
       render();
+    }
+  }
+
+  async function handleRegenerationRequest(event) {
+    const button = event.currentTarget;
+    const form = button.closest("form.campaign-editor-form");
+    if (!form) return;
+    const previousText = button.textContent;
+    button.disabled = true;
+    button.textContent = "記録中";
+    try {
+      const result = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/scenes/${encodeURIComponent(form.dataset.sceneId || "")}/regeneration-requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request_type: button.dataset.editorRegenerationRequest || "",
+          reason: form.elements.request_reason?.value || ""
+        })
+      });
+      state.message = `${regenerationRequestLabel(result.regeneration_request?.request_type)}を記録しました。`;
+      await loadEditor({ selectedSceneId: form.dataset.sceneId || "" });
+    } catch (error) {
+      state.message = error.message || "再生成リクエストの記録に失敗しました。";
+      render();
+    } finally {
+      button.disabled = false;
+      button.textContent = previousText;
     }
   }
 
@@ -253,10 +296,15 @@
   }
 
   function renderEvent(event) {
+    const metadata = event.metadata || {};
+    const requestType = metadata.request_type ? regenerationRequestLabel(metadata.request_type) : "";
+    const requestStatus = metadata.request_status || "";
     return `
       <small>
         ${escapeHtml(event.action || "")}
         ${event.campaign_project_scene_id ? `<span>${escapeHtml(event.campaign_project_scene_id)}</span>` : ""}
+        ${requestType ? `<span>${escapeHtml(requestType)}</span>` : ""}
+        ${requestStatus ? `<span>${escapeHtml(requestStatus)}</span>` : ""}
         ${event.actor_id ? `<span>${escapeHtml(event.actor_id)}</span>` : ""}
         <span>${escapeHtml(event.created_at || "")}</span>
       </small>
@@ -273,6 +321,23 @@
       if (typeof item === "string") return item;
       return JSON.stringify(item);
     }).filter(Boolean);
+  }
+
+  function defaultRegenerationReason(scene) {
+    return `Scene #${scene.scene_order || ""} の改善依頼`;
+  }
+
+  function regenerationRequestTypes() {
+    return [
+      ["scene_regeneration", "Scene再生成"],
+      ["copy_regeneration", "コピー再生成"],
+      ["qr_cta_regeneration", "QR/CTA再生成"]
+    ];
+  }
+
+  function regenerationRequestLabel(requestType) {
+    const entry = regenerationRequestTypes().find(([value]) => value === requestType);
+    return entry ? entry[1] : "再生成リクエスト";
   }
 
   function listFromText(value) {

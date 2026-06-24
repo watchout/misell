@@ -1168,6 +1168,8 @@ td small {
 
 .campaign-editor-form label,
 .campaign-editor-form-head,
+.campaign-editor-regeneration,
+.campaign-editor-regeneration-actions,
 .campaign-editor-actions {
   display: grid;
   gap: 6px;
@@ -1191,6 +1193,16 @@ td small {
   font-size: 14px;
   font-weight: 400;
   width: 100%;
+}
+
+.campaign-editor-regeneration {
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.campaign-editor-regeneration-actions {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
 }
 
 .campaign-editor-actions {
