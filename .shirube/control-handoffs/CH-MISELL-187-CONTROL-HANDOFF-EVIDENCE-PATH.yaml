@@ -1,0 +1,146 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-187-CONTROL-HANDOFF-EVIDENCE-PATH
+parent_ssot: https://github.com/watchout/ai-dev-framework/issues/500
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/184#issuecomment-4784721221
+premise_confirmation_ref: https://github.com/watchout/ai-dev-framework/issues/500
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/184
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+full_operational_adoption: true
+governance_change:
+  type: shirube_full_gate_path_classification_fix
+  protected_surfaces:
+    - github_actions_workflow
+    - shirube_gate_enforcement
+  branch_protection_mutation: false
+  required_check_settings_mutation: false
+
+rps_scope:
+  shirube_owns:
+    - full operational protected path classification
+    - per-PR control handoff evidence path treatment
+    - exact-head structured audit and owner decision evidence
+  shirube_does_not_own:
+    - product runtime behavior
+    - production deployment
+    - secrets
+    - DB migration or customer data
+    - branch protection/ruleset mutation in this PR
+
+cell:
+  CELL-ID: CELL-MISELL-187-CONTROL-HANDOFF-EVIDENCE-PATH
+  cell_type: protected_stop
+  risk_class: R3
+  goal: Allow normal PRs to commit per-PR control handoff evidence without treating that evidence file as protected governance adoption.
+  non_scope:
+    - product runtime behavior changes
+    - DB migration
+    - deployment or production operation
+    - secret read or write
+    - branch protection/ruleset mutation through API
+    - external AI call
+    - feature implementation
+    - changing audit or owner admissibility roles
+  allowed_paths:
+    - .shirube/README.md
+    - .shirube/control-handoffs/CH-MISELL-187-CONTROL-HANDOFF-EVIDENCE-PATH.yaml
+    - docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
+    - scripts/shirube/check-full-operational-gates.mjs
+    - scripts/shirube/smoke-full-operational-gates.mjs
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - apps/**
+    - packages/**
+    - .github/workflows/**
+    - '**/migrations/**'
+    - '**/migration/**'
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+  protected_surfaces:
+    - github_actions_workflow
+    - shirube_gate_enforcement
+  compatibility_notes:
+    - github_actions_workflow is declared for current base-gate compatibility; this PR does not modify workflow files.
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - product runtime path touched
+    - audit or owner role admissibility changed
+    - workflow or branch protection changed
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - missing owner APPROVED_EXACT_HEAD decision for exact head
+    - full operational smoke fails
+  acceptance_criteria:
+    - Normal PRs may add .shirube/control-handoffs/CH-*.yaml without FULL-PROT-001.
+    - Per-PR handoff files remain visible as evidence and remain subject to allowed/forbidden path checks.
+    - Governance paths such as workflows, gate scripts, repo specs, lifecycle state, gate contracts, audit templates, and bridge config remain protected.
+    - Smoke coverage proves normal control handoff evidence does not require a governance adoption handoff.
+
+implementation_boundary:
+  summary: Split per-PR control handoff files from protected governance paths in the full operational gate.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge without owner exact-head decision
+    - approve own audit
+    - branch protection mutation
+    - ruleset mutation
+    - production or deploy mutation
+    - secret read or write
+    - product runtime edit
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for workflow and handoff
+    - node --check scripts/shirube/check-full-operational-gates.mjs
+    - node --check scripts/shirube/smoke-full-operational-gates.mjs
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - PR_head_SHA
+    - changed_files
+    - validation_commands
+    - validation_results
+    - structured_audit_comment
+    - owner_decision
+  acceptance_tests:
+    - normal per-PR control handoff evidence path does not trigger FULL-PROT-001
+    - protected governance path smoke remains green
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
