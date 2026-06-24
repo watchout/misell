@@ -189,6 +189,13 @@ no-AI / no-credit / no-publish metadata. The request does not mutate scene
 content, create provider jobs, create QR links, render media, create
 `content_manifest` rows, publish, or consume credits.
 
+The Scene Editor can move a non-deleted scene up or down by swapping adjacent
+`scene_order` values in a transaction, and can duplicate a selected scene as a
+new draft scene with the next available order. These edit helpers only update
+CampaignProject/Scene draft state and `campaign_project_events`; they do not
+create delivery manifests, publish content, render media, call AI providers, or
+consume credits.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
