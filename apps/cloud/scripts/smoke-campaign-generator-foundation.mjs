@@ -30,6 +30,8 @@ async function main() {
     const records = await seedDevices();
     await seedContext(records);
     const beforeContentManifestCount = tableCount("content_manifests");
+    const beforePublishHistoryCount = tableCount("publish_history");
+    const beforeCreditLedgerCount = optionalTableCount("ai_credit_ledger");
 
     const selectedProposalResponse = await admin("POST", "/api/admin/campaign-proposals", proposalInput(records, {
       campaign_proposal_id: `cpr-${runId}-selected`,
@@ -55,6 +57,41 @@ async function main() {
     }
     if (validateSelected.data.campaign_project.scenes.some((scene) => scene.status !== "valid")) {
       throw new Error(`validated project contains non-valid scenes: ${validateSelected.text}`);
+    }
+    const requestScene = validateSelected.data.campaign_project.scenes[0];
+    const sceneBeforeRequests = sceneMutationSnapshot(requestScene);
+    for (const requestType of ["scene_regeneration", "copy_regeneration", "qr_cta_regeneration"]) {
+      const regeneration = await admin("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${requestScene.campaign_project_scene_id}/regeneration-requests`, {
+        request_type: requestType,
+        reason: `${requestType} smoke request`
+      });
+      const request = regeneration.data.regeneration_request;
+      if (request.status !== "manual_required" || request.request_type !== requestType) {
+        throw new Error(`unexpected regeneration request response: ${regeneration.text}`);
+      }
+      for (const field of ["no_external_ai", "no_scene_mutation", "no_content_manifest_creation", "no_publish", "no_credit_consumption"]) {
+        if (request[field] !== true) throw new Error(`regeneration request missing ${field}: ${regeneration.text}`);
+      }
+    }
+    await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${requestScene.campaign_project_scene_id}/regeneration-requests`, {
+      request_type: "scene_regeneration",
+      external_ai_used: true
+    }, 400, "external AI");
+    const projectAfterRegenerationRequests = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}`);
+    const sceneAfterRequests = projectAfterRegenerationRequests.data.campaign_project.scenes.find((scene) => scene.campaign_project_scene_id === requestScene.campaign_project_scene_id);
+    if (JSON.stringify(sceneMutationSnapshot(sceneAfterRequests)) !== JSON.stringify(sceneBeforeRequests)) {
+      throw new Error(`regeneration request mutated scene content: before=${JSON.stringify(sceneBeforeRequests)} after=${JSON.stringify(sceneMutationSnapshot(sceneAfterRequests))}`);
+    }
+    for (const requestType of ["scene_regeneration", "copy_regeneration", "qr_cta_regeneration"]) {
+      const action = regenerationAction(requestType);
+      const event = projectAfterRegenerationRequests.data.campaign_project.events.find((entry) => entry.action === action);
+      if (!event) throw new Error(`regeneration request event missing for ${action}`);
+      if (event.metadata?.request_type !== requestType || event.metadata?.request_status !== "manual_required") {
+        throw new Error(`regeneration event metadata mismatch: ${JSON.stringify(event)}`);
+      }
+      for (const field of ["no_external_ai", "no_scene_mutation", "no_content_manifest_creation", "no_publish", "no_credit_consumption"]) {
+        if (event.metadata?.[field] !== true) throw new Error(`regeneration event missing ${field}: ${JSON.stringify(event)}`);
+      }
     }
 
     const projectFromBrief = await admin("POST", "/api/admin/campaign-projects/from-brief", {
@@ -222,6 +259,10 @@ async function main() {
     ), projectFromProposal.data.campaign_project.scenes[0]);
     const deletedScene = await admin("DELETE", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}`);
     if (deletedScene.data.campaign_project_scene.status !== "deleted") throw new Error(`scene was not soft deleted: ${deletedScene.text}`);
+    await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}/regeneration-requests`, {
+      request_type: "scene_regeneration",
+      reason: "deleted scene should reject"
+    }, 400, "deleted");
     const afterSceneDelete = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}`);
     if (afterSceneDelete.data.campaign_project.scenes.some((scene) => scene.campaign_project_scene_id === sceneToDelete.campaign_project_scene_id)) {
       throw new Error("deleted scene should be hidden from project detail by default");
@@ -239,6 +280,10 @@ async function main() {
     if (deletedProject.data.campaign_project.status !== "deleted" || !deletedProject.data.campaign_project.deleted_at) {
       throw new Error(`project was not soft deleted: ${deletedProject.text}`);
     }
+    await expectAdminError("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${freeInputProject.data.campaign_project.scenes[0].campaign_project_scene_id}/regeneration-requests`, {
+      request_type: "scene_regeneration",
+      reason: "deleted project should reject"
+    }, 400, "deleted");
     const postDeleteList = await admin("GET", `/api/admin/campaign-projects?tenant_id=${records.tenantId}&store_id=${records.storeId}&screen_group_id=${records.screenGroupId}`);
     if (postDeleteList.data.campaign_projects.some((project) => project.campaign_project_id === freeInputProject.data.campaign_project.campaign_project_id)) {
       throw new Error("deleted project should be hidden from default list");
@@ -252,10 +297,11 @@ async function main() {
     if (afterContentManifestCount !== beforeContentManifestCount) {
       throw new Error(`content_manifest was created unexpectedly: before=${beforeContentManifestCount} after=${afterContentManifestCount}`);
     }
-    if (tableCount("publish_history") !== 0) throw new Error("publish history should not be created by campaign generator foundation");
+    if (tableCount("publish_history") !== beforePublishHistoryCount) throw new Error("publish history should not be created by campaign generator foundation");
+    if (optionalTableCount("ai_credit_ledger") !== beforeCreditLedgerCount) throw new Error("credit ledger should not be touched by campaign generator foundation");
     if (tableCount("campaign_projects") < 5) throw new Error("campaign_projects rows were not created");
     if (tableCount("campaign_project_scenes") < 7) throw new Error("campaign_project_scenes rows were not created");
-    if (tableCount("campaign_project_events") < 8) throw new Error("campaign_project_events rows were not created");
+    if (tableCount("campaign_project_events") < 11) throw new Error("campaign_project_events rows were not created");
 
     console.log(JSON.stringify({
       ok: true,
@@ -269,10 +315,13 @@ async function main() {
       tenant_store_screen_group_isolation: true,
       soft_delete: true,
       scene_order_no_reuse_after_soft_delete: true,
+      regeneration_request_stub: true,
+      regeneration_request_visible_events: true,
       no_external_ai: true,
       no_media_generation: true,
       no_content_manifest_creation: true,
-      no_publish: true
+      no_publish: true,
+      no_credit_consumption: true
     }, null, 2));
   } finally {
     await stopServer();
@@ -410,6 +459,30 @@ function assertProject(project, sourceType, records) {
   if (!project.no_external_ai || !project.no_content_manifest_creation || !project.no_media_generation || !project.no_publish) {
     throw new Error(`project response is missing out-of-scope guards: ${JSON.stringify(project)}`);
   }
+}
+
+function sceneMutationSnapshot(scene) {
+  return {
+    scene_order: scene?.scene_order,
+    scene_type: scene?.scene_type,
+    headline: scene?.headline,
+    body_text: scene?.body_text,
+    visual_direction: scene?.visual_direction,
+    cta_text: scene?.cta_text,
+    duration_seconds: scene?.duration_seconds,
+    asset_requirements: scene?.asset_requirements,
+    status: scene?.status,
+    validation_status: scene?.validation_status,
+    validation_errors: scene?.validation_errors
+  };
+}
+
+function regenerationAction(requestType) {
+  return {
+    scene_regeneration: "scene.regeneration_requested",
+    copy_regeneration: "scene.copy_regeneration_requested",
+    qr_cta_regeneration: "scene.qr_cta_regeneration_requested"
+  }[requestType];
 }
 
 function insertBadProjectFixture(records, sourceProposalId) {
@@ -551,6 +624,16 @@ async function expectError(method, url, body, headers, status, messagePart) {
 
 function tableCount(tableName, where = "1 = 1") {
   return db().prepare(`SELECT COUNT(*) AS count FROM ${tableName} WHERE ${where}`).get().count;
+}
+
+function optionalTableCount(tableName) {
+  if (!tableExists(tableName)) return 0;
+  return tableCount(tableName);
+}
+
+function tableExists(tableName) {
+  const row = db().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName);
+  return Boolean(row);
 }
 
 function db() {

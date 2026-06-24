@@ -1,0 +1,153 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-147-PARTIAL-REGENERATION-REQUEST-STUB
+parent_ssot: https://github.com/watchout/misell/issues/147
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4786040193
+premise_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4766080369
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/147
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational gate evidence for this PR
+    - structured audit exact-head admissibility
+    - owner exact-head decision admissibility
+    - diff scope and handoff consistency checks
+  shirube_does_not_own:
+    - branch protection or required-check configuration
+    - security/CEO approval labels and protected authorization decisions
+    - production deployment or runtime operations
+
+cell:
+  CELL-ID: CELL-MISELL-147-PARTIAL-REGEN-REQUEST-STUB
+  cell_type: integration_lite
+  risk_class: R2
+  goal: Add admin-only partial regeneration request stubs for CampaignProject scenes, recording intent as events without external AI, scene mutation, publish, render, billing, or DB migration.
+  non_scope:
+    - DB migration or schema change
+    - new auth/RBAC model or customer action
+    - external preview/share token
+    - external AI call or provider job
+    - automated scene/copy/QR generation
+    - QR link creation
+    - scene content mutation from request action
+    - media generation, rendering, or MP4 export
+    - content_manifest creation
+    - publish or schedule handoff
+    - billing, quota, credit ledger, or plan logic
+    - partner/collaboration approval workflow
+  allowed_paths:
+    - .shirube/control-handoffs/CH-MISELL-147-partial-regeneration-request-stub.yaml
+    - apps/cloud/README.md
+    - apps/cloud/server.js
+    - apps/cloud/public/campaign-project-editor.js
+    - apps/cloud/public/style.css
+    - apps/cloud/scripts/smoke-campaign-generator-foundation.mjs
+    - tests/e2e/misell-ui.spec.js
+  protected_surfaces:
+    - existing_admin_ui_uses_authenticated_api
+    - existing_test_env_and_smoke_auth_tokens_only
+    - no_auth_or_permission_model_change
+    - no_queue_or_device_operation_change
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/cloud/migrations/**
+    - apps/cloud/package.json
+    - package.json
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - DB migration or schema change needed
+    - new auth/RBAC behavior needed
+    - external AI/provider/runner path needed
+    - scene mutation from request action needed
+    - content manifest, publish, rendering, external preview, credit ledger, or quota path introduced
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Admin can request scene, copy, or QR/CTA regeneration from the Scene Editor for an existing non-deleted scene.
+    - The request is recorded as a bounded campaign_project_event with request_type, reason, actor, and explicit no-external-AI/no-credit/no-publish metadata.
+    - The request returns a stub/manual-required status and does not create generated output.
+    - Deleted projects or deleted scenes reject regeneration requests.
+    - The Scene Editor event history shows request entries.
+    - Tests prove no scene content, content_manifest, publish_history, credit ledger, or external AI side effect is created.
+
+implementation_boundary:
+  summary: Use existing CampaignProject admin auth and campaign_project_events to record deterministic regeneration intent only; do not add generation jobs or billing schema.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  pr_head_sha: supplied_by_github_pr_metadata_and_audit_request
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for handoff and workflow
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:campaign-generator-foundation
+    - npm run test:e2e
+    - npm run test:ci
+    - Shirube Full Operational Gates
+  required_evidence:
+    - PR_head_SHA
+    - changed_files
+    - validation_commands
+    - validation_results
+    - structured_audit_comment
+    - owner_decision
+  acceptance_tests:
+    - scene regeneration request is recorded and visible
+    - copy regeneration request is recorded and visible
+    - QR/CTA regeneration request is recorded and visible
+    - deleted project and deleted scene requests are rejected
+    - no external AI, no generated media, no content manifest, no publish, no credit ledger
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff

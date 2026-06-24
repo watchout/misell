@@ -181,6 +181,14 @@ tenant/store/screen-group scope mismatches.
 This foundation slice does not call external AI, does not generate media, does
 not render, does not create `content_manifest` rows, and does not publish.
 
+Scene Editor partial regeneration requests are also event-only stubs. Operators
+can request `scene_regeneration`, `copy_regeneration`, or
+`qr_cta_regeneration` for a non-deleted scene, and Cloud records a
+`campaign_project_events` entry with `manual_required` status and explicit
+no-AI / no-credit / no-publish metadata. The request does not mutate scene
+content, create provider jobs, create QR links, render media, create
+`content_manifest` rows, publish, or consume credits.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
