@@ -697,6 +697,25 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await campaignPreview.screenshot({ path: path.join(screenshotsDir, "cloud-campaign-project-preview.png"), fullPage: true });
   await campaignPreview.close();
 
+  const campaignEditorPromise = context.waitForEvent("page");
+  await page.locator(`[data-campaign-project-editor="${campaignProjectId}"]`).click();
+  const campaignEditor = await campaignEditorPromise;
+  wirePage(campaignEditor, "campaign-editor");
+  await campaignEditor.waitForLoadState("domcontentloaded");
+  await expect(campaignEditor.locator("h1")).toContainText("Browser campaign project");
+  await expect(campaignEditor.locator(".campaign-editor-stage")).toContainText("Browser edited scene");
+  await campaignEditor.locator("form.campaign-editor-form input[name='headline']").fill("Browser editor scene");
+  await campaignEditor.locator("form.campaign-editor-form button[type='submit']").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("保存しました", { timeout: 5000 });
+  await expect(campaignEditor.locator(".campaign-editor-stage")).toContainText("Browser editor scene", { timeout: 5000 });
+  await campaignEditor.locator("[data-editor-validate]").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("検証に通りました", { timeout: 5000 });
+  const campaignProjectAfterEditor = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}`);
+  expect(campaignProjectAfterEditor.status, campaignProjectAfterEditor.text).toBe(200);
+  expect(campaignProjectAfterEditor.json.campaign_project.scenes.some((scene) => scene.headline === "Browser editor scene")).toBeTruthy();
+  await campaignEditor.screenshot({ path: path.join(screenshotsDir, "cloud-campaign-project-editor.png"), fullPage: true });
+  await campaignEditor.close();
+
   action("Create and soft-delete free-input campaign project through cloud admin UI");
   const freeProjectForm = page.locator("#campaign-projects form.campaign-project-free-input");
   await freeProjectForm.locator("select[name='tenant_id']").selectOption("TEN-BROWSER");

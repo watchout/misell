@@ -1,0 +1,317 @@
+(function () {
+  if (new URLSearchParams(window.location.search).get("editor") !== "1") return;
+
+  const root = document.getElementById("campaign-editor-root") || document.getElementById("campaign-preview-root");
+  const title = document.getElementById("campaign-editor-title") || document.getElementById("campaign-preview-title");
+  const previewLink = document.getElementById("campaign-editor-preview-link");
+  const state = {
+    project: null,
+    selectedSceneId: "",
+    message: ""
+  };
+
+  loadEditor().catch((error) => {
+    root.innerHTML = `<section class="section"><p class="empty">${escapeHtml(error.message || "読み込みに失敗しました")}</p></section>`;
+  });
+
+  async function loadEditor(options = {}) {
+    const projectId = projectIdFromPath();
+    if (!projectId) throw new Error("project id is required");
+    const response = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`);
+    state.project = response.campaign_project;
+    const scenes = activeScenes(state.project);
+    const previous = options.selectedSceneId || state.selectedSceneId;
+    state.selectedSceneId = scenes.some((scene) => scene.campaign_project_scene_id === previous)
+      ? previous
+      : scenes[0]?.campaign_project_scene_id || "";
+    render();
+  }
+
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `${url} returned ${res.status}`);
+    }
+    return res.json();
+  }
+
+  function render() {
+    const project = state.project || {};
+    const scenes = activeScenes(project);
+    const selected = selectedScene(scenes);
+    title.textContent = project.title || project.campaign_project_id || "Scene Editor";
+    document.body.classList.add("campaign-editor-page");
+    if (previewLink) {
+      previewLink.href = `/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview`;
+    }
+    root.innerHTML = `
+      <section class="campaign-editor-summary">
+        <div>
+          <strong>${escapeHtml(project.title || "")}</strong>
+          <small>${escapeHtml(project.campaign_project_id || "")}</small>
+          <small>${escapeHtml(project.tenant_id || "")} / ${escapeHtml(project.store_id || "")} / ${escapeHtml(project.screen_group_id || "")}</small>
+        </div>
+        <div>
+          <span class="update-status update-status-${escapeAttr(statusClass(project.validation_status || project.status))}">${escapeHtml(project.status || "")}</span>
+          <small>${escapeHtml(project.source_type || "")}</small>
+          <small>${escapeHtml(project.updated_at || "")}</small>
+        </div>
+      </section>
+      ${state.message ? `<p class="campaign-editor-status">${escapeHtml(state.message)}</p>` : ""}
+      <section class="campaign-editor-workspace">
+        <aside class="campaign-editor-scenes" aria-label="Scenes">
+          ${scenes.length ? scenes.map((scene) => renderSceneButton(scene, selected)).join("") : `<p class="empty">シーンはまだありません。</p>`}
+        </aside>
+        <section class="campaign-editor-preview" aria-label="Scene preview">
+          ${selected ? renderPreview(project, selected) : `<div class="campaign-editor-stage"><p class="empty">プレビューできるシーンがありません。</p></div>`}
+        </section>
+        <section class="campaign-editor-panel" aria-label="Scene editor">
+          ${selected ? renderEditorForm(project, selected) : `<p class="empty">編集できるシーンがありません。</p>`}
+        </section>
+      </section>
+      <section class="campaign-editor-events" aria-label="Project events">
+        <h2>履歴</h2>
+        ${(project.events || []).slice(0, 8).map(renderEvent).join("") || `<p class="empty">履歴なし</p>`}
+      </section>
+    `;
+    root.querySelectorAll("[data-editor-scene-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.selectedSceneId = button.dataset.editorSceneId || "";
+        state.message = "";
+        render();
+      });
+    });
+    root.querySelector("[data-editor-validate]")?.addEventListener("click", handleValidateProject);
+    root.querySelector("form.campaign-editor-form")?.addEventListener("submit", handleSaveScene);
+  }
+
+  function renderSceneButton(scene, selected) {
+    const active = selected?.campaign_project_scene_id === scene.campaign_project_scene_id;
+    return `
+      <button class="${active ? "" : "secondary"}" type="button" data-editor-scene-id="${escapeAttr(scene.campaign_project_scene_id)}">
+        <span>#${escapeHtml(scene.scene_order || "")}</span>
+        <strong>${escapeHtml(scene.headline || "")}</strong>
+        <small>${escapeHtml(scene.scene_type || "")} / ${escapeHtml(scene.status || "")}</small>
+      </button>
+    `;
+  }
+
+  function renderPreview(project, scene) {
+    const wide = scene.scene_type === "wide";
+    return `
+      <div class="campaign-editor-stage${wide ? " campaign-editor-stage-wide" : ""}" data-scene-id="${escapeAttr(scene.campaign_project_scene_id)}">
+        ${wide ? `
+          <section class="campaign-preview-panel campaign-preview-panel-center">
+            <span>WIDE</span>
+            <h2>${escapeHtml(scene.headline || "")}</h2>
+            <p>${escapeHtml(scene.body_text || "")}</p>
+            <strong>${escapeHtml(scene.cta_text || project.cta || "")}</strong>
+          </section>
+        ` : `
+          <section class="campaign-preview-panel campaign-preview-panel-left">
+            <span>LEFT</span>
+            <strong>${escapeHtml(scene.visual_direction || project.store_context || "")}</strong>
+            ${assetRequirements(scene).map((item) => `<small>${escapeHtml(item)}</small>`).join("")}
+          </section>
+          <section class="campaign-preview-panel campaign-preview-panel-center">
+            <span>CENTER</span>
+            <h2>${escapeHtml(scene.headline || "")}</h2>
+            <p>${escapeHtml(scene.body_text || "")}</p>
+          </section>
+          <section class="campaign-preview-panel campaign-preview-panel-right">
+            <span>RIGHT</span>
+            <strong>${escapeHtml(scene.cta_text || project.cta || "")}</strong>
+            <small>${escapeHtml(String(scene.duration_seconds || 0))}秒</small>
+          </section>
+        `}
+      </div>
+    `;
+  }
+
+  function renderEditorForm(project, scene) {
+    const errors = scene.validation_errors || [];
+    return `
+      <form class="campaign-editor-form" data-project-id="${escapeAttr(project.campaign_project_id)}" data-scene-id="${escapeAttr(scene.campaign_project_scene_id)}">
+        <div class="campaign-editor-form-head">
+          <div>
+            <strong>Scene #${escapeHtml(scene.scene_order || "")}</strong>
+            <small>${escapeHtml(scene.campaign_project_scene_id || "")}</small>
+          </div>
+          <span class="update-status update-status-${escapeAttr(statusClass(scene.status))}">${escapeHtml(scene.status || "")}</span>
+        </div>
+        <label>
+          順番
+          <input name="scene_order" type="number" min="1" step="1" value="${escapeHtml(scene.scene_order || 1)}" required>
+        </label>
+        <label>
+          シーン種別
+          <select name="scene_type" required>
+            ${sceneTypeOptions(scene.scene_type)}
+          </select>
+        </label>
+        <label>
+          見出し
+          <input name="headline" type="text" value="${escapeHtml(scene.headline || "")}" required>
+        </label>
+        <label>
+          本文
+          <textarea name="body_text" rows="4" required>${escapeHtml(scene.body_text || "")}</textarea>
+        </label>
+        <label>
+          ビジュアル指示
+          <textarea name="visual_direction" rows="4" required>${escapeHtml(scene.visual_direction || "")}</textarea>
+        </label>
+        <label>
+          CTA
+          <input name="cta_text" type="text" value="${escapeHtml(scene.cta_text || "")}" required>
+        </label>
+        <label>
+          秒数
+          <input name="duration_seconds" type="number" min="1" step="1" value="${escapeHtml(scene.duration_seconds || 5)}" required>
+        </label>
+        <label>
+          必要素材
+          <textarea name="asset_requirements" rows="3">${escapeHtml(listToText(scene.asset_requirements))}</textarea>
+        </label>
+        ${errors.length ? `<div class="campaign-project-validation">${errors.map(renderValidationError).join("")}</div>` : ""}
+        <div class="campaign-editor-actions">
+          <button type="submit">保存</button>
+          <button class="secondary" type="button" data-editor-validate="${escapeAttr(project.campaign_project_id)}">プロジェクト検証</button>
+          <a class="campaign-project-preview-link" href="/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview" target="_blank" rel="noreferrer">プレビューを開く</a>
+        </div>
+      </form>
+    `;
+  }
+
+  async function handleSaveScene(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type='submit']");
+    button.disabled = true;
+    button.textContent = "保存中";
+    try {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/scenes/${encodeURIComponent(form.dataset.sceneId || "")}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scenePayloadFromForm(form))
+      });
+      state.message = "シーンを保存しました。";
+      await loadEditor({ selectedSceneId: form.dataset.sceneId || "" });
+    } catch (error) {
+      state.message = error.message || "シーン保存に失敗しました。";
+      render();
+    }
+  }
+
+  async function handleValidateProject(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "検証中";
+    try {
+      const result = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(button.dataset.editorValidate || "")}/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      state.message = result.valid ? "プロジェクト検証に通りました。" : `検証エラー: ${result.validation_errors?.length || 0}件`;
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    } catch (error) {
+      state.message = error.message || "プロジェクト検証に失敗しました。";
+      render();
+    }
+  }
+
+  function scenePayloadFromForm(form) {
+    return {
+      scene_order: Number.parseInt(form.elements.scene_order.value, 10) || 0,
+      scene_type: form.elements.scene_type.value,
+      headline: form.elements.headline.value,
+      body_text: form.elements.body_text.value,
+      visual_direction: form.elements.visual_direction.value,
+      cta_text: form.elements.cta_text.value,
+      duration_seconds: Number.parseInt(form.elements.duration_seconds.value, 10) || 0,
+      asset_requirements: listFromText(form.elements.asset_requirements.value)
+    };
+  }
+
+  function sceneTypeOptions(selected) {
+    const options = window.MisellCampaignProjectUi?.sceneTypeOptions || [];
+    return options.map(([value, label]) => (
+      `<option value="${escapeAttr(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`
+    )).join("");
+  }
+
+  function selectedScene(scenes) {
+    return scenes.find((scene) => scene.campaign_project_scene_id === state.selectedSceneId) || scenes[0] || null;
+  }
+
+  function activeScenes(project) {
+    return (project?.scenes || [])
+      .filter((scene) => scene.status !== "deleted")
+      .sort((a, b) => (Number(a.scene_order || 0) - Number(b.scene_order || 0)));
+  }
+
+  function renderEvent(event) {
+    return `
+      <small>
+        ${escapeHtml(event.action || "")}
+        ${event.campaign_project_scene_id ? `<span>${escapeHtml(event.campaign_project_scene_id)}</span>` : ""}
+        ${event.actor_id ? `<span>${escapeHtml(event.actor_id)}</span>` : ""}
+        <span>${escapeHtml(event.created_at || "")}</span>
+      </small>
+    `;
+  }
+
+  function renderValidationError(error) {
+    return `<small>${escapeHtml(error.field || "")} ${escapeHtml(error.code || "")}: ${escapeHtml(error.message || "")}</small>`;
+  }
+
+  function assetRequirements(scene) {
+    const requirements = Array.isArray(scene.asset_requirements) ? scene.asset_requirements : [];
+    return requirements.map((item) => {
+      if (typeof item === "string") return item;
+      return JSON.stringify(item);
+    }).filter(Boolean);
+  }
+
+  function listFromText(value) {
+    return String(value || "")
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function listToText(value) {
+    if (!Array.isArray(value)) return "";
+    return value.map((item) => {
+      if (typeof item === "string") return item;
+      return JSON.stringify(item);
+    }).join("\n");
+  }
+
+  function statusClass(status) {
+    if (status === "valid" || status === "validated") return "success";
+    if (status === "invalid" || status === "deleted") return "failed";
+    return "pending";
+  }
+
+  function projectIdFromPath() {
+    const match = window.location.pathname.match(/\/admin\/campaign-projects\/([^/]+)\/preview\/?$/);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;"
+    }[char]));
+  }
+
+  function escapeAttr(value) {
+    return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "-");
+  }
+})();
