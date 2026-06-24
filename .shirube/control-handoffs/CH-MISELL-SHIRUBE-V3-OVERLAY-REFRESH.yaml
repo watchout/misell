@@ -1,0 +1,169 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-SHIRUBE-V3-OVERLAY-REFRESH
+parent_ssot: https://github.com/watchout/misell/issues/184
+work_order: watchout/misell#184
+pr: watchout/misell#<PR_NUMBER_PENDING>
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/184
+premise_confirmation_ref: https://github.com/watchout/misell/issues/184
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/184
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: owner_review
+
+rps_scope:
+  shirube_owns:
+    - Misell repository governance evidence under .shirube.
+    - Additive pinned ADF reusable report-only workflow evidence.
+    - Itemized audit checklist request shape for future audits.
+  shirube_does_not_own:
+    - Existing Misell Gate 0 required checks.
+    - Existing Shirube Full Operational Gates replacement.
+    - Branch protection, rulesets, or required-check configuration.
+    - Runtime product behavior, DB migrations, device operations, deploy, billing, or customer data access.
+
+cell:
+  CELL-ID: CELL-MISELL-SHIRUBE-V3-OVERLAY-REFRESH
+  cell_type: scaffold
+  risk_class: R3
+  goal: >
+    Refresh Misell Shirube overlay evidence to the latest pinned ai-dev-framework
+    state and add the ADF reusable Rapid/Lite report-only caller without
+    replacing Misell's existing full operational gate.
+  non_scope:
+    - replacing .github/workflows/shirube-full-operational-gates.yml
+    - copying new ADF scripts into scripts/shirube/**
+    - changing branch protection, rulesets, or required checks
+    - making the reusable caller CI-hard-blocking
+    - product runtime, API, DB, package, lockfile, deployment, or secret changes
+    - external repository mutation
+  allowed_paths:
+    - .github/workflows/shirube-rapid-lite-gates-report.yml
+    - .shirube/**
+    - docs/97_SHIRUBE_V3_OVERLAY_REFRESH.md
+    - docs/README.md
+  forbidden_paths:
+    - .github/workflows/ci.yml
+    - .github/workflows/shirube-full-operational-gates.yml
+    - scripts/shirube/**
+    - apps/**
+    - package.json
+    - package-lock.json
+    - pnpm-lock.yaml
+    - yarn.lock
+    - deploy/**
+    - deployment/**
+    - .env
+    - .env.*
+    - secrets/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+  protected_surfaces:
+    declared:
+      - active workflows
+      - governance workflow caller
+    touched: true
+    reason: >
+      This cell adds a thin pull_request report-only caller pinned to ADF. It
+      does not change branch protection, rulesets, required checks, or the
+      existing full operational hard gate.
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - existing full operational gate removed, renamed, weakened, or replaced
+    - reusable workflow configured as required check or CI hard block
+    - ADF scripts copied into the target repo
+    - runtime/API/DB/product/package/deploy/secret file touched
+    - owner exact-head decision missing before merge
+  acceptance_criteria:
+    - existing Shirube Full Operational Gates workflow remains unchanged
+    - new ADF reusable workflow caller is pinned to a commit SHA
+    - reusable caller is report_only and additive only
+    - execution context, enforcement policy, control-state config, and source mirror artifacts exist
+    - structured audit template asks for itemized checklist results
+    - docs explain that this is not a direct replacement of the existing full gate
+
+implementation_boundary:
+  summary: Add governance overlay artifacts and a thin report-only caller only.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - external repository mutation
+    - product runtime mutation
+
+validation:
+  required_commands:
+    - git diff --check origin/main...HEAD
+    - >-
+      ruby -e 'require "yaml"; ARGV.each { |f| YAML.safe_load(File.read(f), permitted_classes: [Time], aliases: true) }; puts "yaml ok"'
+      .shirube/shirube-framework-lock.yaml
+      .shirube/repo-spec.yaml
+      .shirube/adoption-intake.yaml
+      .shirube/lifecycle-state.yaml
+      .shirube/execution-context.yaml
+      .shirube/enforcement-policy.yaml
+      .shirube/control-state-completeness.yaml
+      .shirube/source-mirrors/control-issue.yaml
+      .shirube/control-handoffs/CH-MISELL-SHIRUBE-V3-OVERLAY-REFRESH.yaml
+      .github/workflows/shirube-rapid-lite-gates-report.yml
+    - npm run shirube:smoke-full-operational
+    - >-
+      node /Users/yuji/Developer/ai-dev-framework/scripts/shirube/run-rapid-lite-report.mjs
+      --result-dir .shirube-rapid-lite-adf
+      --changed-files .shirube-rapid-lite-adf/changed-files.txt
+      --pr-body .shirube-rapid-lite-adf/pr-body.md
+      --diff-root .
+      --actual-repo watchout/misell
+      --actual-branch codex/shirube-v3-overlay-refresh
+      --actual-head LOCAL_HEAD
+      --format json
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - owner_decision
+  acceptance_tests:
+    - changed files match handoff allowed_paths
+    - workflow caller uses pinned ADF ref
+    - workflow caller sets report_only true
+    - exact-head owner decision remains enforced by the existing full operational gate
+    - full operational workflow is not modified
+    - no runtime, DB, package, deploy, secret, branch-protection, or ruleset paths changed
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_shirube_re_evaluation
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: .shirube/control-handoffs/CH-MISELL-SHIRUBE-V3-OVERLAY-REFRESH.yaml

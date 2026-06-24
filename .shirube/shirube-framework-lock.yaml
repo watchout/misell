@@ -1,11 +1,11 @@
 schema_version: shirube-framework-lock/v1
 framework: watchout/ai-dev-framework
-framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
-commit: c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
-version_label: Shirube v3.2 Rapid/Lite report-only pilot
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+commit: 6917720d0ea02fe96f3b7752aa802bc135ec1b19
+version_label: Shirube v3 overlay evidence refresh with reusable report-only caller
 mode: rapid-lite
 profile: hotel-lite
-locked_at: 2026-06-23T06:07:39Z
+locked_at: 2026-06-24T09:30:00Z
 source_url: https://github.com/watchout/ai-dev-framework
 vendored_paths:
   - scripts/shirube/lib.mjs
@@ -20,4 +20,17 @@ local_paths:
 local_patches:
   - scripts/shirube/check-design-rules.mjs skips design-rule-pack file content during text-pattern checks to avoid rule-pack self-matching in the pilot PR.
   - scripts/shirube/check-design-rules.mjs treats scripts/shirube as tool/config surface so vendored checker patterns do not self-trigger pilot design rules.
+external_framework_paths:
+  - .github/workflows/shirube-rapid-lite-reusable.yml
+  - scripts/shirube/check-execution-context.mjs
+  - scripts/shirube/check-audit-checklist.mjs
+  - scripts/shirube/check-control-state-completeness.mjs
+  - scripts/shirube/check-enforcement-policy.mjs
+  - scripts/shirube/run-rapid-lite-report.mjs
+target_repo_script_policy:
+  copy_new_framework_scripts: false
+  reason: >
+    Misell keeps the existing full operational gate scripts for hard gating and
+    consumes newer ADF functionality through a pinned reusable report-only caller
+    until equivalent full operational enforcement is available upstream.
 enforce_pinned_ref: false

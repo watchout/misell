@@ -1,0 +1,41 @@
+schema_version: shirube-execution-context/v1
+mode: misell_full_operational_with_adf_overlay
+profile: hotel-lite
+primary:
+  repo: watchout/misell
+  product: Misell
+  work_order: watchout/misell#184
+  pr: "watchout/misell#<PR_NUMBER_PENDING>"
+active_role: dev
+repo_relations:
+  - repo: watchout/misell
+    relation: primary
+    allowed:
+      - inspect_repo
+      - implement_allowed_paths
+      - run_validation
+      - produce_impl_evidence
+    forbidden:
+      - approve_merge
+      - self_approve
+      - mutate_branch_protection
+      - mutate_rulesets
+      - activate_required_checks
+  - repo: watchout/ai-dev-framework
+    relation: framework_support
+    allowed:
+      - read_standards
+      - cite_pinned_framework_ref
+      - use_reusable_report_workflow
+    forbidden:
+      - mutate_external_repository
+      - treat_support_repo_as_primary_target
+common_contract:
+  primary_repo_required: true
+  work_order_required: true
+  active_role_required: true
+  exact_head_required_for_merge_ready: true
+  owner_decision_required_for_merge_ready: true
+  llm_final_authority_forbidden: true
+  support_repo_as_target_forbidden: true
+  control_repo_as_target_forbidden: true

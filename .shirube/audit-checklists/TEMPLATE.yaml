@@ -1,0 +1,40 @@
+# Copy to .shirube/audit-checklists/<id>.yaml and replace
+# template_schema_version with schema_version only when a PR intentionally
+# supplies a machine-readable checklist artifact.
+template_schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-REPLACE-ME
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-REPLACE-ME.yaml
+  cell_id: CELL-MISELL-REPLACE-ME
+  pr: watchout/misell#0
+items:
+  - item_id: AUDIT-001
+    source: acceptance_criteria
+    verification_method: semantic
+    required: true
+    prompt: Verify the stated acceptance criterion.
+    expected_evidence:
+      - structured_reviewer_rationale
+  - item_id: AUDIT-002
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify changed files are inside the handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+      - diff_scope_report
+  - item_id: AUDIT-003
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no changed file matches the handoff forbidden_paths.
+    expected_evidence:
+      - changed_files
+      - diff_scope_report
+  - item_id: AUDIT-004
+    source: validation_command
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed.
+    expected_evidence:
+      - validation_results

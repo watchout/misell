@@ -1,0 +1,22 @@
+schema_version: shirube-source-mirror/v1
+source_type: github_issue
+source_ref: watchout/ai-dev-framework#487
+source_repo: watchout/ai-dev-framework
+issue_number: 487
+source_url: https://github.com/watchout/ai-dev-framework/issues/487
+target_repo: watchout/misell
+product: Misell
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+fetched_at: 2026-06-24T09:30:00Z
+sha256: 25e9576ad29a06328f7c32ea3c069595a0b519d9f484ac87c6af6a5307133b2f
+mirror_is_truth: false
+generated_by: codex
+source_authority:
+  type: github_issue_or_comment
+  remains_authority: true
+  mirror_role: machine_readable_snapshot
+extracted_fields:
+  target_repo: watchout/misell
+  product: Misell
+  owner_confirmation: pending
+  control_source_status: snapshot

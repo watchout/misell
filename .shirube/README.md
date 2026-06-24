@@ -28,8 +28,11 @@ Normal development should use a per-PR control handoff:
 1. copy `.shirube/control-handoffs/TEMPLATE.rapid-lite.yaml`
 2. fill a concrete file under `.shirube/control-handoffs/`
 3. add `handoff_ref: .shirube/control-handoffs/<file>.yaml` to the PR body
-4. post structured audits using `.shirube/audit-templates/structured-audit.md`
-5. post owner decision using the `shirube_owner_decision` YAML shape
+4. ask audit to answer checklist items from the handoff, or copy
+   `.shirube/audit-checklists/TEMPLATE.yaml` when a machine-readable checklist
+   artifact is required
+5. post structured audits using `.shirube/audit-templates/structured-audit.md`
+6. post owner decision using the `shirube_owner_decision` YAML shape
 
 Structured audits must use an allowed `auditor_actor`, be posted by an allowed
 evidence poster, and satisfy maker-checker separation from the implementation
@@ -44,6 +47,10 @@ configuration remain protected governance changes.
 
 The detailed full operational flow is documented in
 `docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`.
+
+`docs/97_SHIRUBE_V3_OVERLAY_REFRESH.md` documents the additive ADF overlay
+refresh. The reusable ADF Rapid/Lite caller is report-only and does not replace
+`Shirube Full Operational Gates`.
 
 Historical pilot documents remain in `docs/93_*`, `docs/94_*`, and `docs/95_*`
 as background and migration context.
