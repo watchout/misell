@@ -8,8 +8,10 @@ import { collectGithubPrEvidence } from "./collect-github-pr-evidence.mjs";
 const tmp = mkdtempSync(path.join(os.tmpdir(), "misell-shirube-full-gate-"));
 try {
   smokeFullAdoptionPasses();
+  smokeScriptOnlyAdoptionDoesNotRequireWorkflowSurface();
   smokeMissingAuditBlocks();
   smokeNormalWouldBlockBlocks();
+  smokeNormalControlHandoffEvidencePathDoesNotRequireAdoption();
   smokeAuditCollectorAllowsIndependentAuditor();
   smokeAuditCollectorRejectsImplementationActor();
   process.stdout.write("smoke-full-operational-gates PASS\n");
@@ -26,6 +28,26 @@ function smokeFullAdoptionPasses() {
   const report = runFixture(fixture);
   assert(report.verdict === "PASS_WITH_WARN", "full adoption should pass with expected Rapid/Lite warnings");
   assert(report.would_block === false, "full adoption expected blockers should not block");
+}
+
+function smokeScriptOnlyAdoptionDoesNotRequireWorkflowSurface() {
+  const fixture = createFixture("script-only-adoption", {
+    auditValid: true,
+    ownerValid: true,
+    aggregate: adoptionAggregate(["RL-CELL-006", "LC-EXEC-002"]),
+    changedFiles: [
+      "scripts/shirube/check-full-operational-gates.mjs",
+    ],
+    allowedPaths: [
+      "scripts/shirube/**",
+    ],
+    protectedSurfaces: [
+      "shirube_gate_enforcement",
+    ],
+  });
+  const report = runFixture(fixture);
+  assert(report.would_block === false, "script-only gate adoption should not require workflow surface");
+  assert(!hasBlocker(report, "FULL-PROT-002"), "script-only gate adoption should not have missing workflow surface blocker");
 }
 
 function smokeMissingAuditBlocks() {
@@ -49,6 +71,30 @@ function smokeNormalWouldBlockBlocks() {
   const report = runFixture(fixture);
   assert(report.would_block === true, "normal Rapid/Lite blockers should block");
   assert(hasBlocker(report, "FULL-RAPID-003"), "Rapid/Lite blocker should be present");
+}
+
+function smokeNormalControlHandoffEvidencePathDoesNotRequireAdoption() {
+  const fixture = createFixture("normal-control-handoff", {
+    auditValid: true,
+    ownerValid: true,
+    adoption: false,
+    aggregate: normalAggregate([]),
+    changedFiles: [
+      ".shirube/control-handoffs/CH-MISELL-123-normal.yaml",
+      "apps/cloud/public/admin.js",
+    ],
+    allowedPaths: [
+      ".shirube/control-handoffs/CH-MISELL-123-normal.yaml",
+      "apps/cloud/public/admin.js",
+    ],
+  });
+  const report = runFixture(fixture);
+  assert(report.would_block === false, "normal PR handoff evidence path should not block");
+  assert(!hasBlocker(report, "FULL-PROT-001"), "control handoff evidence must not be a protected governance blocker");
+  assert(
+    report.per_pr_evidence_files_touched.includes(".shirube/control-handoffs/CH-MISELL-123-normal.yaml"),
+    "control handoff evidence should be reported separately",
+  );
 }
 
 function smokeAuditCollectorAllowsIndependentAuditor() {
@@ -103,11 +149,16 @@ function createFixture(name, options) {
   const resultDir = path.join(dir, "result");
 
   mkdirSync(dir, { recursive: true });
-  writeFileSync(handoff, renderHandoff({ adoption: options.adoption !== false, head }));
-  writeFileSync(changed, [
+  writeFileSync(handoff, renderHandoff({
+    adoption: options.adoption !== false,
+    head,
+    allowedPaths: options.allowedPaths,
+    protectedSurfaces: options.protectedSurfaces,
+  }));
+  writeFileSync(changed, (options.changedFiles ?? [
     ".github/workflows/shirube-full-operational-gates.yml",
     "scripts/shirube/check-full-operational-gates.mjs",
-  ].join("\n") + "\n");
+  ]).join("\n") + "\n");
   writeFileSync(aggregate, `${JSON.stringify(options.aggregate, null, 2)}\n`);
   writeFileSync(audit, `${JSON.stringify(auditEvidence({ valid: options.auditValid, head }), null, 2)}\n`);
   writeFileSync(owner, renderOwner({ valid: options.ownerValid, head }));
@@ -185,7 +236,15 @@ function runFixture(fixture) {
   });
 }
 
-function renderHandoff({ adoption, head }) {
+function renderHandoff({ adoption, head, allowedPaths, protectedSurfaces }) {
+  const paths = allowedPaths ?? [
+    ".github/workflows/**",
+    "scripts/shirube/**",
+  ];
+  const surfaces = protectedSurfaces ?? [
+    "github_actions_workflow",
+    "shirube_gate_enforcement",
+  ];
   return [
     "schema_version: shirube-control-handoff/full-operational/v1",
     "mode: full-operational",
@@ -202,20 +261,17 @@ function renderHandoff({ adoption, head }) {
     adoption ? "governance_change:" : "governance_change:",
     adoption ? "  type: shirube_full_operational_adoption" : "  type: normal_pr",
     "  protected_surfaces:",
-    "    - github_actions_workflow",
-    "    - shirube_gate_enforcement",
+    ...surfaces.map((entry) => `    - ${entry}`),
     "cell:",
     adoption ? "  cell_type: protected_stop" : "  cell_type: code_lite",
     "  allowed_paths:",
-    "    - .github/workflows/**",
-    "    - scripts/shirube/**",
+    ...paths.map((entry) => `    - ${entry}`),
     "  forbidden_paths:",
     "    - .env",
     "    - .env.*",
     "    - secrets/**",
     "  protected_surfaces:",
-    "    - github_actions_workflow",
-    "    - shirube_gate_enforcement",
+    ...surfaces.map((entry) => `    - ${entry}`),
     "",
   ].join("\n");
 }

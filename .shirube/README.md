@@ -35,6 +35,13 @@ Structured audits must use an allowed `auditor_actor`, be posted by an allowed
 evidence poster, and satisfy maker-checker separation from the implementation
 actor set.
 
+Per-PR control handoffs under `.shirube/control-handoffs/CH-*.yaml` are treated
+as PR evidence paths. They are still checked by the gate against the PR's
+allowed/forbidden path boundary, but they do not by themselves require a
+protected governance-adoption handoff. Changes to workflow files, Shirube gate
+scripts, repo specs, lifecycle state, gate contracts, audit templates, or bridge
+configuration remain protected governance changes.
+
 The detailed full operational flow is documented in
 `docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md`.
 

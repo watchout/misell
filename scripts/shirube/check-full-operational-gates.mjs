@@ -12,9 +12,36 @@ const SCHEMA = "shirube-full-operational-gate/v1";
 const PROTECTED_PATH_GLOBS = [
   ".github/workflows/**",
   ".github/pull_request_template.md",
-  ".shirube/**",
+  ".shirube/README.md",
+  ".shirube/adoption-intake.yaml",
+  ".shirube/audit-templates/**",
+  ".shirube/gate-contracts/**",
+  ".shirube/gate-pack-bridge/**",
+  ".shirube/lifecycle-state.yaml",
+  ".shirube/repo-spec.yaml",
   "scripts/shirube/**",
 ];
+const PER_PR_EVIDENCE_PATH_GLOBS = [
+  ".shirube/control-handoffs/CH-*.yaml",
+];
+const PROTECTED_SURFACE_GLOBS = {
+  github_actions_workflow: [
+    ".github/workflows/**",
+  ],
+  pr_template_governance: [
+    ".github/pull_request_template.md",
+  ],
+  shirube_gate_enforcement: [
+    ".shirube/README.md",
+    ".shirube/adoption-intake.yaml",
+    ".shirube/audit-templates/**",
+    ".shirube/gate-contracts/**",
+    ".shirube/gate-pack-bridge/**",
+    ".shirube/lifecycle-state.yaml",
+    ".shirube/repo-spec.yaml",
+    "scripts/shirube/**",
+  ],
+};
 const EXPECTED_ADOPTION_BLOCKERS = new Set([
   "RECOVER-004",
   "LC-ADOPT-002",
@@ -56,6 +83,7 @@ export function buildFullOperationalGateReport(options) {
   const adoption = isFullOperationalAdoption(handoff);
   const allowedPaths = asStringArray(handoff?.cell?.allowed_paths);
   const forbiddenPaths = asStringArray(handoff?.cell?.forbidden_paths);
+  const perPrEvidenceTouched = changedFiles.filter((file) => matchesAnyGlob(file, PER_PR_EVIDENCE_PATH_GLOBS));
   const protectedTouched = changedFiles.filter((file) => matchesAnyGlob(file, PROTECTED_PATH_GLOBS));
 
   if (!prNumber) blockers.push(finding("FULL-PR-001", "PR number is required.", "pr_number"));
@@ -95,7 +123,7 @@ export function buildFullOperationalGateReport(options) {
 
   if (adoption) {
     const surfaces = surfacesFrom(handoff);
-    for (const required of ["github_actions_workflow", "shirube_gate_enforcement"]) {
+    for (const required of requiredProtectedSurfaces(protectedTouched)) {
       if (!surfaces.has(required)) {
         blockers.push(finding("FULL-PROT-002", `Full adoption handoff must declare protected surface: ${required}.`, "protected_surfaces"));
       }
@@ -142,6 +170,7 @@ export function buildFullOperationalGateReport(options) {
     adoption_mode: adoption ? "shirube_full_operational_adoption" : "normal_pr",
     changed_files_count: changedFiles.length,
     protected_files_touched: protectedTouched,
+    per_pr_evidence_files_touched: perPrEvidenceTouched,
     blockers: uniqueBlockers,
     warnings: uniqueWarnings,
     evidence: uniqueEvidence(evidence),
@@ -203,6 +232,16 @@ function surfacesFrom(handoff) {
     handoff?.governance_change?.protected_surfaces,
   ];
   return new Set(values.flatMap(flattenSurface).map((value) => value.trim()).filter(Boolean));
+}
+
+function requiredProtectedSurfaces(files) {
+  const required = [];
+  for (const [surface, globs] of Object.entries(PROTECTED_SURFACE_GLOBS)) {
+    if (files.some((file) => matchesAnyGlob(file, globs))) {
+      required.push(surface);
+    }
+  }
+  return required;
 }
 
 function flattenSurface(value) {

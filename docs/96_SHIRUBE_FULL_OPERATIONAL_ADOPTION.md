@@ -58,6 +58,20 @@ merged PR, the trusted tool checkout is the current default branch SHA, because
 the PR's stored base SHA may predate this workflow during bootstrap or
 post-merge evidence collection.
 
+## Path Classes
+
+Shirube full operational gates distinguish governance control paths from
+per-PR evidence paths.
+
+Protected governance paths include GitHub workflows, Shirube gate scripts,
+repository specs, lifecycle state, gate contracts, audit templates, and bridge
+configuration. Touching those paths requires a protected governance handoff.
+
+Per-PR control handoffs under `.shirube/control-handoffs/CH-*.yaml` are evidence
+paths for ordinary PRs. They must be included in the PR's `allowed_paths` and
+still participate in scope checks, but they do not by themselves trigger a
+protected governance-adoption requirement.
+
 ## Structured Audit Requirement
 
 Audits must use `.shirube/audit-templates/structured-audit.md`.
