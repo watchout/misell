@@ -679,6 +679,14 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await sceneForm.locator("button[type='submit']").click();
   await expect(page.locator("#campaign-projects")).toContainText("Browser edited scene", { timeout: 5000 });
   await expect(page.locator("#campaign-projects")).toContainText("scene.updated", { timeout: 5000 });
+  const draftPreviewPromise = context.waitForEvent("page");
+  await page.locator(`[data-campaign-project-preview="${campaignProjectId}"]`).click();
+  const draftPreview = await draftPreviewPromise;
+  wirePage(draftPreview, "campaign-preview-draft");
+  await draftPreview.waitForLoadState("domcontentloaded");
+  await expect(draftPreview.locator(".campaign-preview-readiness")).toContainText("確認が必要", { timeout: 5000 });
+  await expect(draftPreview.locator(".campaign-preview-readiness")).toContainText("プロジェクト検証が未完了です", { timeout: 5000 });
+  await draftPreview.close();
   await page.locator(`button[data-campaign-project-validate="${campaignProjectId}"]`).click();
   await expect(page.locator("#campaign-projects")).toContainText("検証済み", { timeout: 5000 });
   await expect(page.locator("#campaign-projects")).toContainText("project.validated", { timeout: 5000 });
@@ -696,6 +704,8 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(campaignPreview.locator(".campaign-preview-stage")).toContainText("Browser edited scene");
   await expect(campaignPreview.locator(".campaign-preview-panel")).toHaveCount(3);
   await expect(campaignPreview.locator(".campaign-preview-summary")).toContainText("3 scenes");
+  await expect(campaignPreview.locator(".campaign-preview-readiness")).toContainText("公開前確認 OK");
+  await expect(campaignPreview.locator(".campaign-preview-readiness")).toContainText("配信作成はまだ行われていません");
   await campaignPreview.locator("[data-preview-play]").click();
   await expect(campaignPreview.locator(".campaign-preview-controls")).toContainText("通し再生中", { timeout: 5000 });
   await expect(campaignPreview.locator(".campaign-preview-controls strong")).toContainText("2 / 3", { timeout: 3000 });
