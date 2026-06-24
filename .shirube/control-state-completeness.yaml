@@ -16,6 +16,8 @@ allowed_protected_surfaces:
   - none
   - active workflows
   - workflows
+  - github_actions_workflow
+  - shirube_gate_enforcement
   - governance workflow caller
   - full operational gate
   - required checks

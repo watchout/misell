@@ -13,6 +13,12 @@ premise_ref: .shirube/repo-spec.yaml
 owner_confirmation_ref: https://github.com/watchout/misell/issues/184
 premise_confirmation_ref: https://github.com/watchout/misell/issues/184
 spec_review_state: ready_for_implementation
+full_operational_adoption: true
+governance_change:
+  type: shirube_full_operational_adoption
+  protected_surfaces:
+    - github_actions_workflow
+    - shirube_gate_enforcement
 
 repo: watchout/misell
 repo_local_issue: https://github.com/watchout/misell/issues/184
@@ -34,7 +40,7 @@ rps_scope:
 
 cell:
   CELL-ID: CELL-MISELL-SHIRUBE-V3-OVERLAY-REFRESH
-  cell_type: scaffold
+  cell_type: governance_enforcement
   risk_class: R3
   goal: >
     Refresh Misell Shirube overlay evidence to the latest pinned ai-dev-framework
@@ -70,6 +76,8 @@ cell:
     - '**/ruleset/**'
   protected_surfaces:
     declared:
+      - github_actions_workflow
+      - shirube_gate_enforcement
       - active workflows
       - governance workflow caller
     touched: true
