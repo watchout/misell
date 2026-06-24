@@ -675,6 +675,7 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   expect(campaignProject.no_publish).toBe(true);
   const sceneForm = page.locator(`form.campaign-project-scene-update[data-project-id="${campaignProjectId}"]`).first();
   await sceneForm.locator("input[name='headline']").fill("Browser edited scene");
+  await sceneForm.locator("input[name='duration_seconds']").fill("1");
   await sceneForm.locator("button[type='submit']").click();
   await expect(page.locator("#campaign-projects")).toContainText("Browser edited scene", { timeout: 5000 });
   await expect(page.locator("#campaign-projects")).toContainText("scene.updated", { timeout: 5000 });
@@ -694,6 +695,17 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(campaignPreview.locator("h1")).toContainText("Browser campaign project");
   await expect(campaignPreview.locator(".campaign-preview-stage")).toContainText("Browser edited scene");
   await expect(campaignPreview.locator(".campaign-preview-panel")).toHaveCount(3);
+  await expect(campaignPreview.locator(".campaign-preview-summary")).toContainText("3 scenes");
+  await campaignPreview.locator("[data-preview-play]").click();
+  await expect(campaignPreview.locator(".campaign-preview-controls")).toContainText("通し再生中", { timeout: 5000 });
+  await expect(campaignPreview.locator(".campaign-preview-controls strong")).toContainText("2 / 3", { timeout: 3000 });
+  await campaignPreview.locator("[data-preview-pause]").click();
+  await expect(campaignPreview.locator(".campaign-preview-controls")).toContainText("停止中", { timeout: 5000 });
+  await campaignPreview.locator("[data-preview-restart]").click();
+  await expect(campaignPreview.locator(".campaign-preview-controls strong")).toContainText("1 / 3", { timeout: 5000 });
+  await campaignPreview.locator("[data-preview-pause]").click();
+  await campaignPreview.locator("[data-preview-next]").click();
+  await expect(campaignPreview.locator(".campaign-preview-controls strong")).toContainText("2 / 3", { timeout: 5000 });
   await campaignPreview.screenshot({ path: path.join(screenshotsDir, "cloud-campaign-project-preview.png"), fullPage: true });
   await campaignPreview.close();
 

@@ -196,6 +196,12 @@ CampaignProject/Scene draft state and `campaign_project_events`; they do not
 create delivery manifests, publish content, render media, call AI providers, or
 consume credits.
 
+The authenticated CampaignProject preview page includes a read-only run-through
+mode. Operators can play, pause, restart, and step through non-deleted scenes in
+`scene_order` order using each scene's `duration_seconds`. This is browser-only
+preview state and does not mutate campaign data, create delivery manifests,
+publish content, render media, call AI providers, or consume credits.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:

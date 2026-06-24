@@ -997,10 +997,29 @@ td small {
 }
 
 .campaign-preview-summary div,
+.campaign-preview-controls div,
 .campaign-preview-scenes,
 .campaign-preview-scene-list {
   display: grid;
   gap: 8px;
+}
+
+.campaign-preview-controls {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.campaign-preview-control-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .campaign-preview-workspace {

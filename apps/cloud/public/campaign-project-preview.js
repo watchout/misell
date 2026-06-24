@@ -5,7 +5,9 @@
   const title = document.getElementById("campaign-preview-title");
   const state = {
     project: null,
-    selectedSceneId: ""
+    selectedSceneId: "",
+    isPlaying: false,
+    timerId: null
   };
 
   loadPreview().catch((error) => {
@@ -35,6 +37,8 @@
     const project = state.project;
     const scenes = activeScenes(project);
     const selected = scenes.find((scene) => scene.campaign_project_scene_id === state.selectedSceneId) || scenes[0] || null;
+    const selectedIndex = selected ? scenes.findIndex((scene) => scene.campaign_project_scene_id === selected.campaign_project_scene_id) : -1;
+    const totalDuration = scenes.reduce((sum, scene) => sum + sceneDurationSeconds(scene), 0);
     title.textContent = project.title || project.campaign_project_id || "Campaign Preview";
     root.innerHTML = `
       <section class="campaign-preview-summary">
@@ -46,6 +50,19 @@
         <div>
           <span class="update-status update-status-${escapeAttr(project.validation_status === "valid" ? "success" : project.validation_status === "invalid" ? "failed" : "pending")}">${escapeHtml(project.status || "")}</span>
           <small>${escapeHtml(project.source_type || "")}</small>
+          <small>${escapeHtml(String(scenes.length))} scenes / ${escapeHtml(String(totalDuration))}秒</small>
+        </div>
+      </section>
+      <section class="campaign-preview-controls" aria-label="Run-through preview controls">
+        <div>
+          <strong>${escapeHtml(selected ? `${selectedIndex + 1} / ${scenes.length}` : "0 / 0")}</strong>
+          <small>${escapeHtml(state.isPlaying ? "通し再生中" : "停止中")}</small>
+        </div>
+        <div class="campaign-preview-control-buttons">
+          <button type="button" data-preview-play${state.isPlaying || !selected ? " disabled" : ""}>再生</button>
+          <button class="secondary" type="button" data-preview-pause${state.isPlaying ? "" : " disabled"}>一時停止</button>
+          <button class="secondary" type="button" data-preview-restart${selected ? "" : " disabled"}>最初から</button>
+          <button class="secondary" type="button" data-preview-next${selected ? "" : " disabled"}>次へ</button>
         </div>
       </section>
       <section class="campaign-preview-workspace">
@@ -61,9 +78,19 @@
     root.querySelectorAll("[data-preview-scene-id]").forEach((button) => {
       button.addEventListener("click", () => {
         state.selectedSceneId = button.dataset.previewSceneId || "";
+        stopPlaybackTimer();
         render();
       });
     });
+    root.querySelector("[data-preview-play]")?.addEventListener("click", startPlayback);
+    root.querySelector("[data-preview-pause]")?.addEventListener("click", pausePlayback);
+    root.querySelector("[data-preview-restart]")?.addEventListener("click", restartPlayback);
+    root.querySelector("[data-preview-next]")?.addEventListener("click", () => {
+      stopPlaybackTimer();
+      selectNextScene({ wrap: true });
+      render();
+    });
+    schedulePlaybackTimer();
   }
 
   function renderSceneButton(scene, selected) {
@@ -104,6 +131,69 @@
         <small>${escapeHtml(scene.scene_type || "")} / ${escapeHtml(scene.status || "")} / ${escapeHtml(scene.duration_seconds || "")}秒</small>
       </article>
     `;
+  }
+
+  function startPlayback() {
+    const scenes = activeScenes(state.project);
+    if (!scenes.length) return;
+    if (!state.selectedSceneId) state.selectedSceneId = scenes[0].campaign_project_scene_id;
+    state.isPlaying = true;
+    render();
+  }
+
+  function pausePlayback() {
+    state.isPlaying = false;
+    stopPlaybackTimer();
+    render();
+  }
+
+  function restartPlayback() {
+    const scenes = activeScenes(state.project);
+    state.selectedSceneId = scenes[0]?.campaign_project_scene_id || "";
+    state.isPlaying = true;
+    render();
+  }
+
+  function schedulePlaybackTimer() {
+    stopPlaybackTimer();
+    if (!state.isPlaying) return;
+    const scene = activeScenes(state.project).find((entry) => entry.campaign_project_scene_id === state.selectedSceneId);
+    if (!scene) return;
+    state.timerId = window.setTimeout(() => {
+      selectNextScene({ wrap: true });
+      render();
+    }, sceneDurationSeconds(scene) * 1000);
+  }
+
+  function stopPlaybackTimer() {
+    if (!state.timerId) return;
+    window.clearTimeout(state.timerId);
+    state.timerId = null;
+  }
+
+  function selectNextScene({ wrap = false } = {}) {
+    const scenes = activeScenes(state.project);
+    if (!scenes.length) {
+      state.selectedSceneId = "";
+      state.isPlaying = false;
+      return;
+    }
+    const index = scenes.findIndex((scene) => scene.campaign_project_scene_id === state.selectedSceneId);
+    const nextIndex = index + 1;
+    if (nextIndex < scenes.length) {
+      state.selectedSceneId = scenes[nextIndex].campaign_project_scene_id;
+      return;
+    }
+    if (wrap) {
+      state.selectedSceneId = scenes[0].campaign_project_scene_id;
+      return;
+    }
+    state.isPlaying = false;
+  }
+
+  function sceneDurationSeconds(scene) {
+    const seconds = Number.parseInt(scene?.duration_seconds, 10);
+    return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : 1;
   }
 
   function activeScenes(project) {
