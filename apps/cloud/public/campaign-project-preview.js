@@ -3,6 +3,13 @@
 
   const root = document.getElementById("campaign-preview-root");
   const title = document.getElementById("campaign-preview-title");
+  const REQUIRED_SCENE_FIELDS = Object.freeze([
+    ["scene_type", "種別"],
+    ["headline", "見出し"],
+    ["body_text", "本文"],
+    ["visual_direction", "ビジュアル指示"],
+    ["cta_text", "CTA"]
+  ]);
   const state = {
     project: null,
     selectedSceneId: "",
@@ -39,6 +46,7 @@
     const selected = scenes.find((scene) => scene.campaign_project_scene_id === state.selectedSceneId) || scenes[0] || null;
     const selectedIndex = selected ? scenes.findIndex((scene) => scene.campaign_project_scene_id === selected.campaign_project_scene_id) : -1;
     const totalDuration = scenes.reduce((sum, scene) => sum + sceneDurationSeconds(scene), 0);
+    const readiness = deriveReadiness(project, scenes);
     title.textContent = project.title || project.campaign_project_id || "Campaign Preview";
     root.innerHTML = `
       <section class="campaign-preview-summary">
@@ -65,6 +73,7 @@
           <button class="secondary" type="button" data-preview-next${selected ? "" : " disabled"}>次へ</button>
         </div>
       </section>
+      ${renderReadinessPanel(readiness)}
       <section class="campaign-preview-workspace">
         <nav class="campaign-preview-scenes" aria-label="Scenes">
           ${scenes.length ? scenes.map((scene) => renderSceneButton(scene, selected)).join("") : `<p class="empty">シーンはまだありません。</p>`}
@@ -100,6 +109,80 @@
         ${escapeHtml(String(scene.scene_order || ""))}. ${escapeHtml(scene.scene_type || "")}
       </button>
     `;
+  }
+
+  function renderReadinessPanel(readiness) {
+    const statusText = readiness.ready ? "公開前確認 OK" : "確認が必要";
+    const statusClass = readiness.ready ? "success" : "failed";
+    return `
+      <section class="campaign-preview-readiness" aria-label="Preview validation readiness">
+        <div class="campaign-preview-readiness-heading">
+          <div>
+            <strong>公開前確認</strong>
+            <small>既存の検証結果とシーン入力から表示する読み取り専用チェックです。</small>
+          </div>
+          <span class="update-status update-status-${escapeAttr(statusClass)}">${escapeHtml(statusText)}</span>
+        </div>
+        ${readiness.ready ? `
+          <p class="campaign-preview-readiness-ok">すべての非削除シーンが検証済みです。配信作成はまだ行われていません。</p>
+        ` : `
+          <ul class="campaign-preview-readiness-list">
+            ${readiness.items.map((item) => `<li><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.message)}</span></li>`).join("")}
+          </ul>
+        `}
+      </section>
+    `;
+  }
+
+  function deriveReadiness(project, scenes) {
+    const items = [];
+    if (!scenes.length) {
+      items.push({ label: "シーン", message: "非削除シーンがありません。" });
+    }
+    const projectErrors = Array.isArray(project?.validation_errors) ? project.validation_errors : [];
+    if (project?.status !== "validated" || project?.validation_status !== "valid") {
+      items.push({ label: "プロジェクト", message: "プロジェクト検証が未完了です。" });
+    }
+    for (const error of projectErrors) {
+      items.push({ label: errorLabel("プロジェクト", error), message: errorMessage(error) });
+    }
+    for (const scene of scenes) {
+      for (const issue of sceneReadinessIssues(scene)) {
+        items.push(issue);
+      }
+    }
+    return { ready: items.length === 0, items };
+  }
+
+  function sceneReadinessIssues(scene) {
+    const label = `Scene ${scene.scene_order || ""}`;
+    const issues = [];
+    if (scene.status !== "valid" || scene.validation_status !== "valid") {
+      issues.push({ label, message: "シーン検証が未完了または無効です。" });
+    }
+    for (const [field, fieldLabel] of REQUIRED_SCENE_FIELDS) {
+      if (!String(scene[field] ?? "").trim()) {
+        issues.push({ label, message: `${fieldLabel}が未入力です。` });
+      }
+    }
+    if (!Number.isSafeInteger(Number(scene.duration_seconds)) || Number(scene.duration_seconds) <= 0) {
+      issues.push({ label, message: "秒数は1秒以上が必要です。" });
+    }
+    const errors = Array.isArray(scene.validation_errors) ? scene.validation_errors : [];
+    for (const error of errors) {
+      issues.push({ label: errorLabel(label, error), message: errorMessage(error) });
+    }
+    return issues;
+  }
+
+  function errorLabel(fallback, error) {
+    const field = error && typeof error === "object" ? error.field || error.code || "" : "";
+    return field ? `${fallback} / ${field}` : fallback;
+  }
+
+  function errorMessage(error) {
+    if (!error || typeof error !== "object") return String(error || "検証エラーがあります。");
+    return error.message || error.code || "検証エラーがあります。";
   }
 
   function renderSelectedScene(project, scene) {

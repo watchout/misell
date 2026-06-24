@@ -1022,6 +1022,44 @@ td small {
   justify-content: flex-end;
 }
 
+.campaign-preview-readiness {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.campaign-preview-readiness-heading {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.campaign-preview-readiness-heading div,
+.campaign-preview-readiness-list {
+  display: grid;
+  gap: 6px;
+}
+
+.campaign-preview-readiness-ok {
+  color: #166534;
+  margin: 0;
+}
+
+.campaign-preview-readiness-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.campaign-preview-readiness-list li span {
+  color: #52616f;
+  display: block;
+  margin-top: 2px;
+}
+
 .campaign-preview-workspace {
   display: grid;
   gap: 16px;

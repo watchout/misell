@@ -202,6 +202,13 @@ mode. Operators can play, pause, restart, and step through non-deleted scenes in
 preview state and does not mutate campaign data, create delivery manifests,
 publish content, render media, call AI providers, or consume credits.
 
+The same preview page also shows a read-only readiness panel derived from the
+existing CampaignProject and Scene validation fields. It highlights unvalidated
+projects, invalid scenes, missing required scene fields, and invalid durations
+for operator review. The panel is browser-only guidance; it does not call
+mutation APIs, create `content_manifest` rows, publish content, render media,
+call AI providers, or consume credits.
+
 ## macOS Launch Agent
 
 For the Mac mini used over Tailscale:
