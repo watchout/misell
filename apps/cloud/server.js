@@ -750,6 +750,16 @@ app.get("/api/admin/campaign-projects/:campaign_project_id/playlist-handoff-draf
   }
 });
 
+app.get("/api/admin/campaign-projects/:campaign_project_id/schedule-handoff-draft", requireAdminAuth, (req, res, next) => {
+  try {
+    const draft = getCampaignProjectScheduleHandoffDraft(cleanId(req.params.campaign_project_id), normalizeCampaignProjectScopeQuery(req.query || {}));
+    if (!draft) throw requestError("Campaign project not found", 404);
+    res.json({ ok: true, schedule_handoff_draft: draft });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/campaign-projects/:campaign_project_id/scenes", requireAdminAuth, (req, res, next) => {
   try {
     const scene = createCampaignProjectScene(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
@@ -7335,10 +7345,28 @@ function getCampaignProjectPlaylistHandoffDraft(projectId, scope = null) {
   );
 }
 
-function buildCampaignProjectPlaylistHandoffDraft(project, scenes = []) {
-  const activeScenes = scenes
+function getCampaignProjectScheduleHandoffDraft(projectId, scope = null) {
+  const row = getCampaignProjectRow(projectId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Campaign project");
+  if (row.status === "deleted") throw requestError("Campaign project is deleted", 400);
+  const project = publicCampaignProject(row);
+  const scenes = listCampaignProjectScenes(row.campaign_project_id);
+  return buildCampaignProjectScheduleHandoffDraft(
+    project,
+    scenes,
+    getStoreSettings(project.store_id, { withDefaults: true })
+  );
+}
+
+function activeCampaignProjectScenes(scenes = []) {
+  return scenes
     .filter((scene) => scene.status !== "deleted")
     .sort((a, b) => (Number(a.scene_order || 0) - Number(b.scene_order || 0)));
+}
+
+function buildCampaignProjectPlaylistHandoffDraft(project, scenes = []) {
+  const activeScenes = activeCampaignProjectScenes(scenes);
   const validationIssues = campaignProjectHandoffValidationIssues(project, activeScenes);
   const payload = {
     schema_version: "campaign-project-playlist-handoff-draft/v1",
@@ -7396,6 +7424,94 @@ function buildCampaignProjectPlaylistHandoffDraft(project, scenes = []) {
       "content_manifest_create",
       "publish",
       "schedule_activate",
+      "device_policy_update",
+      "credit_ledger_mutation"
+    ]
+  };
+  return {
+    ...payload,
+    draft_sha256: crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex")
+  };
+}
+
+function buildCampaignProjectScheduleHandoffDraft(project, scenes = [], storeSettings = null) {
+  const playlistDraft = buildCampaignProjectPlaylistHandoffDraft(project, scenes);
+  const settings = storeSettings || {
+    timezone: DEFAULT_TIMEZONE,
+    business_day_start_time: "00:00"
+  };
+  const payload = {
+    schema_version: "campaign-project-schedule-handoff-draft/v1",
+    draft_type: "operator_copy_handoff",
+    draft_status: playlistDraft.validation?.valid ? "ready_for_operator_schedule_input" : "needs_project_validation",
+    draft_key: cleanId(`schedule-handoff-${project.campaign_project_id}-${project.updated_at || project.created_at || ""}`),
+    source_updated_at: project.updated_at,
+    campaign_project_id: project.campaign_project_id,
+    tenant_id: project.tenant_id,
+    store_id: project.store_id,
+    screen_group_id: project.screen_group_id,
+    no_external_ai: true,
+    no_media_generation: true,
+    no_content_manifest_creation: true,
+    no_publish: true,
+    no_credit_consumption: true,
+    no_schedule_activation: true,
+    schedule_activation_ready: false,
+    schedule_created: false,
+    device_policy_updated: false,
+    content_manifest_created: false,
+    scope: {
+      tenant_id: project.tenant_id,
+      store_id: project.store_id,
+      screen_group_id: project.screen_group_id
+    },
+    source: {
+      campaign_project_id: project.campaign_project_id,
+      playlist_draft_key: playlistDraft.draft_key,
+      playlist_draft_sha256: playlistDraft.draft_sha256
+    },
+    playlist_reference: {
+      schema_version: playlistDraft.schema_version,
+      playlist_version: playlistDraft.playlist?.playlist_version || "",
+      release_channel: playlistDraft.playlist?.release_channel || "draft",
+      item_count: playlistDraft.playlist?.item_count || 0,
+      draft_key: playlistDraft.draft_key,
+      draft_sha256: playlistDraft.draft_sha256,
+      validation_valid: playlistDraft.validation?.valid === true
+    },
+    schedule: {
+      schema_version: 1,
+      schedule_version: cleanId(`schedule-draft-${project.campaign_project_id}`),
+      status: "draft",
+      activation_mode: "manual_after_publish_gate",
+      timezone: cleanString(settings.timezone || DEFAULT_TIMEZONE) || DEFAULT_TIMEZONE,
+      business_day_start_time: cleanString(settings.business_day_start_time || "00:00") || "00:00",
+      start_date: "",
+      end_date: "",
+      days_of_week: [],
+      time_windows: [],
+      priority: 0,
+      requires_operator_schedule_input: true,
+      operator_required_fields: [
+        "start_date",
+        "end_date",
+        "days_of_week",
+        "time_windows",
+        "priority"
+      ]
+    },
+    validation: {
+      valid: playlistDraft.validation?.valid === true,
+      issue_count: playlistDraft.validation?.issue_count || 0,
+      issues: playlistDraft.validation?.issues || []
+    },
+    forbidden_operations: [
+      "external_ai_call",
+      "media_render",
+      "content_manifest_create",
+      "publish",
+      "schedule_activate",
+      "schedule_create",
       "device_policy_update",
       "credit_ledger_mutation"
     ]

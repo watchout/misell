@@ -7,6 +7,7 @@
   const state = {
     project: null,
     handoffDraft: null,
+    scheduleHandoffDraft: null,
     selectedSceneId: "",
     message: ""
   };
@@ -18,12 +19,14 @@
   async function loadEditor(options = {}) {
     const projectId = projectIdFromPath();
     if (!projectId) throw new Error("project id is required");
-    const [response, handoffResponse] = await Promise.all([
+    const [response, handoffResponse, scheduleHandoffResponse] = await Promise.all([
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`),
-      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`)
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`),
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/schedule-handoff-draft`)
     ]);
     state.project = response.campaign_project;
     state.handoffDraft = handoffResponse.playlist_handoff_draft;
+    state.scheduleHandoffDraft = scheduleHandoffResponse.schedule_handoff_draft;
     const scenes = activeScenes(state.project);
     const previous = options.selectedSceneId || state.selectedSceneId;
     state.selectedSceneId = scenes.some((scene) => scene.campaign_project_scene_id === previous)
@@ -80,6 +83,7 @@
         ${(project.events || []).slice(0, 8).map(renderEvent).join("") || `<p class="empty">履歴なし</p>`}
       </section>
       ${renderHandoffDraft(state.handoffDraft)}
+      ${renderScheduleHandoffDraft(state.scheduleHandoffDraft)}
     `;
     root.querySelectorAll("[data-editor-scene-id]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -97,6 +101,7 @@
       button.addEventListener("click", handleRegenerationRequest);
     });
     root.querySelector("[data-editor-copy-handoff]")?.addEventListener("click", handleCopyHandoff);
+    root.querySelector("[data-editor-copy-schedule-handoff]")?.addEventListener("click", handleCopyScheduleHandoff);
     root.querySelector("form.campaign-editor-form")?.addEventListener("submit", handleSaveScene);
   }
 
@@ -347,6 +352,21 @@
     render();
   }
 
+  async function handleCopyScheduleHandoff() {
+    const textarea = root.querySelector("[data-editor-schedule-handoff-json]");
+    if (!textarea) return;
+    textarea.focus();
+    textarea.select();
+    try {
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(textarea.value);
+      state.message = "配信スケジュール下書きをコピーしました。";
+    } catch {
+      state.message = "配信スケジュール下書きを選択しました。";
+    }
+    render();
+  }
+
   function renderHandoffDraft(draft) {
     if (!draft) return "";
     const draftJson = JSON.stringify(draft, null, 2);
@@ -368,6 +388,31 @@
         </div>
         <textarea data-editor-handoff-json readonly rows="12">${escapeHtml(draftJson)}</textarea>
         <button class="secondary" type="button" data-editor-copy-handoff>JSONをコピー</button>
+      </section>
+    `;
+  }
+
+  function renderScheduleHandoffDraft(draft) {
+    if (!draft) return "";
+    const draftJson = JSON.stringify(draft, null, 2);
+    const statusText = draft.validation?.valid ? "次工程入力待ち" : "確認が必要";
+    const timezone = draft.schedule?.timezone || "";
+    return `
+      <section class="campaign-editor-handoff campaign-editor-schedule-handoff" aria-label="Schedule handoff draft">
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>配信スケジュール下書き</h2>
+            <small>operator handoff 用の読み取り専用 JSON です。scheduleを作成せず、device policyも更新しません。</small>
+          </div>
+          <span class="update-status update-status-${escapeAttr(draft.validation?.valid ? "success" : "failed")}">${escapeHtml(statusText)}</span>
+        </div>
+        <div class="campaign-editor-handoff-meta">
+          <small>${escapeHtml(draft.schema_version || "")}</small>
+          <small>${escapeHtml(timezone)} / ${escapeHtml(draft.schedule?.business_day_start_time || "")}</small>
+          <small>${escapeHtml(String(draft.draft_sha256 || "").slice(0, 16))}</small>
+        </div>
+        <textarea data-editor-schedule-handoff-json readonly rows="12">${escapeHtml(draftJson)}</textarea>
+        <button class="secondary" type="button" data-editor-copy-schedule-handoff>JSONをコピー</button>
       </section>
     `;
   }
