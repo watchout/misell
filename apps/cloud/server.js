@@ -1309,6 +1309,7 @@ app.get("/api/admin/reports/summary", requireAdminAuth, (req, res, next) => {
 app.get("/api/admin/reports/daily-metrics", requireAdminAuth, (req, res, next) => {
   try {
     const criteria = normalizeReportCriteria(req.query || {});
+    assertReportReadModelScope(criteria);
     res.json({ ok: true, metrics: listReportDailyStoreMetrics(criteria) });
   } catch (error) {
     next(error);
@@ -1318,6 +1319,7 @@ app.get("/api/admin/reports/daily-metrics", requireAdminAuth, (req, res, next) =
 app.post("/api/admin/reports/read-model/rebuild", requireAdminAuth, (req, res, next) => {
   try {
     const criteria = normalizeReportCriteria(req.body || {});
+    assertReportReadModelScope(criteria);
     const result = rebuildReportDailyStoreMetrics(criteria);
     res.status(201).json({
       ok: true,
@@ -2325,8 +2327,10 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
       INSERT INTO playlogs (
         device_id, tenant_id, store_id, screen_group_id, received_at, played_at,
         playlist_version, playlist_item_id, campaign_id, asset_id, layout, duration, result,
-        event_id, event_type, occurred_at, content_id, playback_id, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        event_id, event_type, occurred_at, content_id, playback_id,
+        item_type, ad_slot_id, creative_id, qr_link_id, manifest_hash,
+        planned_duration_seconds, played_duration_seconds, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.device.device_id,
       req.device.tenant_id,
@@ -2346,6 +2350,13 @@ app.post("/api/device/playlog", requireDeviceAuth, (req, res, next) => {
       occurredAt,
       cleanId(payload.content_id || payload.contentId),
       cleanId(payload.playback_id || payload.playbackId),
+      normalizePlaylogItemType(payload.item_type || payload.type),
+      cleanId(payload.ad_slot_id || payload.adSlotId),
+      cleanId(payload.creative_id || payload.creativeId),
+      cleanId(payload.qr_link_id || payload.qrLinkId),
+      cleanString(payload.manifest_hash || payload.content_manifest_hash || payload.contentManifestHash).slice(0, 160),
+      boundedReportDurationSeconds(payload.planned_duration_seconds || payload.plannedDurationSeconds || payload.duration),
+      boundedReportDurationSeconds(payload.played_duration_seconds || payload.playedDurationSeconds || payload.duration),
       JSON.stringify(payload)
     );
     res.status(201).json({ ok: true, event_id: eventId, event_id_generated: resolvedEvent.generated, received_at: now });
@@ -2607,10 +2618,22 @@ function initDb() {
       playlist_version TEXT,
       playlist_item_id TEXT,
       campaign_id TEXT,
+      content_id TEXT,
       asset_id TEXT,
+      item_type TEXT,
+      ad_slot_id TEXT,
+      creative_id TEXT,
+      qr_link_id TEXT,
+      manifest_hash TEXT,
       layout TEXT,
       duration INTEGER,
+      planned_duration_seconds INTEGER,
+      played_duration_seconds INTEGER,
       result TEXT,
+      event_id TEXT,
+      event_type TEXT,
+      occurred_at TEXT,
+      playback_id TEXT,
       raw_json TEXT NOT NULL
     );
 
@@ -3845,6 +3868,26 @@ function schemaMigrations() {
             ON campaign_project_events(campaign_project_id, created_at DESC);
         `);
       }
+    },
+    {
+      version: 12,
+      name: "ad_measurement_proof_of_play_fields",
+      up() {
+        addColumnIfMissing("playlogs", "item_type", "TEXT");
+        addColumnIfMissing("playlogs", "ad_slot_id", "TEXT");
+        addColumnIfMissing("playlogs", "creative_id", "TEXT");
+        addColumnIfMissing("playlogs", "qr_link_id", "TEXT");
+        addColumnIfMissing("playlogs", "manifest_hash", "TEXT");
+        addColumnIfMissing("playlogs", "planned_duration_seconds", "INTEGER");
+        addColumnIfMissing("playlogs", "played_duration_seconds", "INTEGER");
+
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_playlogs_ad_measurement
+            ON playlogs(tenant_id, store_id, campaign_id, ad_slot_id, creative_id, qr_link_id, occurred_at);
+          CREATE INDEX IF NOT EXISTS idx_playlogs_manifest_hash
+            ON playlogs(manifest_hash, occurred_at);
+        `);
+      }
     }
   ];
 }
@@ -4239,6 +4282,21 @@ function resolvePlaylogEventId(payload, device, occurredAt) {
   };
   const digest = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 32);
   return { event_id: `legacy-${digest}`, generated: true };
+}
+
+function normalizePlaylogItemType(value) {
+  const itemType = cleanString(value).toLowerCase();
+  if (!itemType) return "content";
+  if (!["content", "ad", "sponsor"].includes(itemType)) {
+    throw requestError("item_type must be content, ad, or sponsor", 400);
+  }
+  return itemType;
+}
+
+function boundedReportDurationSeconds(value) {
+  const duration = asInteger(value);
+  if (duration === null) return null;
+  return Math.max(0, Math.min(duration, 86400));
 }
 
 function resolveDeviceErrorEventId(payload, device, occurredAt, severity, message) {
@@ -8536,6 +8594,11 @@ function normalizeReportCriteria(input = {}) {
     store_id: cleanId(input.store_id || input.storeId || input.site_id || input.siteId),
     campaign_id: cleanId(input.campaign_id || input.campaignId),
     content_id: cleanId(input.content_id || input.contentId),
+    item_type: normalizeReportItemTypeFilter(input.item_type || input.itemType || input.type),
+    ad_slot_id: cleanId(input.ad_slot_id || input.adSlotId),
+    creative_id: cleanId(input.creative_id || input.creativeId),
+    qr_link_id: cleanId(input.qr_link_id || input.qrLinkId),
+    manifest_hash: cleanString(input.manifest_hash || input.content_manifest_hash || input.contentManifestHash).slice(0, 160),
     heartbeat_interval_minutes: REPORT_HEARTBEAT_INTERVAL_MINUTES
   };
 }
@@ -8572,6 +8635,7 @@ function buildReportSummary(criteria, options = {}) {
     totals,
     daily,
     content: buildReportContentBreakdown(criteria),
+    ad_measurement: buildReportAdMeasurementBreakdown(criteria),
     qr_links: buildReportQrBreakdown(criteria),
     counter_orders: buildReportOrderBreakdown(criteria)
   };
@@ -8810,6 +8874,11 @@ function listReportPlaylogRows(criteria, selectColumns) {
       AND (? = '' OR store_id = ?)
       AND (? = '' OR campaign_id = ?)
       AND (? = '' OR content_id = ?)
+      AND (? = '' OR COALESCE(NULLIF(item_type, ''), 'content') = ?)
+      AND (? = '' OR ad_slot_id = ?)
+      AND (? = '' OR creative_id = ?)
+      AND (? = '' OR qr_link_id = ?)
+      AND (? = '' OR manifest_hash = ?)
   `).all(
     range.from,
     range.to,
@@ -8820,34 +8889,22 @@ function listReportPlaylogRows(criteria, selectColumns) {
     criteria.campaign_id,
     criteria.campaign_id,
     criteria.content_id,
-    criteria.content_id
+    criteria.content_id,
+    criteria.item_type,
+    criteria.item_type,
+    criteria.ad_slot_id,
+    criteria.ad_slot_id,
+    criteria.creative_id,
+    criteria.creative_id,
+    criteria.qr_link_id,
+    criteria.qr_link_id,
+    criteria.manifest_hash,
+    criteria.manifest_hash
   );
 }
 
 function addQrScanMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
-  const range = reportBroadIsoRange(criteria);
-  const rows = db.prepare(`
-    SELECT tenant_id, store_id, campaign_id, content_id, scanned_at
-    FROM qr_scans
-    WHERE scanned_at >= ?
-      AND scanned_at < ?
-      AND (? = '' OR tenant_id = ?)
-      AND (? = '' OR store_id = ?)
-      AND (? = '' OR campaign_id = ?)
-      AND (? = '' OR content_id = ?)
-  `).all(
-    range.from,
-    range.to,
-    criteria.tenant_id,
-    criteria.tenant_id,
-    criteria.store_id,
-    criteria.store_id,
-    criteria.campaign_id,
-    criteria.campaign_id,
-    criteria.content_id,
-    criteria.content_id
-  );
-  for (const item of rows) {
+  for (const item of listReportQrScanRows(criteria)) {
     const metricDate = reportBusinessDateFor(item.store_id, item.tenant_id, item.scanned_at, settingsCache);
     if (!reportDateInRange(metricDate, criteria)) continue;
     const row = getOrCreateReportDailyMetricRow(criteria, item, metricDate, rowsByKey, settingsCache, generatedAt);
@@ -9047,6 +9104,8 @@ function finalizeReportMetricSummary(summary) {
 function buildReportContentBreakdown(criteria) {
   const rows = listReportPlaylogRows(criteria, `
     store_id, campaign_id, content_id, playlist_version, playlist_item_id,
+    COALESCE(NULLIF(item_type, ''), 'content') AS item_type,
+    ad_slot_id, creative_id, qr_link_id, manifest_hash,
     asset_id, layout, event_type, result, duration
   `);
   const settingsCache = new Map();
@@ -9058,8 +9117,13 @@ function buildReportContentBreakdown(criteria) {
       row.store_id,
       cleanId(row.campaign_id),
       cleanId(row.content_id),
+      cleanString(row.item_type),
       cleanString(row.playlist_version),
       cleanString(row.playlist_item_id),
+      cleanId(row.ad_slot_id),
+      cleanId(row.creative_id),
+      cleanId(row.qr_link_id),
+      cleanString(row.manifest_hash),
       cleanString(row.asset_id),
       cleanString(row.layout)
     ].join("|");
@@ -9067,8 +9131,13 @@ function buildReportContentBreakdown(criteria) {
       store_id: cleanId(row.store_id),
       campaign_id: cleanId(row.campaign_id),
       content_id: cleanId(row.content_id),
+      item_type: cleanString(row.item_type) || "content",
       playlist_version: cleanString(row.playlist_version),
       playlist_item_id: cleanString(row.playlist_item_id),
+      ad_slot_id: cleanId(row.ad_slot_id),
+      creative_id: cleanId(row.creative_id),
+      qr_link_id: cleanId(row.qr_link_id),
+      manifest_hash: cleanString(row.manifest_hash),
       asset_id: cleanString(row.asset_id),
       layout: cleanString(row.layout),
       play_event_count: 0,
@@ -9089,8 +9158,148 @@ function buildReportContentBreakdown(criteria) {
     .slice(0, 50);
 }
 
+function buildReportAdMeasurementBreakdown(criteria) {
+  const settingsCache = new Map();
+  const qrScanCounts = buildReportQrScanCountMap(criteria, settingsCache);
+  const rows = listReportPlaylogRows(criteria, `
+    tenant_id, store_id, campaign_id, content_id, playlist_version, playlist_item_id,
+    COALESCE(NULLIF(item_type, ''), 'content') AS item_type,
+    ad_slot_id, creative_id, qr_link_id, manifest_hash,
+    asset_id, layout, event_type, result,
+    duration, planned_duration_seconds, played_duration_seconds
+  `);
+  const groups = new Map();
+  for (const row of rows) {
+    if (!isAdMeasurementRow(row) && !criteria.item_type && !criteria.ad_slot_id && !criteria.creative_id && !criteria.qr_link_id && !criteria.manifest_hash) {
+      continue;
+    }
+    const metricDate = reportBusinessDateFor(row.store_id, row.tenant_id, row.event_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const key = [
+      cleanId(row.store_id),
+      cleanId(row.campaign_id),
+      cleanId(row.content_id),
+      cleanString(row.item_type) || "content",
+      cleanId(row.ad_slot_id),
+      cleanId(row.creative_id),
+      cleanId(row.qr_link_id),
+      cleanString(row.manifest_hash)
+    ].join("|");
+    const qrKey = reportQrMeasurementKey(row);
+    const target = groups.get(key) || {
+      measurement_label: "measured",
+      store_id: cleanId(row.store_id),
+      campaign_id: cleanId(row.campaign_id),
+      content_id: cleanId(row.content_id),
+      item_type: cleanString(row.item_type) || "content",
+      ad_slot_id: cleanId(row.ad_slot_id),
+      creative_id: cleanId(row.creative_id),
+      qr_link_id: cleanId(row.qr_link_id),
+      manifest_hash: cleanString(row.manifest_hash),
+      playlist_version: cleanString(row.playlist_version),
+      playlist_item_id: cleanString(row.playlist_item_id),
+      asset_id: cleanString(row.asset_id),
+      layout: cleanString(row.layout),
+      play_event_count: 0,
+      play_started_count: 0,
+      play_completed_count: 0,
+      play_failed_count: 0,
+      planned_duration_seconds: 0,
+      played_duration_seconds: 0,
+      qr_scan_count: cleanId(row.qr_link_id) ? (qrScanCounts.get(qrKey) || 0) : 0,
+      qr_response_rate: 0
+    };
+    target.play_event_count += 1;
+    if (isReportPlayStarted(row)) target.play_started_count += 1;
+    if (isReportPlayCompleted(row)) target.play_completed_count += 1;
+    if (isReportPlayFailed(row)) target.play_failed_count += 1;
+    target.planned_duration_seconds += Math.max(0, asInteger(row.planned_duration_seconds ?? row.duration) || 0);
+    target.played_duration_seconds += Math.max(0, asInteger(row.played_duration_seconds ?? row.duration) || 0);
+    target.qr_response_rate = target.play_started_count > 0
+      ? target.qr_scan_count / target.play_started_count
+      : 0;
+    groups.set(key, target);
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.play_event_count - a.play_event_count)
+    .slice(0, 100);
+}
+
+function isAdMeasurementRow(row) {
+  return (
+    (cleanString(row.item_type) && cleanString(row.item_type) !== "content") ||
+    Boolean(cleanId(row.ad_slot_id)) ||
+    Boolean(cleanId(row.creative_id)) ||
+    Boolean(cleanId(row.qr_link_id)) ||
+    Boolean(cleanString(row.manifest_hash))
+  );
+}
+
+function buildReportQrScanCountMap(criteria, settingsCache = new Map()) {
+  const counts = new Map();
+  for (const row of listReportQrScanRows(criteria)) {
+    const metricDate = reportBusinessDateFor(row.store_id, row.tenant_id, row.scanned_at, settingsCache);
+    if (!reportDateInRange(metricDate, criteria)) continue;
+    const key = reportQrMeasurementKey(row);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+function listReportQrScanRows(criteria) {
+  const range = reportBroadIsoRange(criteria);
+  const allowedQrLinkIds = reportAdFilteredQrLinkIds(criteria);
+  const bridgeByQrLink = allowedQrLinkIds ? 1 : 0;
+  const rows = db.prepare(`
+    SELECT tenant_id, store_id, campaign_id, content_id, qr_link_id, scanned_at
+    FROM qr_scans
+    WHERE scanned_at >= ?
+      AND scanned_at < ?
+      AND (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR ? = 1 OR campaign_id = ?)
+      AND (? = '' OR ? = 1 OR content_id = ?)
+      AND (? = '' OR qr_link_id = ?)
+  `).all(
+    range.from,
+    range.to,
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.campaign_id,
+    bridgeByQrLink,
+    criteria.campaign_id,
+    criteria.content_id,
+    bridgeByQrLink,
+    criteria.content_id,
+    criteria.qr_link_id,
+    criteria.qr_link_id
+  );
+  return rows.filter((row) => {
+    const qrLinkId = cleanId(row.qr_link_id);
+    return !allowedQrLinkIds || allowedQrLinkIds.has(qrLinkId);
+  });
+}
+
+function reportQrMeasurementKey(row) {
+  return [
+    cleanId(row.store_id),
+    cleanId(row.content_id),
+    cleanId(row.qr_link_id)
+  ].join("|");
+}
+
+function reportAdFilteredQrLinkIds(criteria) {
+  if (!criteria.item_type && !criteria.ad_slot_id && !criteria.creative_id && !criteria.manifest_hash) return null;
+  const rows = listReportPlaylogRows(criteria, "qr_link_id");
+  return new Set(rows.map((row) => cleanId(row.qr_link_id)).filter(Boolean));
+}
+
 function buildReportQrBreakdown(criteria) {
   const range = reportBroadIsoRange(criteria);
+  const allowedQrLinkIds = reportAdFilteredQrLinkIds(criteria);
+  const bridgeByQrLink = allowedQrLinkIds ? 1 : 0;
   const rows = db.prepare(`
     SELECT
       qs.store_id, qs.campaign_id, qs.content_id, qs.offer_id,
@@ -9102,8 +9311,9 @@ function buildReportQrBreakdown(criteria) {
       AND qs.scanned_at < ?
       AND (? = '' OR qs.tenant_id = ?)
       AND (? = '' OR qs.store_id = ?)
-      AND (? = '' OR qs.campaign_id = ?)
-      AND (? = '' OR qs.content_id = ?)
+      AND (? = '' OR ? = 1 OR qs.campaign_id = ?)
+      AND (? = '' OR ? = 1 OR qs.content_id = ?)
+      AND (? = '' OR qs.qr_link_id = ?)
   `).all(
     range.from,
     range.to,
@@ -9112,13 +9322,19 @@ function buildReportQrBreakdown(criteria) {
     criteria.store_id,
     criteria.store_id,
     criteria.campaign_id,
+    bridgeByQrLink,
     criteria.campaign_id,
     criteria.content_id,
-    criteria.content_id
+    bridgeByQrLink,
+    criteria.content_id,
+    criteria.qr_link_id,
+    criteria.qr_link_id
   );
   const settingsCache = new Map();
   const groups = new Map();
   for (const row of rows) {
+    const qrLinkId = cleanId(row.qr_link_id);
+    if (allowedQrLinkIds && !allowedQrLinkIds.has(qrLinkId)) continue;
     const metricDate = reportBusinessDateFor(row.store_id, "", row.scanned_at, settingsCache);
     if (!reportDateInRange(metricDate, criteria)) continue;
     const key = [
@@ -9193,6 +9409,7 @@ function buildReportOrderBreakdown(criteria) {
 
 function createMonthlyReportSnapshot(input = {}) {
   const criteria = normalizeReportCriteria(input);
+  assertReportReadModelScope(criteria);
   if (!criteria.month || criteria.from !== monthBounds(criteria.month).from || criteria.to !== monthBounds(criteria.month).to) {
     throw requestError("monthly snapshot requires a full month; pass month as YYYY-MM", 400);
   }
@@ -9394,8 +9611,38 @@ function reportCriteriaFilters(criteria) {
     tenant_id: criteria.tenant_id,
     store_id: criteria.store_id,
     campaign_id: criteria.campaign_id,
-    content_id: criteria.content_id
+    content_id: criteria.content_id,
+    item_type: criteria.item_type,
+    ad_slot_id: criteria.ad_slot_id,
+    creative_id: criteria.creative_id,
+    qr_link_id: criteria.qr_link_id,
+    manifest_hash: criteria.manifest_hash
   };
+}
+
+function normalizeReportItemTypeFilter(value) {
+  const itemType = cleanString(value).toLowerCase();
+  if (!itemType) return "";
+  if (!["content", "ad", "sponsor"].includes(itemType)) {
+    throw requestError("item_type must be content, ad, or sponsor", 400);
+  }
+  return itemType;
+}
+
+function assertReportReadModelScope(criteria) {
+  const unsupported = [
+    ["item_type", criteria.item_type],
+    ["ad_slot_id", criteria.ad_slot_id],
+    ["creative_id", criteria.creative_id],
+    ["qr_link_id", criteria.qr_link_id],
+    ["manifest_hash", criteria.manifest_hash]
+  ].filter(([, value]) => cleanString(value));
+  if (unsupported.length > 0) {
+    throw requestError(
+      `report read model does not support ad-granular filters: ${unsupported.map(([key]) => key).join(", ")}`,
+      400
+    );
+  }
 }
 
 function cachedReportStoreSettings(storeId, tenantId, settingsCache) {

@@ -43,7 +43,9 @@ async function main() {
     }, "live summary");
     if (live.data.report.daily.length !== 30) throw new Error(`expected 30 daily rows, got ${live.data.report.daily.length}`);
     assertBusinessDayBucket(live.data.report, "live summary");
+    assertAdMeasurement(live.data.report, records, "live summary");
     await assertFilterIsolation(criteria);
+    await assertAdMeasurementFilters(criteria, records);
 
     const rebuilt = await admin("POST", "/api/admin/reports/read-model/rebuild", criteria);
     if (rebuilt.data.rebuilt !== 30) throw new Error(`expected 30 rebuilt rows, got ${rebuilt.data.rebuilt}`);
@@ -57,6 +59,7 @@ async function main() {
       heartbeat_count: 1
     }, "rebuilt summary");
     assertBusinessDayBucket(rebuilt.data.report, "rebuilt summary");
+    assertAdMeasurement(rebuilt.data.report, records, "rebuilt summary");
 
     const rebuiltAgain = await admin("POST", "/api/admin/reports/read-model/rebuild", criteria);
     if (rebuiltAgain.data.rebuilt !== 30) throw new Error(`expected 30 rows after idempotent rebuild, got ${rebuiltAgain.data.rebuilt}`);
@@ -93,6 +96,7 @@ async function main() {
       heartbeat_count: 1
     }, "snapshot summary");
     assertBusinessDayBucket(reportSnapshot.summary, "snapshot summary");
+    assertAdMeasurement(reportSnapshot.summary, records, "snapshot summary");
 
     await expectAdminError("POST", "/api/admin/reports/monthly-snapshots", criteria, 409, "already exists");
     const replaced = await admin("POST", "/api/admin/reports/monthly-snapshots", {
@@ -119,6 +123,11 @@ async function main() {
       throw new Error("snapshot list did not include created snapshot");
     }
 
+    const manifests = await admin("GET", "/api/admin/content-manifests");
+    if ((manifests.data.content_manifests || []).length !== 0) {
+      throw new Error(`reporting smoke should not create content manifests: ${JSON.stringify(manifests.data.content_manifests)}`);
+    }
+
     console.log(JSON.stringify({
       ok: true,
       base_url: baseUrl,
@@ -128,6 +137,8 @@ async function main() {
       business_day_bucket: "2026-06-09",
       idempotent_rebuild: true,
       stable_snapshot_hash: true,
+      ad_measurement: true,
+      no_content_manifest_creation: true,
       totals: reportSnapshot.summary.totals
     }, null, 2));
   } finally {
@@ -143,6 +154,10 @@ async function seedReportData() {
   const deviceId = `DEV-REPORT-${runId}`;
   const itemId = `ITEM-REPORT-${runId}`;
   const contentId = `CONTENT-REPORT-${runId}`;
+  const campaignId = `CAMPAIGN-REPORT-${runId}`;
+  const adSlotId = `AD-SLOT-REPORT-${runId}`;
+  const creativeId = `CREATIVE-REPORT-${runId}`;
+  const manifestHash = `sha256:report-${runId}`;
 
   const device = await admin("POST", "/api/admin/devices", {
     tenant_id: tenantId,
@@ -211,10 +226,18 @@ async function seedReportData() {
     timestamp: "2026-06-10T03:30:00+09:00",
     playlist_version: "pl-report",
     playlist_item_id: "slot-report",
+    campaign_id: campaignId,
     content_id: contentId,
+    item_type: "ad",
+    ad_slot_id: adSlotId,
+    creative_id: creativeId,
+    qr_link_id: qr.data.qr_link.qr_link_id,
+    manifest_hash: manifestHash,
     asset_id: "asset-report",
     layout: "wide",
     duration: 15,
+    planned_duration_seconds: 15,
+    played_duration_seconds: 15,
     result: "started"
   }, {
     authorization: `Bearer ${device.data.device_token}`
@@ -226,10 +249,18 @@ async function seedReportData() {
     timestamp: "2026-06-10T03:30:15+09:00",
     playlist_version: "pl-report",
     playlist_item_id: "slot-report",
+    campaign_id: campaignId,
     content_id: contentId,
+    item_type: "ad",
+    ad_slot_id: adSlotId,
+    creative_id: creativeId,
+    qr_link_id: qr.data.qr_link.qr_link_id,
+    manifest_hash: manifestHash,
     asset_id: "asset-report",
     layout: "wide",
     duration: 15,
+    planned_duration_seconds: 15,
+    played_duration_seconds: 15,
     result: "completed"
   }, {
     authorization: `Bearer ${device.data.device_token}`
@@ -267,7 +298,16 @@ async function seedReportData() {
     throw new Error(`error log idempotency failed: ${JSON.stringify({ first: errorFirst.data, duplicate: errorDuplicate.data })}`);
   }
 
-  return { tenantId, storeId, contentId };
+  return {
+    tenantId,
+    storeId,
+    campaignId,
+    contentId,
+    adSlotId,
+    creativeId,
+    qrLinkId: qr.data.qr_link.qr_link_id,
+    manifestHash
+  };
 }
 
 async function availablePort() {
@@ -429,4 +469,58 @@ async function assertFilterIsolation(criteria) {
     error_count: 0,
     heartbeat_count: 0
   }, "wrong tenant filtered summary");
+}
+
+async function assertAdMeasurementFilters(criteria, records) {
+  const filtered = await admin("GET", `/api/admin/reports/summary?${new URLSearchParams({
+    ...criteria,
+    ad_slot_id: records.adSlotId
+  })}`);
+  assertAdMeasurement(filtered.data.report, records, "ad-slot filtered summary");
+
+  const missing = await admin("GET", `/api/admin/reports/summary?${new URLSearchParams({
+    ...criteria,
+    ad_slot_id: `AD-SLOT-NO-MATCH-${runId}`
+  })}`);
+  assertTotals(missing.data.report.totals, {
+    play_started_count: 0,
+    play_completed_count: 0,
+    qr_scan_count: 0
+  }, "missing ad-slot filtered summary");
+  if ((missing.data.report.ad_measurement || []).length !== 0) {
+    throw new Error(`missing ad-slot filter returned ad_measurement rows: ${JSON.stringify(missing.data.report.ad_measurement)}`);
+  }
+
+  await expectAdminError("GET", `/api/admin/reports/daily-metrics?${new URLSearchParams({
+    ...criteria,
+    ad_slot_id: records.adSlotId
+  })}`, null, 400, "ad-granular filters");
+}
+
+function assertAdMeasurement(report, records, label) {
+  const groups = report.ad_measurement || [];
+  const group = groups.find((item) =>
+    item.store_id === records.storeId &&
+    item.campaign_id === records.campaignId &&
+    item.content_id === records.contentId &&
+    item.item_type === "ad" &&
+    item.ad_slot_id === records.adSlotId &&
+    item.creative_id === records.creativeId &&
+    item.qr_link_id === records.qrLinkId &&
+    item.manifest_hash === records.manifestHash
+  );
+  if (!group) {
+    throw new Error(`${label} missing ad measurement group: ${JSON.stringify(groups)}`);
+  }
+  assertTotals(group, {
+    play_event_count: 2,
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    planned_duration_seconds: 30,
+    played_duration_seconds: 30,
+    qr_scan_count: 1
+  }, `${label} ad measurement`);
+  if (group.measurement_label !== "measured") throw new Error(`${label} ad measurement label mismatch`);
+  if (group.qr_response_rate !== 1) throw new Error(`${label} qr_response_rate expected 1, got ${group.qr_response_rate}`);
 }
