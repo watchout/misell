@@ -740,6 +740,16 @@ app.get("/api/admin/campaign-projects/:campaign_project_id", requireAdminAuth, (
   }
 });
 
+app.get("/api/admin/campaign-projects/:campaign_project_id/playlist-handoff-draft", requireAdminAuth, (req, res, next) => {
+  try {
+    const draft = getCampaignProjectPlaylistHandoffDraft(cleanId(req.params.campaign_project_id), normalizeCampaignProjectScopeQuery(req.query || {}));
+    if (!draft) throw requestError("Campaign project not found", 404);
+    res.json({ ok: true, playlist_handoff_draft: draft });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/campaign-projects/:campaign_project_id/scenes", requireAdminAuth, (req, res, next) => {
   try {
     const scene = createCampaignProjectScene(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
@@ -7312,6 +7322,167 @@ function getCampaignProject(projectId, scope = null, options = {}) {
   if (!row) return null;
   if (scope) assertCampaignProjectInputScope(scope, row, "Campaign project");
   return publicCampaignProject(row, options);
+}
+
+function getCampaignProjectPlaylistHandoffDraft(projectId, scope = null) {
+  const row = getCampaignProjectRow(projectId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Campaign project");
+  if (row.status === "deleted") throw requestError("Campaign project is deleted", 400);
+  return buildCampaignProjectPlaylistHandoffDraft(
+    publicCampaignProject(row),
+    listCampaignProjectScenes(row.campaign_project_id)
+  );
+}
+
+function buildCampaignProjectPlaylistHandoffDraft(project, scenes = []) {
+  const activeScenes = scenes
+    .filter((scene) => scene.status !== "deleted")
+    .sort((a, b) => (Number(a.scene_order || 0) - Number(b.scene_order || 0)));
+  const validationIssues = campaignProjectHandoffValidationIssues(project, activeScenes);
+  const payload = {
+    schema_version: "campaign-project-playlist-handoff-draft/v1",
+    draft_type: "operator_copy_handoff",
+    draft_status: validationIssues.length ? "needs_validation" : "ready_for_operator_handoff",
+    draft_key: cleanId(`handoff-${project.campaign_project_id}-${project.updated_at || project.created_at || ""}`),
+    source_updated_at: project.updated_at,
+    campaign_project_id: project.campaign_project_id,
+    tenant_id: project.tenant_id,
+    store_id: project.store_id,
+    screen_group_id: project.screen_group_id,
+    no_external_ai: true,
+    no_media_generation: true,
+    no_content_manifest_creation: true,
+    no_publish: true,
+    no_credit_consumption: true,
+    publish_ready: false,
+    content_manifest_created: false,
+    scope: {
+      tenant_id: project.tenant_id,
+      store_id: project.store_id,
+      screen_group_id: project.screen_group_id
+    },
+    source: {
+      source_type: project.source_type,
+      source_proposal_id: project.source_proposal_id,
+      source_context_snapshot_id: project.source_context_snapshot_id,
+      campaign_brief_id: project.campaign_brief_id
+    },
+    campaign_project: {
+      campaign_project_id: project.campaign_project_id,
+      title: project.title,
+      objective: project.objective,
+      target_audience: project.target_audience,
+      cta: project.cta,
+      status: project.status,
+      validation_status: project.validation_status
+    },
+    playlist: {
+      schema_version: 1,
+      playlist_version: cleanId(`draft-${project.campaign_project_id}`),
+      release_channel: "draft",
+      title: project.title,
+      item_count: activeScenes.length,
+      items: activeScenes.map((scene) => buildCampaignProjectPlaylistHandoffItem(project, scene))
+    },
+    validation: {
+      valid: validationIssues.length === 0,
+      issue_count: validationIssues.length,
+      issues: validationIssues
+    },
+    forbidden_operations: [
+      "external_ai_call",
+      "media_render",
+      "content_manifest_create",
+      "publish",
+      "schedule_activate",
+      "device_policy_update",
+      "credit_ledger_mutation"
+    ]
+  };
+  return {
+    ...payload,
+    draft_sha256: crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex")
+  };
+}
+
+function buildCampaignProjectPlaylistHandoffItem(project, scene) {
+  const layout = scene.scene_type === "wide" ? "wide" : "three-zone";
+  const item = {
+    draft_playlist_item_id: cleanId(`draft-${scene.campaign_project_scene_id}`),
+    source_scene_id: scene.campaign_project_scene_id,
+    scene_order: scene.scene_order,
+    scene_type: scene.scene_type,
+    layout,
+    enabled: true,
+    duration: scene.duration_seconds,
+    duration_seconds: scene.duration_seconds,
+    campaign_id: project.campaign_project_id,
+    asset_id: "",
+    validation_status: scene.validation_status,
+    validation_errors: scene.validation_errors,
+    asset_requirements: scene.asset_requirements
+  };
+  if (layout === "wide") {
+    return {
+      ...item,
+      wide: {
+        headline: scene.headline,
+        body_text: scene.body_text,
+        visual_direction: scene.visual_direction,
+        cta_text: scene.cta_text || project.cta
+      }
+    };
+  }
+  return {
+    ...item,
+    left: {
+      text: scene.visual_direction || project.store_context,
+      asset_requirements: scene.asset_requirements
+    },
+    center: {
+      headline: scene.headline,
+      body_text: scene.body_text
+    },
+    right: {
+      cta_text: scene.cta_text || project.cta
+    }
+  };
+}
+
+function campaignProjectHandoffValidationIssues(project, scenes = []) {
+  const issues = [];
+  if (!scenes.length) {
+    issues.push({ field: "scenes", code: "required", message: "at least one active scene is required" });
+  }
+  if (project.status !== "validated" || project.validation_status !== "valid") {
+    issues.push({ field: "campaign_project", code: "not_validated", message: "campaign project must be validated before operator handoff" });
+  }
+  const projectErrors = Array.isArray(project.validation_errors) ? project.validation_errors : [];
+  for (const error of projectErrors) {
+    issues.push({ ...error, source: "campaign_project" });
+  }
+  for (const scene of scenes) {
+    if (scene.status !== "valid" || scene.validation_status !== "valid") {
+      issues.push({
+        field: "scene",
+        code: "not_validated",
+        message: "scene must be valid before operator handoff",
+        campaign_project_scene_id: scene.campaign_project_scene_id,
+        scene_order: scene.scene_order
+      });
+    }
+    const sceneErrors = Array.isArray(scene.validation_errors) ? scene.validation_errors : [];
+    for (const error of sceneErrors) {
+      issues.push({
+        ...error,
+        source: "campaign_project_scene",
+        campaign_project_scene_id: scene.campaign_project_scene_id,
+        scene_order: scene.scene_order
+      });
+    }
+  }
+  return issues;
 }
 
 function createCampaignProjectScene(projectId, input, actor = {}) {

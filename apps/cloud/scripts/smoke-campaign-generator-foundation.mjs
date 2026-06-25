@@ -58,6 +58,23 @@ async function main() {
     if (validateSelected.data.campaign_project.scenes.some((scene) => scene.status !== "valid")) {
       throw new Error(`validated project contains non-valid scenes: ${validateSelected.text}`);
     }
+    const beforeHandoffContentManifestCount = tableCount("content_manifests");
+    const beforeHandoffPublishHistoryCount = tableCount("publish_history");
+    const playlistHandoffDraft = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/playlist-handoff-draft?tenant_id=${records.tenantId}&store_id=${records.storeId}&screen_group_id=${records.screenGroupId}`);
+    assertPlaylistHandoffDraft(playlistHandoffDraft.data.playlist_handoff_draft, {
+      projectId: projectFromProposal.data.campaign_project.campaign_project_id,
+      sceneCount: 3,
+      records,
+      expectedFirstHeadline: "selected 雨の日の過ごし方",
+      expectValid: true
+    });
+    await expectAdminError("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/playlist-handoff-draft?tenant_id=${records.otherTenantId}`, null, 403, "tenant scope");
+    if (tableCount("content_manifests") !== beforeHandoffContentManifestCount) {
+      throw new Error("playlist handoff draft should not create content_manifest rows");
+    }
+    if (tableCount("publish_history") !== beforeHandoffPublishHistoryCount) {
+      throw new Error("playlist handoff draft should not create publish_history rows");
+    }
     const requestScene = validateSelected.data.campaign_project.scenes[0];
     const sceneBeforeRequests = sceneMutationSnapshot(requestScene);
     for (const requestType of ["scene_regeneration", "copy_regeneration", "qr_cta_regeneration"]) {
@@ -307,6 +324,17 @@ async function main() {
     if (afterSceneDelete.data.campaign_project.scenes.some((scene) => scene.campaign_project_scene_id === sceneToDelete.campaign_project_scene_id)) {
       throw new Error("deleted scene should be hidden from project detail by default");
     }
+    const handoffAfterSceneDelete = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/playlist-handoff-draft`);
+    assertPlaylistHandoffDraft(handoffAfterSceneDelete.data.playlist_handoff_draft, {
+      projectId: projectFromProposal.data.campaign_project.campaign_project_id,
+      sceneCount: 2,
+      records,
+      expectedFirstHeadline: "selected 雨の日の過ごし方",
+      expectValid: false
+    });
+    if (handoffAfterSceneDelete.data.playlist_handoff_draft.playlist.items.some((item) => item.source_scene_id === sceneToDelete.campaign_project_scene_id)) {
+      throw new Error("playlist handoff draft should exclude deleted scene");
+    }
     await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}/reorder`, {
       direction: "up"
     }, 400, "deleted");
@@ -365,6 +393,7 @@ async function main() {
       scene_order_no_reuse_after_soft_delete: true,
       scene_reorder_adjacent_swap: true,
       scene_duplicate_draft: true,
+      playlist_handoff_draft: true,
       regeneration_request_stub: true,
       regeneration_request_visible_events: true,
       no_external_ai: true,
@@ -508,6 +537,41 @@ function assertProject(project, sourceType, records) {
   }
   if (!project.no_external_ai || !project.no_content_manifest_creation || !project.no_media_generation || !project.no_publish) {
     throw new Error(`project response is missing out-of-scope guards: ${JSON.stringify(project)}`);
+  }
+}
+
+function assertPlaylistHandoffDraft(draft, options) {
+  if (!draft || draft.schema_version !== "campaign-project-playlist-handoff-draft/v1") {
+    throw new Error(`playlist handoff draft schema mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.campaign_project_id !== options.projectId) {
+    throw new Error(`playlist handoff draft project mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.tenant_id !== options.records.tenantId || draft.store_id !== options.records.storeId || draft.screen_group_id !== options.records.screenGroupId) {
+    throw new Error(`playlist handoff draft scope mismatch: ${JSON.stringify(draft)}`);
+  }
+  for (const field of ["no_external_ai", "no_media_generation", "no_content_manifest_creation", "no_publish", "no_credit_consumption"]) {
+    if (draft[field] !== true) throw new Error(`playlist handoff draft missing guard ${field}: ${JSON.stringify(draft)}`);
+  }
+  if (draft.publish_ready !== false || draft.content_manifest_created !== false) {
+    throw new Error(`playlist handoff draft must remain non-publishable: ${JSON.stringify(draft)}`);
+  }
+  if (!/^[a-f0-9]{64}$/.test(draft.draft_sha256 || "")) {
+    throw new Error(`playlist handoff draft sha256 missing: ${JSON.stringify(draft)}`);
+  }
+  if (draft.validation?.valid !== options.expectValid) {
+    throw new Error(`playlist handoff draft validation mismatch: ${JSON.stringify(draft)}`);
+  }
+  const items = draft.playlist?.items || [];
+  if (items.length !== options.sceneCount || draft.playlist?.item_count !== options.sceneCount) {
+    throw new Error(`playlist handoff draft item count mismatch: ${JSON.stringify(draft)}`);
+  }
+  const orders = items.map((item) => item.scene_order);
+  if (JSON.stringify(orders) !== JSON.stringify([...orders].sort((a, b) => a - b))) {
+    throw new Error(`playlist handoff draft items are not ordered: ${JSON.stringify(items)}`);
+  }
+  if (items[0]?.center?.headline !== options.expectedFirstHeadline) {
+    throw new Error(`playlist handoff draft first scene mismatch: ${JSON.stringify(items[0])}`);
   }
 }
 

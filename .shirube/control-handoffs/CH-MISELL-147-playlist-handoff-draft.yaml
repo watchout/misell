@@ -1,0 +1,142 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-147-PLAYLIST-HANDOFF-DRAFT
+parent_ssot: https://github.com/watchout/misell/issues/147
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4786995402
+premise_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4766080369
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/147
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - Rapid/Lite report-only evidence for this PR
+    - diff scope and handoff consistency checks
+  shirube_does_not_own:
+    - existing Misell Gate 0 required checks
+    - branch protection or required-check configuration
+    - security/CEO approval labels and protected authorization decisions
+    - production deployment or runtime operations
+
+cell:
+  CELL-ID: CELL-MISELL-147-PLAYLIST-HANDOFF-DRAFT
+  cell_type: integration_lite
+  risk_class: R2
+  goal: Add an authenticated read-only CampaignProject playlist handoff draft so operators can inspect/copy a deterministic draft payload without creating content manifests or publishing.
+  non_scope:
+    - DB migration or schema change
+    - customer project editing or external share link
+    - external AI call or provider job
+    - automated scene generation or media rendering
+    - QR link creation
+    - content_manifest creation
+    - publish, schedule activation, device policy update, or playlist deployment
+    - billing, quota, credit ledger, or plan logic
+  allowed_paths:
+    - .shirube/control-handoffs/CH-MISELL-147-playlist-handoff-draft.yaml
+    - apps/cloud/server.js
+    - apps/cloud/public/campaign-project-editor.js
+    - apps/cloud/public/style.css
+    - apps/cloud/scripts/smoke-campaign-generator-foundation.mjs
+    - tests/e2e/misell-ui.spec.js
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/cloud/migrations/**
+    - apps/cloud/package.json
+    - package.json
+  protected_surfaces:
+    - existing_admin_auth_read_api
+    - no_auth_or_permission_model_change
+    - no_schema_or_migration_change
+    - no_publish_or_content_manifest_write_path
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - DB migration or schema change needed
+    - new auth/RBAC behavior needed
+    - external AI/provider/runner path needed
+    - content manifest, publish, rendering, external preview, credit ledger, or quota path introduced
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Admin API exposes a read-only playlist handoff draft for an existing CampaignProject.
+    - The draft includes project scope, active non-deleted scenes, deterministic item ordering, validation state, and an evidence hash.
+    - Deleted scenes are excluded from the draft.
+    - Scope mismatch is rejected.
+    - The endpoint and UI do not create content_manifests, publish_history, AI credit ledger entries, media, or device policy changes.
+    - Admin editor shows the draft JSON for operator copy/inspection.
+
+implementation_boundary:
+  summary: Add a read-only CampaignProject-to-playlist-handoff draft builder, expose it through an authenticated admin GET route, and render it in the existing admin editor.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for handoff
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:campaign-generator-foundation
+    - npm run test:e2e
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - owner_decision
+  acceptance_tests:
+    - playlist handoff draft returns active scenes in scene_order order
+    - deleted scenes are excluded
+    - scope mismatch rejects access
+    - content_manifest and publish_history counts remain unchanged
+    - editor UI renders the handoff draft JSON
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
