@@ -14,6 +14,7 @@ scope:
   - full operational PR governance evidence
   - Rapid/Lite handoff and lifecycle artifacts
   - enforced detection of missing handoff, audit, owner decision, diff scope, and unexpected would_block findings
+  - additive Shirube V3 overlay evidence from pinned ai-dev-framework reusable report-only workflow
 design_principles:
   - Existing Misell Gate 0 remains authoritative for mechanical CI.
   - GitHub audit comments remain authoritative for semantic review.
@@ -35,7 +36,7 @@ operating_model:
     stop_condition: Missing repo premise or adoption evidence blocks the Shirube gate.
   dev_loop:
     purpose: Block scope drift, missing evidence, missing audit, and missing owner decision on PRs.
-    gates: [rapid_lite_gate_contract, design_rules, lifecycle]
+    gates: [rapid_lite_gate_contract, design_rules, lifecycle, itemized_audit_checklist]
     report_only: false
     stop_condition: Do not merge while Shirube Full Operational Gates, Gate 0, or human audit blocks the PR.
   change_flow:
@@ -67,6 +68,14 @@ gate_catalog:
     responsible_role: implementation_owner
     required_evidence:
       - .shirube/design-rule-packs/shirube-default-design-rules.yaml
+  itemized_audit_checklist:
+    purpose: Keep semantic audits itemized against the handoff acceptance criteria and evidence list.
+    source: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+    responsible_role: codex_audit
+    required_evidence:
+      - checklist items in the audit request or audit comment
+      - structured audit for exact head
+      - machine evidence for executable items
 required_evidence:
   repo_spec:
     - .shirube/repo-spec.yaml
@@ -77,6 +86,7 @@ required_evidence:
   merge:
     - exact head evidence from GitHub PR
     - existing Gate 0 success
+    - itemized structured audit checklist response for exact head
     - structured audit comment for exact head
     - owner APPROVED_EXACT_HEAD decision for exact head
 risk_tier_policy:
@@ -178,7 +188,9 @@ data_boundaries:
   - repository files and PR metadata only
   - no production database, backup, or customer file access
 dependency_boundaries:
-  - vendored Rapid/Lite scripts are locked to watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+  - vendored full operational gate scripts remain local until an equivalent trusted full-operational reusable workflow exists upstream
+  - additive Rapid/Lite report-only caller is pinned to watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+  - target repo must not copy new ADF scripts for the overlay refresh unless a later governance cell explicitly approves vendoring
   - GitHub Actions comments/artifacts are the only external write in the full operational gate
 forbidden_actions:
   - change branch protection or rulesets
@@ -196,7 +208,9 @@ agent_permission_boundary:
     - .shirube/**
     - scripts/shirube/**
     - .github/workflows/shirube-full-operational-gates.yml
+    - .github/workflows/shirube-rapid-lite-gates-report.yml
     - docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
+    - docs/97_SHIRUBE_V3_OVERLAY_REFRESH.md
   forbidden_paths:
     - .env
     - .env.*

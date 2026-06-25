@@ -1,0 +1,38 @@
+schema_version: shirube-enforcement-policy/v1
+policy_id: ENFORCEMENT-POLICY-MISELL-SHIRUBE-V3-OVERLAY-001
+repo: watchout/misell
+mode: owner_block
+profile: hotel-lite
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+updated_at: 2026-06-24T09:30:00Z
+stale_after_days: 90
+owner_observed: true
+owner:
+  role: repo_owner
+  actor: watchout
+required_checks:
+  enabled: false
+  activation_scope: out_of_scope_for_this_cell
+branch_protection:
+  unchanged: true
+rulesets:
+  unchanged: true
+full_operational_gate:
+  existing_gate_kept: true
+  check_name: Shirube Full Operational Gates
+  replacement_by_reusable_workflow: false
+report_only_adf_caller:
+  enabled_as_additive_signal: true
+  check_name: Shirube Rapid/Lite Gates Report
+  ci_should_fail: false
+  owner_must_not_merge_without_exception: true
+non_scope:
+  - replacing existing Misell full operational gate
+  - required check activation
+  - branch protection mutation
+  - ruleset mutation
+  - CI hard-blocking through the reusable caller
+  - external repository mutation
+  - runtime/API/DB/product/package/lockfile/deploy behavior
+waiver:
+  permit_ci_hard_block_owner_waiver: false

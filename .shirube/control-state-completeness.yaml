@@ -1,0 +1,44 @@
+schema_version: shirube-control-state-completeness-config/v1
+config_id: CONTROL-STATE-MISELL-SHIRUBE-V3-OVERLAY-001
+repo: watchout/misell
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+mode: full_operational_with_report_only_overlay
+updated_at: 2026-06-24T09:30:00Z
+required_state_refs:
+  execution_context: .shirube/execution-context.yaml
+  repo_spec: .shirube/repo-spec.yaml
+  adoption_intake: .shirube/adoption-intake.yaml
+  lifecycle_state: .shirube/lifecycle-state.yaml
+  framework_lock: .shirube/shirube-framework-lock.yaml
+  enforcement_policy: .shirube/enforcement-policy.yaml
+  source_mirror: .shirube/source-mirrors/control-issue.yaml
+allowed_protected_surfaces:
+  - none
+  - active workflows
+  - workflows
+  - github_actions_workflow
+  - shirube_gate_enforcement
+  - governance workflow caller
+  - full operational gate
+  - required checks
+  - branch protection
+  - rulesets
+  - auth
+  - permissions
+  - db
+  - migrations
+  - runtime
+  - api
+  - deploy
+  - secrets
+promotion_policy:
+  full_control_claim_requires:
+    - exact_head_owner_decision
+    - structured_audit_for_exact_head
+    - post_merge_evidence
+    - existing_full_operational_gate_green
+  reusable_caller_replacement_allowed: false
+  replacement_requires_new_cell: true
+reporting:
+  missing_audit_checklist_should_be_warn_for_normal_rapid_lite: true
+  itemized_audit_required_for_governance_cells: true

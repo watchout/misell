@@ -2,7 +2,7 @@ schema_version: shirube-adoption-intake/v1
 adoption_id: ADOPT-MISELL-SHIRUBE-V3-FULL-OPERATIONAL-001
 lane: adoption_intake
 repo: watchout/misell
-framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
 profile: hotel-lite
 disposition: retrofit_accelerate
 owner:
@@ -13,5 +13,11 @@ repo_spec_ref: .shirube/repo-spec.yaml
 owner_confirmation_ref: https://github.com/watchout/misell/issues/184
 gap_fill_plan_ref: docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
 spec_reconciliation_ref: null
-next_safe_cell_ref: CELL-MISELL-184-SHIRUBE-FULL-OPERATIONAL-ADOPTION
-control_handoff_ref: .shirube/control-handoffs/CH-MISELL-184-shirube-full-operational-adoption.yaml
+next_safe_cell_ref: CELL-MISELL-SHIRUBE-V3-OVERLAY-REFRESH
+control_handoff_ref: .shirube/control-handoffs/CH-MISELL-SHIRUBE-V3-OVERLAY-REFRESH.yaml
+overlay_refresh:
+  source_mirror_ref: .shirube/source-mirrors/control-issue.yaml
+  enforcement_policy_ref: .shirube/enforcement-policy.yaml
+  execution_context_ref: .shirube/execution-context.yaml
+  reusable_report_only_workflow: .github/workflows/shirube-rapid-lite-gates-report.yml
+  existing_full_operational_gate_kept: true
