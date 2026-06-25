@@ -75,6 +75,21 @@ async function main() {
     if (tableCount("publish_history") !== beforeHandoffPublishHistoryCount) {
       throw new Error("playlist handoff draft should not create publish_history rows");
     }
+    const scheduleHandoffDraft = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/schedule-handoff-draft?tenant_id=${records.tenantId}&store_id=${records.storeId}&screen_group_id=${records.screenGroupId}`);
+    assertScheduleHandoffDraft(scheduleHandoffDraft.data.schedule_handoff_draft, {
+      projectId: projectFromProposal.data.campaign_project.campaign_project_id,
+      sceneCount: 3,
+      records,
+      playlistDraft: playlistHandoffDraft.data.playlist_handoff_draft,
+      expectValid: true
+    });
+    await expectAdminError("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/schedule-handoff-draft?tenant_id=${records.otherTenantId}`, null, 403, "tenant scope");
+    if (tableCount("content_manifests") !== beforeHandoffContentManifestCount) {
+      throw new Error("schedule handoff draft should not create content_manifest rows");
+    }
+    if (tableCount("publish_history") !== beforeHandoffPublishHistoryCount) {
+      throw new Error("schedule handoff draft should not create publish_history rows");
+    }
     const requestScene = validateSelected.data.campaign_project.scenes[0];
     const sceneBeforeRequests = sceneMutationSnapshot(requestScene);
     for (const requestType of ["scene_regeneration", "copy_regeneration", "qr_cta_regeneration"]) {
@@ -335,6 +350,14 @@ async function main() {
     if (handoffAfterSceneDelete.data.playlist_handoff_draft.playlist.items.some((item) => item.source_scene_id === sceneToDelete.campaign_project_scene_id)) {
       throw new Error("playlist handoff draft should exclude deleted scene");
     }
+    const scheduleHandoffAfterSceneDelete = await admin("GET", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/schedule-handoff-draft`);
+    assertScheduleHandoffDraft(scheduleHandoffAfterSceneDelete.data.schedule_handoff_draft, {
+      projectId: projectFromProposal.data.campaign_project.campaign_project_id,
+      sceneCount: 2,
+      records,
+      playlistDraft: handoffAfterSceneDelete.data.playlist_handoff_draft,
+      expectValid: false
+    });
     await expectAdminError("POST", `/api/admin/campaign-projects/${projectFromProposal.data.campaign_project.campaign_project_id}/scenes/${sceneToDelete.campaign_project_scene_id}/reorder`, {
       direction: "up"
     }, 400, "deleted");
@@ -394,6 +417,7 @@ async function main() {
       scene_reorder_adjacent_swap: true,
       scene_duplicate_draft: true,
       playlist_handoff_draft: true,
+      schedule_handoff_draft: true,
       regeneration_request_stub: true,
       regeneration_request_visible_events: true,
       no_external_ai: true,
@@ -572,6 +596,42 @@ function assertPlaylistHandoffDraft(draft, options) {
   }
   if (items[0]?.center?.headline !== options.expectedFirstHeadline) {
     throw new Error(`playlist handoff draft first scene mismatch: ${JSON.stringify(items[0])}`);
+  }
+}
+
+function assertScheduleHandoffDraft(draft, options) {
+  if (!draft || draft.schema_version !== "campaign-project-schedule-handoff-draft/v1") {
+    throw new Error(`schedule handoff draft schema mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.campaign_project_id !== options.projectId) {
+    throw new Error(`schedule handoff draft project mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.tenant_id !== options.records.tenantId || draft.store_id !== options.records.storeId || draft.screen_group_id !== options.records.screenGroupId) {
+    throw new Error(`schedule handoff draft scope mismatch: ${JSON.stringify(draft)}`);
+  }
+  for (const field of ["no_external_ai", "no_media_generation", "no_content_manifest_creation", "no_publish", "no_credit_consumption", "no_schedule_activation"]) {
+    if (draft[field] !== true) throw new Error(`schedule handoff draft missing guard ${field}: ${JSON.stringify(draft)}`);
+  }
+  if (draft.schedule_activation_ready !== false || draft.schedule_created !== false || draft.device_policy_updated !== false || draft.content_manifest_created !== false) {
+    throw new Error(`schedule handoff draft must remain non-mutating: ${JSON.stringify(draft)}`);
+  }
+  if (!/^[a-f0-9]{64}$/.test(draft.draft_sha256 || "")) {
+    throw new Error(`schedule handoff draft sha256 missing: ${JSON.stringify(draft)}`);
+  }
+  if (draft.validation?.valid !== options.expectValid) {
+    throw new Error(`schedule handoff draft validation mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.playlist_reference?.draft_sha256 !== options.playlistDraft?.draft_sha256) {
+    throw new Error(`schedule handoff draft playlist reference mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.playlist_reference?.item_count !== options.sceneCount) {
+    throw new Error(`schedule handoff draft playlist item count mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.schedule?.timezone !== "Asia/Tokyo" || draft.schedule?.business_day_start_time !== "00:00") {
+    throw new Error(`schedule handoff draft store schedule defaults mismatch: ${JSON.stringify(draft)}`);
+  }
+  if (draft.schedule?.requires_operator_schedule_input !== true || !Array.isArray(draft.schedule?.time_windows) || draft.schedule.time_windows.length !== 0) {
+    throw new Error(`schedule handoff draft should require operator schedule input: ${JSON.stringify(draft)}`);
   }
 }
 
