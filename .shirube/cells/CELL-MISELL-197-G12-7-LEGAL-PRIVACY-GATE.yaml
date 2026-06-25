@@ -1,0 +1,84 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: G12-7 legal/privacy/ad-review gate foundation
+cell_type: docs_contract
+risk_class: R1
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Define the deterministic legal/privacy/ad-review gate contract that must be reviewed before advertiser self-service, external advertiser reports, regulated ad categories, camera/PII usage, or performance claim wording are enforced in runtime.
+non_scope:
+  - runtime enforcement
+  - DB migration
+  - Cloud API or Player behavior change
+  - Admin UI or customer/advertiser UI change
+  - legal advice or final legal sign-off
+  - advertiser self-service
+  - billing, pricing, guarantee, credit, or revenue settlement policy
+  - camera, POS, inventory, weather, external AI, or ad network integration
+  - content_manifest creation or publish path activation
+inputs:
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - https://github.com/watchout/misell/issues/197
+outputs:
+  - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+  - .shirube/control-handoffs/CH-MISELL-197-g12-7-legal-privacy-gate.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-g12-7-legal-privacy-gate.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+  - README.md
+  - docs/README.md
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - none
+stop_conditions:
+  - runtime enforcement is needed
+  - DB migration or schema change is needed
+  - legal advice, legal sign-off, or regulated-industry approval is needed
+  - advertiser self-service, external report surface, billing, or guarantee decision is needed
+  - camera, PII, sensitive profiling, POS, inventory, weather, ad network, or external AI integration is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - docs/99 states that it is not legal advice and that qualified legal/privacy/ad-review sign-off is required before runtime enforcement or scale.
+  - docs/99 defines trigger conditions for legal/privacy/ad-review gating before advertiser self-service, external advertiser reporting, regulated categories, camera/PII, and performance claims.
+  - docs/99 defines deterministic classification dimensions for industry category, claim class, privacy class, data source, measurement label, and review verdict.
+  - docs/99 defines a gate record shape with scope IDs, reviewer/sign-off evidence, expiry/revocation, and soft-delete handling.
+  - docs/99 keeps no-PII, no-camera, no-sensitive-profiling as the MVP default and blocks camera/attribute inference until a separate protected gate.
+  - docs/99 forbids guaranteed outcome, ROAS guarantee, and incremental claims without baseline/holdout evidence.
+  - docs/99 states that LLMs are not decision authorities and that reusable policy/config should drive classification.
+  - README and docs index make the new spec discoverable.
+  - No runtime, app, DB, workflow, package, deploy, or secret files are changed.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-CONTENT-FRESHNESS-SCORE
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

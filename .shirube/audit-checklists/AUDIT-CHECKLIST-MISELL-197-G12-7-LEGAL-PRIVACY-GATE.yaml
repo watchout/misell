@@ -1,0 +1,81 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-G12-7-LEGAL-PRIVACY-GATE
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-g12-7-legal-privacy-gate.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+  cell_id: CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE
+  pr: watchout/misell#TBD
+items:
+  - item_id: G12-7-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+      - diff_scope_report
+  - item_id: G12-7-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no app/runtime/DB/workflow/package/deploy/secret/branch-protection files are changed.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: G12-7-AUDIT-003
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify docs/99 clearly says it is not legal advice and requires qualified legal/privacy/ad-review sign-off before runtime enforcement or scale.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-004
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify legal/privacy/ad-review trigger conditions cover advertiser self-service, external advertiser reports, regulated categories, camera/PII, and performance claims.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-005
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify deterministic classification dimensions include industry category, claim class, privacy class, data source, measurement label, and review verdict.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-006
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify gate record shape includes scope IDs, reviewer/sign-off evidence, expiry/revocation, and soft-delete handling.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-007
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify MVP default is no-PII, no-camera, no-sensitive-profiling and camera/attribute inference is blocked until a separate protected gate.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-008
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify guaranteed outcome, ROAS guarantee, and incremental claims without baseline/holdout evidence are forbidden.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-009
+    source: docs/99
+    verification_method: semantic
+    required: true
+    prompt: Verify LLMs are not decision authorities and reusable policy/config should drive classification.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: G12-7-AUDIT-010
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
