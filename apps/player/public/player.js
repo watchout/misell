@@ -102,6 +102,8 @@ function normalizePlaylist(playlist) {
   return {
     ...playlist,
     playlist_version: playlist?.playlist_version || playlist?.version || "",
+    manifest_hash: cleanString(playlist?.manifest_hash || playlist?.content_manifest_hash),
+    content_manifest_hash: cleanString(playlist?.content_manifest_hash || playlist?.manifest_hash),
     items: items.map((item, index) => ({
       id: item.id || `item-${index + 1}`,
       item_id: item.item_id || item.id || `item-${index + 1}`,
@@ -109,11 +111,17 @@ function normalizePlaylist(playlist) {
       enabled: item.enabled !== false,
       layout: item.layout === "wide" ? "wide" : "three-zone",
       duration: clamp(Number.parseInt(item.duration, 10) || 10, 1, 300),
+      item_type: normalizeItemType(item.item_type || item.type),
       start: item.start || "",
       end: item.end || "",
       days_of_week: normalizeDaysOfWeek(item.days_of_week),
-      campaign_id: item.campaign_id || "",
-      asset_id: item.asset_id || "",
+      campaign_id: cleanString(item.campaign_id),
+      content_id: cleanString(item.content_id || item.contentId),
+      asset_id: cleanString(item.asset_id),
+      ad_slot_id: cleanString(item.ad_slot_id || item.adSlotId),
+      creative_id: cleanString(item.creative_id || item.creativeId),
+      qr_link_id: cleanString(item.qr_link_id || item.qrLinkId),
+      manifest_hash: cleanString(item.manifest_hash || item.content_manifest_hash || item.contentManifestHash),
       left: item.left || "",
       center: item.center || "",
       right: item.right || "",
@@ -165,6 +173,15 @@ function normalizeDaysOfWeek(value) {
   return value
     .map((day) => String(day || "").trim().toLowerCase())
     .filter((day, index, days) => allowed.has(day) && days.indexOf(day) === index);
+}
+
+function normalizeItemType(value) {
+  const itemType = cleanString(value).toLowerCase();
+  return ["content", "ad", "sponsor"].includes(itemType) ? itemType : "content";
+}
+
+function cleanString(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function parseScheduleValue(value, now) {
@@ -361,12 +378,20 @@ function logPlayback(item, result) {
     item_id: item.item_id || item.id,
     itemId: item.id,
     itemName: item.name,
+    item_type: item.item_type || "content",
     campaign_id: item.campaign_id || "",
+    content_id: item.content_id || "",
     asset_id: item.asset_id || "",
+    ad_slot_id: item.ad_slot_id || "",
+    creative_id: item.creative_id || "",
+    qr_link_id: item.qr_link_id || "",
+    manifest_hash: item.manifest_hash || PLAYER.playlist.manifest_hash || PLAYER.playlist.content_manifest_hash || "",
     layout: item.layout,
     asset_paths: assetPaths,
     asset: assetPaths.join(","),
     duration: item.duration,
+    planned_duration_seconds: item.duration,
+    played_duration_seconds: item.duration,
     result
   };
 

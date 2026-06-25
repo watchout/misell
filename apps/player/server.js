@@ -513,6 +513,8 @@ function normalizePlaylist(input, options = {}) {
   const playlist = {
     version: Number(source.version || 1),
     playlist_version: cleanString(source.playlist_version) || cleanString(source.version) || "1",
+    manifest_hash: cleanString(source.manifest_hash || source.content_manifest_hash),
+    content_manifest_hash: cleanString(source.content_manifest_hash || source.manifest_hash),
     updatedAt: options.touch ? new Date().toISOString() : cleanString(source.updatedAt) || new Date().toISOString(),
     items
   };
@@ -539,11 +541,17 @@ function normalizePlaylistItem(item, index) {
     enabled: value.enabled !== false,
     layout,
     duration,
+    item_type: normalizePlaylistItemType(value.item_type || value.type),
     start: cleanString(value.start),
     end: cleanString(value.end),
     days_of_week: normalizeDaysOfWeek(value.days_of_week),
     campaign_id: cleanString(value.campaign_id),
+    content_id: cleanString(value.content_id || value.contentId),
     asset_id: cleanString(value.asset_id),
+    ad_slot_id: cleanString(value.ad_slot_id || value.adSlotId),
+    creative_id: cleanString(value.creative_id || value.creativeId),
+    qr_link_id: cleanString(value.qr_link_id || value.qrLinkId),
+    manifest_hash: cleanString(value.manifest_hash || value.content_manifest_hash || value.contentManifestHash),
     priority: clampInt(value.priority, 0, 0, 100),
     left: cleanString(value.left),
     center: cleanString(value.center),
@@ -558,6 +566,15 @@ function normalizeDaysOfWeek(value) {
   return value
     .map((day) => cleanString(day).toLowerCase())
     .filter((day, index, days) => allowed.has(day) && days.indexOf(day) === index);
+}
+
+function normalizePlaylistItemType(value) {
+  const itemType = cleanString(value).toLowerCase();
+  if (!itemType) return "content";
+  if (!["content", "ad", "sponsor"].includes(itemType)) {
+    throw new Error("item_type must be content, ad, or sponsor");
+  }
+  return itemType;
 }
 
 function validatePlaylistSchema(playlist, options = {}) {
@@ -583,6 +600,10 @@ function validatePlaylistSchema(playlist, options = {}) {
 
     if (!Number.isInteger(item.duration) || item.duration < 1 || item.duration > 300) {
       throw new Error(`${prefix}.duration must be between 1 and 300 seconds`);
+    }
+
+    if (!["content", "ad", "sponsor"].includes(item.item_type || "content")) {
+      throw new Error(`${prefix}.item_type must be content, ad, or sponsor`);
     }
 
     if (item.start && !isValidScheduleTime(item.start)) {
@@ -1372,42 +1393,7 @@ function renderPromoExportComposite(item, preset, baseUrl = `http://127.0.0.1:${
     <meta charset="utf-8">
     <meta name="viewport" content="width=${preset.width}, initial-scale=1">
     <title>${escapeHtml(item.name)} export</title>
-    <style>
-      * { box-sizing: border-box; }
-      html, body {
-        margin: 0;
-        width: ${preset.width}px;
-        height: ${preset.height}px;
-        overflow: hidden;
-        background: #05070a;
-      }
-      body {
-        display: grid;
-        place-items: center;
-      }
-      .stage {
-        width: ${preset.stageWidth}px;
-        height: ${preset.stageHeight}px;
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        grid-template-rows: 100%;
-        overflow: hidden;
-        background: #080b10;
-      }
-      iframe {
-        width: 100%;
-        height: 100%;
-        display: block;
-        border: 0;
-        background: #080b10;
-      }
-      iframe + iframe {
-        border-left: ${preset.stageWidth >= 3000 ? 6 : 2}px solid rgba(255, 255, 255, 0.16);
-      }
-      .wide-frame {
-        grid-column: 1 / 4;
-      }
-    </style>
+    ${renderPromoExportBaseStyle(preset)}
   </head>
   <body>
     <main class="stage">
@@ -1430,42 +1416,7 @@ function renderPromoExportReel(input, preset, baseUrl = `http://127.0.0.1:${PORT
     <meta charset="utf-8">
     <meta name="viewport" content="width=${preset.width}, initial-scale=1">
     <title>${escapeHtml(input.promo_id)} export reel</title>
-    <style>
-      * { box-sizing: border-box; }
-      html, body {
-        margin: 0;
-        width: ${preset.width}px;
-        height: ${preset.height}px;
-        overflow: hidden;
-        background: #05070a;
-      }
-      body {
-        display: grid;
-        place-items: center;
-      }
-      .stage {
-        width: ${preset.stageWidth}px;
-        height: ${preset.stageHeight}px;
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        grid-template-rows: 100%;
-        overflow: hidden;
-        background: #080b10;
-      }
-      iframe {
-        width: 100%;
-        height: 100%;
-        display: block;
-        border: 0;
-        background: #080b10;
-      }
-      iframe + iframe {
-        border-left: ${preset.stageWidth >= 3000 ? 6 : 2}px solid rgba(255, 255, 255, 0.16);
-      }
-      .wide-frame {
-        grid-column: 1 / 4;
-      }
-    </style>
+    ${renderPromoExportBaseStyle(preset)}
   </head>
   <body>
     <main id="stage" class="stage"></main>
@@ -1489,6 +1440,45 @@ function renderPromoExportReel(input, preset, baseUrl = `http://127.0.0.1:${PORT
   </body>
 </html>
 `;
+}
+
+function renderPromoExportBaseStyle(preset) {
+  return `<style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: ${preset.width}px;
+        height: ${preset.height}px;
+        overflow: hidden;
+        background: #05070a;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      .stage {
+        width: ${preset.stageWidth}px;
+        height: ${preset.stageHeight}px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: 100%;
+        overflow: hidden;
+        background: #080b10;
+      }
+      iframe {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 0;
+        background: #080b10;
+      }
+      iframe + iframe {
+        border-left: ${preset.stageWidth >= 3000 ? 6 : 2}px solid rgba(255, 255, 255, 0.16);
+      }
+      .wide-frame {
+        grid-column: 1 / 4;
+      }
+    </style>`;
 }
 
 function renderPromoExportFrames(item, baseUrl) {
@@ -2366,11 +2356,19 @@ app.post("/api/playback-log", async (req, res, next) => {
       itemId: cleanString(body.itemId),
       item_id: cleanString(body.playlist_item_id || body.item_id || body.itemId),
       itemName: cleanString(body.itemName),
+      item_type: normalizePlaylistItemType(body.item_type || body.type),
       campaign_id: cleanString(body.campaign_id),
+      content_id: cleanString(body.content_id || body.contentId),
       asset_id: cleanString(body.asset_id),
+      ad_slot_id: cleanString(body.ad_slot_id || body.adSlotId),
+      creative_id: cleanString(body.creative_id || body.creativeId),
+      qr_link_id: cleanString(body.qr_link_id || body.qrLinkId),
+      manifest_hash: cleanString(body.manifest_hash || body.content_manifest_hash || body.contentManifestHash),
       layout: cleanString(body.layout),
       asset: cleanString(body.asset),
       duration: clampInt(body.duration, 0, 0, 300),
+      planned_duration_seconds: clampInt(body.planned_duration_seconds || body.plannedDurationSeconds || body.duration, 0, 0, 300),
+      played_duration_seconds: clampInt(body.played_duration_seconds || body.playedDurationSeconds || body.duration, 0, 0, 300),
       result: cleanString(body.result || "started")
     };
     await persistPlaybackLog(entry);
@@ -2395,11 +2393,19 @@ app.post("/api/log/play", async (req, res, next) => {
       itemId: cleanString(body.itemId || body.item_id),
       item_id: cleanString(body.playlist_item_id || body.item_id || body.itemId),
       itemName: cleanString(body.itemName),
+      item_type: normalizePlaylistItemType(body.item_type || body.type),
       campaign_id: cleanString(body.campaign_id),
+      content_id: cleanString(body.content_id || body.contentId),
       asset_id: cleanString(body.asset_id),
+      ad_slot_id: cleanString(body.ad_slot_id || body.adSlotId),
+      creative_id: cleanString(body.creative_id || body.creativeId),
+      qr_link_id: cleanString(body.qr_link_id || body.qrLinkId),
+      manifest_hash: cleanString(body.manifest_hash || body.content_manifest_hash || body.contentManifestHash),
       layout: cleanString(body.layout),
       asset: cleanString(body.asset || (Array.isArray(body.asset_paths) ? body.asset_paths.join(",") : "")),
       duration: clampInt(body.duration, 0, 0, 300),
+      planned_duration_seconds: clampInt(body.planned_duration_seconds || body.plannedDurationSeconds || body.duration, 0, 0, 300),
+      played_duration_seconds: clampInt(body.played_duration_seconds || body.playedDurationSeconds || body.duration, 0, 0, 300),
       result: cleanString(body.result || "started")
     };
     await persistPlaybackLog(entry);
