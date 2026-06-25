@@ -1,0 +1,145 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-197-G12-7-LEGAL-PRIVACY-GATE
+parent_ssot: https://github.com/watchout/misell/issues/197
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/197#issuecomment-4796867327
+premise_confirmation_ref: https://github.com/watchout/misell/issues/197
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/197
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational PR evidence for this Cell
+    - diff scope and handoff consistency checks
+    - checklist-driven audit request evidence
+  shirube_does_not_own:
+    - legal advice or final legal sign-off
+    - existing Misell Gate 0 required checks
+    - production deployment or runtime operations
+    - security/CEO approval labels unless separately applied
+
+cell:
+  CELL-ID: CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE
+  cell_ref: .shirube/cells/CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+  cell_type: docs_contract
+  risk_class: R1
+  goal: Convert #197 G12-7 into a discoverable, auditable legal/privacy/ad-review gate contract before advertiser report or ad-scale runtime work continues.
+  non_scope:
+    - runtime enforcement
+    - DB migration or schema change
+    - Cloud API, Player, Admin UI, customer UI, or advertiser UI behavior change
+    - legal advice or final legal sign-off
+    - advertiser self-service
+    - billing, pricing, guarantee, credit, or revenue settlement policy
+    - camera, POS, inventory, weather, external AI, or ad network integration
+    - content_manifest creation or publish path activation
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+    - .shirube/control-handoffs/CH-MISELL-197-g12-7-legal-privacy-gate.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+    - README.md
+    - docs/README.md
+    - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+    - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/**
+    - package.json
+    - package-lock.json
+  protected_surfaces:
+    - none
+  stop_conditions:
+    - runtime enforcement is needed
+    - DB migration or schema change is needed
+    - legal advice, legal sign-off, or regulated-industry approval is needed
+    - advertiser self-service, external report surface, billing, or guarantee decision is needed
+    - camera, PII, sensitive profiling, POS, inventory, weather, ad network, or external AI integration is needed
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - docs/99 states that it is not legal advice and that qualified legal/privacy/ad-review sign-off is required before runtime enforcement or scale.
+    - docs/99 defines trigger conditions for legal/privacy/ad-review gating before advertiser self-service, external advertiser reporting, regulated categories, camera/PII, and performance claims.
+    - docs/99 defines deterministic classification dimensions for industry category, claim class, privacy class, data source, measurement label, and review verdict.
+    - docs/99 defines a gate record shape with scope IDs, reviewer/sign-off evidence, expiry/revocation, and soft-delete handling.
+    - docs/99 keeps no-PII, no-camera, no-sensitive-profiling as the MVP default and blocks camera/attribute inference until a separate protected gate.
+    - docs/99 forbids guaranteed outcome, ROAS guarantee, and incremental claims without baseline/holdout evidence.
+    - docs/99 states that LLMs are not decision authorities and that reusable policy/config should drive classification.
+    - README and docs index make the new spec discoverable.
+    - No runtime, app, DB, workflow, package, deploy, or secret files are changed.
+
+implementation_boundary:
+  summary: Documentation and cell contract only. No legal approval, runtime enforcement, API, DB, UI, or deployment change.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, external AI, ad network, POS, camera, or production mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+  audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-G12-7-LEGAL-PRIVACY-GATE.yaml
+  acceptance_tests:
+    - docs/99 contains legal/privacy/ad-review trigger conditions.
+    - docs/99 contains deterministic classification dimensions and gate record shape.
+    - docs/99 contains no-PII/no-camera default and claim wording restrictions.
+    - docs/99 clearly states legal sign-off is future human review, not completed by this PR.
+    - no app/runtime files are changed.
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff

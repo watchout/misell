@@ -183,6 +183,7 @@ npm audit --audit-level=moderate
 - docs/96_SHIRUBE_FULL_OPERATIONAL_ADOPTION.md
 - docs/97_SHIRUBE_V3_OVERLAY_REFRESH.md
 - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+- docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
 - prompts/codex_build_mvp.md
 - prompts/codex_implement_local_player_v1.md
 
