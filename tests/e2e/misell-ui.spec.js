@@ -740,6 +740,14 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await campaignEditor.waitForLoadState("domcontentloaded");
   await expect(campaignEditor.locator("h1")).toContainText("Browser campaign project");
   await expect(campaignEditor.locator(".campaign-editor-stage")).toContainText("Browser edited scene");
+  await expect(campaignEditor.locator(".campaign-editor-handoff")).toContainText("配信下書き", { timeout: 5000 });
+  await expect(campaignEditor.locator(".campaign-editor-handoff")).toContainText("content_manifestを作成しません");
+  const handoffDraftJson = await campaignEditor.locator("[data-editor-handoff-json]").inputValue();
+  const handoffDraft = JSON.parse(handoffDraftJson);
+  expect(handoffDraft.schema_version).toBe("campaign-project-playlist-handoff-draft/v1");
+  expect(handoffDraft.no_content_manifest_creation).toBe(true);
+  expect(handoffDraft.no_publish).toBe(true);
+  expect(handoffDraft.playlist.items.some((item) => item.center?.headline === "Browser edited scene")).toBeTruthy();
   await campaignEditor.locator("form.campaign-editor-form input[name='headline']").fill("Browser editor scene");
   await campaignEditor.locator("form.campaign-editor-form button[type='submit']").click();
   await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("保存しました", { timeout: 5000 });

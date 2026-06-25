@@ -1215,7 +1215,8 @@ td small {
 
 .campaign-editor-summary,
 .campaign-editor-workspace,
-.campaign-editor-events {
+.campaign-editor-events,
+.campaign-editor-handoff {
   background: #ffffff;
   border: 1px solid #d8dee4;
   border-radius: 8px;
@@ -1231,7 +1232,8 @@ td small {
 
 .campaign-editor-summary div,
 .campaign-editor-events,
-.campaign-editor-events small {
+.campaign-editor-events small,
+.campaign-editor-handoff {
   display: grid;
   gap: 6px;
 }
@@ -1291,7 +1293,9 @@ td small {
 .campaign-editor-form-head,
 .campaign-editor-regeneration,
 .campaign-editor-regeneration-actions,
-.campaign-editor-actions {
+.campaign-editor-actions,
+.campaign-editor-handoff-head,
+.campaign-editor-handoff-meta {
   display: grid;
   gap: 6px;
 }
@@ -1334,8 +1338,32 @@ td small {
   padding: 14px;
 }
 
+.campaign-editor-handoff {
+  gap: 10px;
+  padding: 14px;
+}
+
+.campaign-editor-handoff-head {
+  align-items: start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.campaign-editor-handoff-head h2,
 .campaign-editor-events h2 {
   margin: 0;
+}
+
+.campaign-editor-handoff-meta {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.campaign-editor-handoff textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  min-height: 220px;
+  resize: vertical;
 }
 
 .admin-context-panel {

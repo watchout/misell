@@ -6,6 +6,7 @@
   const previewLink = document.getElementById("campaign-editor-preview-link");
   const state = {
     project: null,
+    handoffDraft: null,
     selectedSceneId: "",
     message: ""
   };
@@ -17,8 +18,12 @@
   async function loadEditor(options = {}) {
     const projectId = projectIdFromPath();
     if (!projectId) throw new Error("project id is required");
-    const response = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`);
+    const [response, handoffResponse] = await Promise.all([
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`),
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`)
+    ]);
     state.project = response.campaign_project;
+    state.handoffDraft = handoffResponse.playlist_handoff_draft;
     const scenes = activeScenes(state.project);
     const previous = options.selectedSceneId || state.selectedSceneId;
     state.selectedSceneId = scenes.some((scene) => scene.campaign_project_scene_id === previous)
@@ -74,6 +79,7 @@
         <h2>履歴</h2>
         ${(project.events || []).slice(0, 8).map(renderEvent).join("") || `<p class="empty">履歴なし</p>`}
       </section>
+      ${renderHandoffDraft(state.handoffDraft)}
     `;
     root.querySelectorAll("[data-editor-scene-id]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -90,6 +96,7 @@
     root.querySelectorAll("[data-editor-regeneration-request]").forEach((button) => {
       button.addEventListener("click", handleRegenerationRequest);
     });
+    root.querySelector("[data-editor-copy-handoff]")?.addEventListener("click", handleCopyHandoff);
     root.querySelector("form.campaign-editor-form")?.addEventListener("submit", handleSaveScene);
   }
 
@@ -323,6 +330,46 @@
       state.message = error.message || "プロジェクト検証に失敗しました。";
       render();
     }
+  }
+
+  async function handleCopyHandoff() {
+    const textarea = root.querySelector("[data-editor-handoff-json]");
+    if (!textarea) return;
+    textarea.focus();
+    textarea.select();
+    try {
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(textarea.value);
+      state.message = "配信下書きをコピーしました。";
+    } catch {
+      state.message = "配信下書きを選択しました。";
+    }
+    render();
+  }
+
+  function renderHandoffDraft(draft) {
+    if (!draft) return "";
+    const draftJson = JSON.stringify(draft, null, 2);
+    const statusText = draft.validation?.valid ? "検証済み" : "確認が必要";
+    const itemCount = draft.playlist?.item_count || 0;
+    return `
+      <section class="campaign-editor-handoff" aria-label="Playlist handoff draft">
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>配信下書き</h2>
+            <small>operator handoff 用の読み取り専用 JSON です。content_manifestを作成しません。</small>
+          </div>
+          <span class="update-status update-status-${escapeAttr(draft.validation?.valid ? "success" : "failed")}">${escapeHtml(statusText)}</span>
+        </div>
+        <div class="campaign-editor-handoff-meta">
+          <small>${escapeHtml(draft.schema_version || "")}</small>
+          <small>${escapeHtml(String(itemCount))} items</small>
+          <small>${escapeHtml(String(draft.draft_sha256 || "").slice(0, 16))}</small>
+        </div>
+        <textarea data-editor-handoff-json readonly rows="12">${escapeHtml(draftJson)}</textarea>
+        <button class="secondary" type="button" data-editor-copy-handoff>JSONをコピー</button>
+      </section>
+    `;
   }
 
   function scenePayloadFromForm(form) {
