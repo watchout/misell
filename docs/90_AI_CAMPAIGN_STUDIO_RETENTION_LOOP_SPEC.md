@@ -123,6 +123,62 @@ asset_id
 qr_link_id
 ```
 
+### Measurement Readiness 補正
+
+2026-06の広告/ROI設計更新により、Misell Studioは「制作する場所」だけでなく「測定可能な制作物を作る場所」として扱う。
+
+Studio本実装では、CampaignProject/Sceneを以下に接続できる構造へ寄せる。
+
+| 概念 | 目的 |
+| --- | --- |
+| content_layer | 常時表示、定期差し替え、文脈連動を分ける |
+| item_type | 通常コンテンツ、広告、スポンサーを分ける |
+| measurement_goal | 何を検証するScene/Projectかを保存する |
+| expected_action | QR scan、coupon issue、order、inquiryなど期待行動を保存する |
+| qr_link_id | QR反応とScene/Projectを接続する |
+| campaign_id | report/read modelと接続する |
+| media_campaign_id | 広告主/代理店レポート単位と接続する |
+| creative_id | 素材/creative別の効果測定に使う |
+| ad_slot_id | 施設/画面/枠/時間帯の広告在庫と接続する |
+| duration_class | 3秒理解、視覚中心、文字中心、詳細確認などの秒数設計に使う |
+| next_review_at | 鮮度維持とstale warningに使う |
+| variation_group | A/Bや改善履歴を束ねる |
+| improvement_reason | なぜSceneを差し替えたかを残す |
+
+この補正は、既存のCampaign Generator foundationを壊すものではない。後続セルで列やcontractを足す場合も additive に行い、既存Project/Sceneは未指定値を許容する。
+
+#### Studio validation 追加方針
+
+Scene validationは、デザインの完成度だけでなく測定可能性も見る。
+
+後続で追加するvalidation:
+
+- CTAがあること
+- item_typeが `ad` / `sponsor` の場合、campaign/creative/ad slot/QRの接続状態を確認すること
+- duration_secondsが用途に対して極端でないこと
+- guaranteed outcome、ROAS保証、増分断定、直接PIIを拒否すること
+- QRやofferがある場合、scopeがtenant/store/screen_groupと一致すること
+- published content_manifestを直接変えないこと
+
+MVPでは、AIやLLMが効果判断を行わない。validationは決定済みのschema、allowlist、regex、scope checkで行う。
+
+#### Freshness / 運用データへの接続
+
+Studioは、作成時だけでなく運用中の更新理由も持つ。
+
+後続で扱う状態:
+
+- last_content_update_at
+- next_review_at
+- stale_reason
+- freshness_status
+- active_days
+- unchanged_days
+- previous_scene_id
+- variation_group
+
+これにより、「設置して放置」ではなく、月次で改善されるサイネージ運用OSとして扱える。
+
 ## 並行システム禁止
 
 AI Campaignは既存仕様を置き換えない。以下の正本を拡張する。
@@ -586,6 +642,13 @@ Scene 4: QR/CTA 5秒
 - テロップ
 - 遷移
 - ロゴ位置
+- 測定目的
+- 期待行動
+- content layer
+- item type
+- campaign / creative / ad slot / QR link
+- 次回見直し日
+- 改善理由
 
 ### 部分再生成
 
@@ -680,6 +743,10 @@ MP4書き出しは後続Phaseでもよい。
 - qr_link
 - playlog
 - reporting
+- campaign_id / media_campaign_id
+- creative_id
+- ad_slot_id
+- measurement_goal
 
 通常販促:
 
@@ -736,6 +803,13 @@ QR/放映ログが貯まる
 ```text
 campaign_project_id
 content_id
+item_type
+content_layer
+measurement_goal
+expected_action
+media_campaign_id
+creative_id
+ad_slot_id
 play_count
 completed_play_count
 qr_scan_count
@@ -759,6 +833,9 @@ customer_rejection_reason
 - QR反応
 - 放映ログ
 - 時間帯別反応
+- Proof of Playの失敗/欠損
+- creative/ad_slot別の反応
+- freshness/stale状態
 - 月次レポートコメント
 
 ## Collaboration Campaign
@@ -832,6 +909,7 @@ Phase 1で多段承認を作らない場合でも、以下は必須とする。
 
 - [ ] Proposal、自由入力、collaboration briefを同じCampaignBrief schemaへ正規化できる
 - [ ] CampaignProjectとMedia Campaignが別IDで管理される
+- [ ] CampaignProject/Sceneに測定目的、期待行動、QR/広告枠接続を後続拡張できる
 - [ ] AI出力がScene schema validationを通る
 - [ ] validation失敗時は公開候補にならない
 - [ ] 既存render/cut_planへ渡せる構造に変換できる
@@ -861,6 +939,9 @@ Phase 1で多段承認を作らない場合でも、以下は必須とする。
 - [ ] 公開時にContentManifestへ変換される
 - [ ] active contentを直接更新せず、clone/draft/validate/activateで変更できる
 - [ ] playlog/qr/reportingへcontent_id/campaign_project_idを渡せる
+- [ ] 広告/スポンサーSceneはcampaign_id、creative_id、ad_slot_id、qr_link_idをplaylist/playlog/reportingへ接続できる
+- [ ] Sceneの表示秒数、CTA、成果保証表現、直接PII、測定導線をpublish前validationで確認できる
+- [ ] stale contentや次回見直し日を管理画面で判断できる
 
 ### Phase 4: Quota / Credit / Collaboration
 
