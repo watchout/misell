@@ -64,6 +64,7 @@ const ADMIN_SET_DEVICE_STATUS = new Set(["offline", "maintenance", "retired", "l
 const RELEASE_CHANNELS = new Set(["dev", "staging", "canary", "stable", "hold"]);
 const RELEASE_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
 const CONTENT_MANIFEST_STATUS = new Set(["draft", "active", "retired"]);
+const CONTENT_LAYER_TYPES = new Set(["always_on", "campaign_refresh", "realtime_context"]);
 const UPDATE_RESULT_STATUS = new Set(["checking", "updating", "success", "failed"]);
 const ASSET_SYNC_RESULT_STATUS = new Set(["checking", "downloading", "ready", "failed"]);
 const ALERT_EVENTS = new Set(["opened", "updated", "resolved", "test"]);
@@ -258,6 +259,22 @@ const REPORT_HEARTBEAT_INTERVAL_MINUTES = normalizedLimit(
   5,
   1,
   60
+);
+const CONTENT_FRESHNESS_REVIEW_DUE_DAYS = normalizedLimit(
+  process.env.MISELL_CONTENT_FRESHNESS_REVIEW_DUE_DAYS,
+  14,
+  1,
+  3650
+);
+const CONTENT_FRESHNESS_STALE_DAYS = Math.max(
+  CONTENT_FRESHNESS_REVIEW_DUE_DAYS,
+  normalizedLimit(process.env.MISELL_CONTENT_FRESHNESS_STALE_DAYS, 30, 1, 3650)
+);
+const CONTENT_FRESHNESS_REPORT_LIMIT = normalizedLimit(
+  process.env.MISELL_CONTENT_FRESHNESS_REPORT_LIMIT,
+  100,
+  1,
+  500
 );
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -1301,6 +1318,15 @@ app.get("/api/admin/reports/summary", requireAdminAuth, (req, res, next) => {
   try {
     const criteria = normalizeReportCriteria(req.query || {});
     res.json({ ok: true, report: buildReportSummary(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/content-freshness", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeContentFreshnessCriteria(req.query || {});
+    res.json({ ok: true, report: buildContentFreshnessReport(criteria) });
   } catch (error) {
     next(error);
   }
@@ -8616,6 +8642,28 @@ function normalizeReportSnapshotListFilters(input = {}) {
   };
 }
 
+function normalizeContentFreshnessCriteria(input = {}) {
+  const releaseChannel = cleanString(input.release_channel || input.releaseChannel);
+  if (releaseChannel && !RELEASE_CHANNELS.has(releaseChannel)) {
+    throw requestError(`release_channel must be one of: ${Array.from(RELEASE_CHANNELS).join(", ")}`, 400);
+  }
+  const status = cleanString(input.status);
+  if (status && !CONTENT_MANIFEST_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(CONTENT_MANIFEST_STATUS).join(", ")}`, 400);
+  }
+  return {
+    tenant_id: cleanId(input.tenant_id || input.tenantId),
+    store_id: cleanId(input.store_id || input.storeId || input.site_id || input.siteId),
+    screen_group_id: cleanId(input.screen_group_id || input.screenGroupId || input.display_wall_id || input.displayWallId),
+    release_channel: releaseChannel,
+    status,
+    now: requestNowIso(input),
+    review_due_days: CONTENT_FRESHNESS_REVIEW_DUE_DAYS,
+    stale_days: CONTENT_FRESHNESS_STALE_DAYS,
+    limit: Math.max(1, Math.min(asInteger(input.limit) || CONTENT_FRESHNESS_REPORT_LIMIT, CONTENT_FRESHNESS_REPORT_LIMIT))
+  };
+}
+
 function buildReportSummary(criteria, options = {}) {
   const generatedAt = cleanString(options.generatedAt) || nowIso();
   const rows = (options.dailyRows || aggregateReportDailyStoreMetrics(criteria).rows).map(publicReportDailyStoreMetric);
@@ -8639,6 +8687,212 @@ function buildReportSummary(criteria, options = {}) {
     qr_links: buildReportQrBreakdown(criteria),
     counter_orders: buildReportOrderBreakdown(criteria)
   };
+}
+
+function buildContentFreshnessReport(criteria) {
+  const rows = listContentFreshnessManifestRows(criteria)
+    .map((row) => buildContentFreshnessRow(row, criteria));
+  return {
+    report_type: "content_freshness",
+    generated_at: criteria.now,
+    filters: {
+      tenant_id: criteria.tenant_id,
+      store_id: criteria.store_id,
+      screen_group_id: criteria.screen_group_id,
+      release_channel: criteria.release_channel,
+      status: criteria.status,
+      limit: criteria.limit
+    },
+    thresholds: {
+      review_due_days: criteria.review_due_days,
+      stale_days: criteria.stale_days
+    },
+    summary: summarizeContentFreshnessRows(rows),
+    content: rows
+  };
+}
+
+function listContentFreshnessManifestRows(criteria) {
+  return db.prepare(`
+    SELECT * FROM content_manifests
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR screen_group_id = ?)
+      AND (? = '' OR release_channel = ?)
+      AND (? = '' OR status = ?)
+    ORDER BY
+      CASE status WHEN 'active' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END,
+      updated_at DESC,
+      id DESC
+    LIMIT ?
+  `).all(
+    criteria.tenant_id,
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.screen_group_id,
+    criteria.screen_group_id,
+    criteria.release_channel,
+    criteria.release_channel,
+    criteria.status,
+    criteria.status,
+    criteria.limit
+  );
+}
+
+function buildContentFreshnessRow(row, criteria) {
+  const playlist = parseJson(row.playlist_json, {});
+  const playlistStats = summarizeFreshnessPlaylist(playlist);
+  const lastPlay = latestPlaylogForContent(row);
+  const updatedAt = cleanString(row.updated_at || row.published_at || row.created_at);
+  const daysSinceUpdate = daysSinceIso(criteria.now, updatedAt);
+  const freshnessStatus = contentFreshnessStatus(row.status, daysSinceUpdate, criteria);
+  const playSignalStatus = lastPlay.playlog_count > 0 ? "played" : "not_played";
+  const reasons = contentFreshnessReasons({
+    row,
+    daysSinceUpdate,
+    freshnessStatus,
+    playSignalStatus,
+    playlistStats,
+    criteria
+  });
+  return {
+    content_id: cleanString(row.content_id),
+    playlist_version: cleanString(row.playlist_version),
+    release_channel: cleanString(row.release_channel),
+    status: cleanString(row.status),
+    title: cleanString(row.title),
+    tenant_id: cleanString(row.tenant_id),
+    store_id: cleanString(row.store_id),
+    screen_group_id: cleanString(row.screen_group_id),
+    screen_slot_id: cleanString(row.screen_slot_id),
+    manifest_version: asInteger(row.manifest_version) || 1,
+    content_hash: cleanString(row.content_hash),
+    created_at: cleanString(row.created_at),
+    updated_at: updatedAt,
+    published_at: cleanString(row.published_at),
+    next_review_at: updatedAt ? addDaysToIso(updatedAt, criteria.review_due_days) : "",
+    days_since_update: daysSinceUpdate,
+    freshness_status: freshnessStatus,
+    freshness_score: contentFreshnessScore(row.status, daysSinceUpdate, criteria.stale_days),
+    play_signal_status: playSignalStatus,
+    last_played_at: lastPlay.last_played_at,
+    playlog_count: lastPlay.playlog_count,
+    stale_reasons: reasons,
+    playlist: playlistStats
+  };
+}
+
+function summarizeFreshnessPlaylist(playlist) {
+  const items = Array.isArray(playlist?.items) ? playlist.items : [];
+  const stats = {
+    item_count: items.length,
+    content_item_count: 0,
+    ad_item_count: 0,
+    sponsor_item_count: 0,
+    unknown_item_count: 0,
+    campaign_linked_item_count: 0,
+    qr_linked_item_count: 0,
+    always_on_count: 0,
+    campaign_refresh_count: 0,
+    realtime_context_count: 0
+  };
+  for (const item of items) {
+    const itemType = normalizeFreshnessItemType(item?.item_type || item?.type);
+    if (itemType === "ad") stats.ad_item_count += 1;
+    else if (itemType === "sponsor") stats.sponsor_item_count += 1;
+    else if (itemType === "content") stats.content_item_count += 1;
+    else stats.unknown_item_count += 1;
+    if (cleanId(item?.campaign_id || item?.campaignId)) stats.campaign_linked_item_count += 1;
+    if (cleanId(item?.qr_link_id || item?.qrLinkId)) stats.qr_linked_item_count += 1;
+    const layer = cleanString(item?.content_layer || item?.contentLayer);
+    if (layer === "always_on") stats.always_on_count += 1;
+    if (layer === "campaign_refresh") stats.campaign_refresh_count += 1;
+    if (layer === "realtime_context") stats.realtime_context_count += 1;
+  }
+  return stats;
+}
+
+function normalizeFreshnessItemType(value) {
+  const itemType = cleanString(value).toLowerCase();
+  return ["content", "ad", "sponsor"].includes(itemType) ? itemType : "content";
+}
+
+function latestPlaylogForContent(manifest) {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS playlog_count,
+      MAX(COALESCE(NULLIF(occurred_at, ''), NULLIF(played_at, ''), received_at)) AS last_played_at
+    FROM playlogs
+    WHERE content_id = ?
+      AND tenant_id = ?
+      AND store_id = ?
+      AND (? = '' OR screen_group_id = ?)
+  `).get(
+    cleanId(manifest.content_id),
+    cleanId(manifest.tenant_id),
+    cleanId(manifest.store_id),
+    cleanId(manifest.screen_group_id),
+    cleanId(manifest.screen_group_id)
+  ) || {};
+  return {
+    playlog_count: asInteger(row.playlog_count) || 0,
+    last_played_at: cleanString(row.last_played_at)
+  };
+}
+
+function contentFreshnessStatus(status, daysSinceUpdate, criteria) {
+  const manifestStatus = cleanString(status);
+  if (manifestStatus === "retired") return "inactive";
+  if (daysSinceUpdate === null) return "review_due";
+  if (daysSinceUpdate >= criteria.stale_days) return "stale";
+  if (daysSinceUpdate >= criteria.review_due_days) return "review_due";
+  return "fresh";
+}
+
+function contentFreshnessScore(status, daysSinceUpdate, staleDays) {
+  if (cleanString(status) === "retired") return 0;
+  if (daysSinceUpdate === null) return 0;
+  return Math.max(0, Math.min(100, Math.round(100 - ((daysSinceUpdate / staleDays) * 100))));
+}
+
+function contentFreshnessReasons({ row, daysSinceUpdate, freshnessStatus, playSignalStatus, playlistStats, criteria }) {
+  const reasons = [];
+  if (freshnessStatus === "stale") reasons.push("unchanged_over_stale_threshold");
+  else if (freshnessStatus === "review_due") reasons.push("review_due");
+  if (playSignalStatus === "not_played" && cleanString(row.status) === "active") reasons.push("no_play_signal");
+  if (playlistStats.item_count === 0) reasons.push("empty_playlist");
+  if (playlistStats.campaign_refresh_count === 0 && playlistStats.ad_item_count + playlistStats.sponsor_item_count > 0) {
+    reasons.push("ad_or_sponsor_without_campaign_refresh_layer");
+  }
+  if (daysSinceUpdate !== null && daysSinceUpdate >= criteria.review_due_days) {
+    reasons.push(`unchanged_days:${daysSinceUpdate}`);
+  }
+  return reasons;
+}
+
+function summarizeContentFreshnessRows(rows) {
+  const summary = {
+    total: rows.length,
+    fresh: 0,
+    review_due: 0,
+    stale: 0,
+    inactive: 0,
+    active: 0,
+    draft: 0,
+    retired: 0,
+    not_played: 0,
+    ad_or_sponsor_items: 0,
+    campaign_refresh_items: 0
+  };
+  for (const row of rows) {
+    if (Object.prototype.hasOwnProperty.call(summary, row.freshness_status)) summary[row.freshness_status] += 1;
+    if (Object.prototype.hasOwnProperty.call(summary, row.status)) summary[row.status] += 1;
+    if (row.play_signal_status === "not_played") summary.not_played += 1;
+    summary.ad_or_sponsor_items += row.playlist.ad_item_count + row.playlist.sponsor_item_count;
+    summary.campaign_refresh_items += row.playlist.campaign_refresh_count;
+  }
+  return summary;
 }
 
 function rebuildReportDailyStoreMetrics(criteria) {
@@ -9760,6 +10014,20 @@ function dateKeysBetween(fromDate, toExclusiveDate) {
   return dates;
 }
 
+function daysSinceIso(nowValue, pastValue) {
+  const nowMs = Date.parse(cleanString(nowValue));
+  const pastMs = Date.parse(cleanString(pastValue));
+  if (!Number.isFinite(nowMs) || !Number.isFinite(pastMs)) return null;
+  return Math.max(0, Math.floor((nowMs - pastMs) / 86400000));
+}
+
+function addDaysToIso(value, days) {
+  const sourceMs = Date.parse(cleanString(value));
+  if (!Number.isFinite(sourceMs)) return "";
+  const dayCount = Math.max(0, asInteger(days) || 0);
+  return new Date(sourceMs + (dayCount * 86400000)).toISOString();
+}
+
 function resolveCounterOrderOfferRevision(input) {
   const offerRevisionId = cleanId(input.offer_revision_id || input.offerRevisionId);
   if (offerRevisionId) {
@@ -10081,17 +10349,27 @@ function normalizeCloudPlaylistItem(item, index) {
   const value = item || {};
   const layout = value.layout === "wide" ? "wide" : "three-zone";
   const id = cleanId(value.item_id || value.id || `item-${Date.now()}-${index + 1}`);
+  const itemType = normalizePlaylogItemType(value.item_type || value.itemType || value.type);
+  const durationSeconds = normalizedLimit(value.duration ?? value.duration_seconds ?? value.durationSeconds, 10, 1, 300);
   const normalized = {
     id,
     item_id: id,
+    item_type: itemType,
+    type: itemType,
     name: cleanString(value.name || id).slice(0, 160),
     enabled: value.enabled !== false,
     layout,
-    duration: normalizedLimit(value.duration, 10, 1, 300),
+    duration: durationSeconds,
+    duration_seconds: durationSeconds,
     start: cleanString(value.start),
     end: cleanString(value.end),
     days_of_week: normalizeDaysOfWeek(value.days_of_week),
     campaign_id: cleanString(value.campaign_id).slice(0, 120),
+    content_id: cleanId(value.content_id || value.contentId),
+    ad_slot_id: cleanId(value.ad_slot_id || value.adSlotId),
+    creative_id: cleanId(value.creative_id || value.creativeId),
+    qr_link_id: cleanId(value.qr_link_id || value.qrLinkId),
+    content_layer: normalizeContentLayer(value.content_layer || value.contentLayer),
     asset_id: cleanString(value.asset_id).slice(0, 120),
     priority: normalizedLimit(value.priority, 0, 0, 100),
     left: cleanString(value.left),
@@ -10115,6 +10393,15 @@ function normalizeCloudPlaylistItem(item, index) {
     validateCloudSource(`items[${index}].right`, normalized.right, normalized.enabled);
   }
   return normalized;
+}
+
+function normalizeContentLayer(value) {
+  const layer = cleanString(value).toLowerCase();
+  if (!layer) return "";
+  if (!CONTENT_LAYER_TYPES.has(layer)) {
+    throw new Error(`content_layer must be one of: ${Array.from(CONTENT_LAYER_TYPES).join(", ")}`);
+  }
+  return layer;
 }
 
 function validateCloudSource(label, source, required) {

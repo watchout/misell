@@ -1,0 +1,81 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-CONTENT-FRESHNESS-SCORE
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-content-freshness-score.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+  cell_id: CELL-MISELL-197-CONTENT-FRESHNESS-SCORE
+  pr: watchout/misell#TBD
+items:
+  - item_id: CFD-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: CFD-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no DB migration, workflow, package, deploy, secret, player, or public UI files are changed.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: CFD-AUDIT-003
+    source: api_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify GET /api/admin/reports/content-freshness is admin-only and read-only.
+    expected_evidence:
+      - route_review
+  - item_id: CFD-AUDIT-004
+    source: report_logic
+    verification_method: semantic
+    required: true
+    prompt: Verify freshness uses existing content_manifests timestamps, playlist composition, and playlogs without DB migration.
+    expected_evidence:
+      - code_review
+  - item_id: CFD-AUDIT-005
+    source: config
+    verification_method: semantic
+    required: true
+    prompt: Verify freshness thresholds are centralized in environment-backed constants.
+    expected_evidence:
+      - code_review
+  - item_id: CFD-AUDIT-006
+    source: scope_filters
+    verification_method: semantic
+    required: true
+    prompt: Verify tenant/store/screen_group/release_channel/status filters are server-side.
+    expected_evidence:
+      - code_review
+  - item_id: CFD-AUDIT-007
+    source: non_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify no advertiser/customer external report access, legal enforcement, publish, schedule, billing, external AI, camera, POS, inventory, weather, or ad network integration is added.
+    expected_evidence:
+      - code_review
+  - item_id: CFD-AUDIT-008
+    source: smoke
+    verification_method: executable
+    required: true
+    prompt: Verify smoke coverage proves fresh/stale content, no-play signal, scope isolation, and ad/campaign_refresh playlist counts.
+    expected_evidence:
+      - smoke_reporting_result
+  - item_id: CFD-AUDIT-009
+    source: backwards_compatibility
+    verification_method: executable
+    required: true
+    prompt: Verify existing reporting summary/read-model/monthly snapshot smoke coverage still passes.
+    expected_evidence:
+      - smoke_reporting_result
+      - test_ci_result
+  - item_id: CFD-AUDIT-010
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

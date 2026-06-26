@@ -1,0 +1,144 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-197-CONTENT-FRESHNESS-SCORE
+parent_ssot: https://github.com/watchout/misell/issues/197
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/197#issuecomment-4796867327
+premise_confirmation_ref: https://github.com/watchout/misell/issues/197
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/197
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational PR evidence for this Cell
+    - diff scope and handoff consistency checks
+    - checklist-driven audit request evidence
+  shirube_does_not_own:
+    - legal advice or final legal sign-off
+    - production deployment or runtime operations
+    - branch protection or required-check configuration
+
+cell:
+  CELL-ID: CELL-MISELL-197-CONTENT-FRESHNESS-SCORE
+  cell_ref: .shirube/cells/CELL-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+  cell_type: runtime_foundation
+  risk_class: R2
+  goal: Add an internal admin read-only content freshness report so host operators can detect stale content and review due campaigns.
+  non_scope:
+    - advertiser or agency report surface
+    - customer self-service UI/API
+    - legal/privacy/ad-review enforcement
+    - billing, pricing, guarantee, credit, or revenue settlement policy
+    - DB migration or new persistent table
+    - content_manifest creation side effect from report reads
+    - publish or schedule activation
+    - external AI, camera, POS, inventory, weather, or ad network integration
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+    - .shirube/control-handoffs/CH-MISELL-197-content-freshness-score.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+    - apps/cloud/server.js
+    - apps/cloud/scripts/smoke-reporting.mjs
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - package.json
+    - package-lock.json
+    - apps/player/**
+    - apps/cloud/public/**
+  protected_surfaces:
+    - runtime
+    - api
+  stop_conditions:
+    - DB migration or new persistent table is needed
+    - advertiser/customer external report access is needed
+    - legal/privacy/ad-review decision is needed
+    - publish, schedule activation, billing, guarantee, or settlement decision is needed
+    - external AI, camera, POS, inventory, weather, or ad network integration is needed
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Add GET /api/admin/reports/content-freshness as an admin-only read-only endpoint.
+    - The report computes freshness from existing content_manifests timestamps, playlist composition, and playlogs without DB migration.
+    - Freshness thresholds are centralized in environment-backed constants.
+    - The response includes freshness_status, freshness_score, next_review_at, stale_reasons, last_played_at, play_signal_status, and playlist composition counts.
+    - Tenant/store/screen_group/release_channel/status filters are enforced server-side.
+    - Report reads do not create content_manifest, publish, schedule, billing, or external report side effects.
+    - Smoke coverage verifies fresh and stale content, no-play signal, scope isolation, and ad/sponsor/campaign_refresh playlist counts.
+    - Existing reporting summary/read-model/monthly snapshot behavior remains backward compatible.
+
+implementation_boundary:
+  summary: Internal admin read-only API and smoke coverage only.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, external AI, ad network, POS, camera, or production mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+  audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+  acceptance_tests:
+    - smoke:reporting validates content_freshness response.
+    - smoke:reporting validates tenant isolation for content freshness.
+    - smoke:reporting validates no content_manifest creation by reporting summary before freshness fixtures are created.
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
