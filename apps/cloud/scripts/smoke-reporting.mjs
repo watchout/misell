@@ -48,6 +48,7 @@ async function main() {
     assertAdMeasurement(live.data.report, records, "live summary");
     await assertFilterIsolation(criteria);
     await assertAdMeasurementFilters(criteria, records);
+    await assertAdvertiserReportPreview({ ...criteria, campaign_id: records.campaignId }, records);
 
     const rebuilt = await admin("POST", "/api/admin/reports/read-model/rebuild", criteria);
     if (rebuilt.data.rebuilt !== 30) throw new Error(`expected 30 rebuilt rows, got ${rebuilt.data.rebuilt}`);
@@ -142,6 +143,7 @@ async function main() {
       stable_snapshot_hash: true,
       ad_measurement: true,
       content_freshness: true,
+      advertiser_report_preview: true,
       no_content_manifest_creation: true,
       totals: reportSnapshot.summary.totals
     }, null, 2));
@@ -633,6 +635,76 @@ function contentManifestPayload(input) {
     },
     assets: []
   };
+}
+
+async function assertAdvertiserReportPreview(criteria, records) {
+  const preview = await admin("GET", `/api/admin/reports/advertiser-preview?${new URLSearchParams(criteria)}`);
+  const report = preview.data.report;
+  if (report.report_type !== "advertiser_campaign_preview" || report.surface !== "admin_internal_preview") {
+    throw new Error(`unexpected advertiser preview identity: ${JSON.stringify({ report_type: report.report_type, surface: report.surface })}`);
+  }
+  if (report.measurement_policy.proof_of_play !== "measured" || report.measurement_policy.roas_guarantee !== "not_reported" || report.measurement_policy.incremental_lift !== "not_reported") {
+    throw new Error(`advertiser preview measurement policy mismatch: ${JSON.stringify(report.measurement_policy)}`);
+  }
+  assertTotals(report.proof_of_play, {
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    play_duration_seconds: 30
+  }, "advertiser preview proof of play");
+  assertTotals(report.response, { qr_scan_count: 1 }, "advertiser preview response");
+  assertTotals(report.conversion, {
+    counter_orders_issued_count: 1,
+    counter_orders_redeemed_count: 1,
+    counter_order_total_amount: 500,
+    counter_order_redeemed_amount: 500
+  }, "advertiser preview conversion");
+  if (report.proof_of_play.measurement_label !== "measured" || report.response.measurement_label !== "measured" || report.conversion.measurement_label !== "measured") {
+    throw new Error("advertiser preview metric labels must be measured");
+  }
+  if (report.proof_of_play.completion_rate !== 1 || report.response.qr_scans_per_play_started !== 1 || report.conversion.order_to_redeem_rate !== 1) {
+    throw new Error(`advertiser preview rates mismatch: ${JSON.stringify({ proof: report.proof_of_play, response: report.response, conversion: report.conversion })}`);
+  }
+  const adGroup = report.breakdowns.ad_measurement.find((item) =>
+    item.campaign_id === records.campaignId &&
+    item.ad_slot_id === records.adSlotId &&
+    item.creative_id === records.creativeId &&
+    item.qr_link_id === records.qrLinkId
+  );
+  if (!adGroup || adGroup.measurement_label !== "measured" || adGroup.play_started_count !== 1 || adGroup.qr_scan_count !== 1) {
+    throw new Error(`advertiser preview ad breakdown mismatch: ${JSON.stringify(report.breakdowns.ad_measurement)}`);
+  }
+  if (!Array.isArray(report.decision_prompts) || !report.decision_prompts.some((item) => item.decision_key === "continue_with_refresh_hypothesis")) {
+    throw new Error(`advertiser preview decision prompts mismatch: ${JSON.stringify(report.decision_prompts)}`);
+  }
+  if (JSON.stringify(report).includes("incremental_roi") || JSON.stringify(report).includes("guaranteed_outcome")) {
+    throw new Error("advertiser preview must not expose incremental ROI or guaranteed outcome claims");
+  }
+
+  const filtered = await admin("GET", `/api/admin/reports/advertiser-preview?${new URLSearchParams({
+    ...criteria,
+    ad_slot_id: records.adSlotId,
+    creative_id: records.creativeId,
+    qr_link_id: records.qrLinkId
+  })}`);
+  if (filtered.data.report.breakdowns.ad_measurement.length !== 1 || filtered.data.report.proof_of_play.play_started_count !== 1) {
+    throw new Error(`advertiser preview filtered report mismatch: ${JSON.stringify(filtered.data.report)}`);
+  }
+  const wrongStore = await admin("GET", `/api/admin/reports/advertiser-preview?${new URLSearchParams({
+    ...criteria,
+    store_id: `STO-NO-MATCH-${runId}`
+  })}`);
+  if (wrongStore.data.report.proof_of_play.play_started_count !== 0 || wrongStore.data.report.response.qr_scan_count !== 0) {
+    throw new Error(`advertiser preview store isolation failed: ${JSON.stringify(wrongStore.data.report)}`);
+  }
+  await expectAdminError("GET", `/api/admin/reports/advertiser-preview?${new URLSearchParams({
+    ...criteria,
+    tenant_id: ""
+  })}`, null, 400, "tenant_id is required");
+  await expectAdminError("GET", `/api/admin/reports/advertiser-preview?${new URLSearchParams({
+    ...criteria,
+    campaign_id: ""
+  })}`, null, 400, "campaign_id is required");
 }
 
 function assertAdMeasurement(report, records, label) {

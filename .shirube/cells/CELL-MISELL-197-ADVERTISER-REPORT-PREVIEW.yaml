@@ -1,0 +1,79 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-ADVERTISER-REPORT-PREVIEW
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Advertiser report internal preview
+cell_type: runtime_foundation
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an internal admin-only, read-only advertiser campaign report preview that presents measured proof-of-play, QR response, and Misell order signals without creating an external advertiser surface.
+non_scope:
+  - advertiser or agency login, role, self-service, or external report access
+  - legal/privacy/ad-review runtime enforcement
+  - regulated category support
+  - billing, pricing, guarantee, credit, ROAS guarantee, or revenue settlement
+  - incremental ROI, holdout, baseline, or lift claim
+  - CSV/PDF export
+  - DB migration or new persistent table
+  - content_manifest creation, publish, schedule activation, or player change
+  - external AI, camera, POS, inventory, weather, CRM, tracking tag, or ad network integration
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-PREVIEW.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-advertiser-report-preview.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-PREVIEW.yaml
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/public/**
+protected_surfaces:
+  - runtime
+  - api
+stop_conditions:
+  - external advertiser/customer access is needed
+  - legal/privacy/ad-review decision or regulated category support is needed
+  - billing, guarantee, settlement, incremental ROI, holdout, baseline, or lift claim is needed
+  - DB migration or new persistent table is needed
+  - CSV/PDF export is needed
+  - publish, schedule activation, Player, or content delivery mutation is needed
+  - external AI, camera, POS, inventory, weather, CRM, tracking tag, or ad network integration is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add GET /api/admin/reports/advertiser-preview as an admin-only read-only endpoint.
+  - Require tenant_id and campaign_id so the report cannot be requested as a broad unscoped advertiser report.
+  - Build the preview from existing reporting summary/ad measurement/QR/order data without duplicating aggregation logic.
+  - Label displayed signals as measured and explicitly mark incremental ROI, ROAS guarantee, and attribution claims as not reported.
+  - Include deterministic decision prompts for continue/change creative/change CTA/check delivery without letting AI or prose make final decisions.
+  - Preserve tenant/store/campaign/ad_slot/creative/qr filters server-side.
+  - Do not create snapshots, content manifests, publish, schedule, billing, external reports, or external integrations.
+  - Smoke coverage verifies successful campaign preview, scope-required failures, filter isolation, measured labels, no incremental/guarantee claim, and no content_manifest creation side effect.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

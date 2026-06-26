@@ -1,0 +1,83 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-PREVIEW
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-advertiser-report-preview.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-PREVIEW.yaml
+  cell_id: CELL-MISELL-197-ADVERTISER-REPORT-PREVIEW
+  pr: watchout/misell#TBD
+items:
+  - item_id: ARP-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: ARP-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no DB migration, workflow, package, deploy, secret, player, public UI, publish, or scheduling files are changed.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: ARP-AUDIT-003
+    source: api_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify GET /api/admin/reports/advertiser-preview is admin-only and read-only.
+    expected_evidence:
+      - route_review
+  - item_id: ARP-AUDIT-004
+    source: scope
+    verification_method: semantic
+    required: true
+    prompt: Verify tenant_id and campaign_id are required and tenant/store/campaign/ad_slot/creative/qr filters are enforced server-side.
+    expected_evidence:
+      - code_review
+      - smoke_reporting_result
+  - item_id: ARP-AUDIT-005
+    source: aggregation_reuse
+    verification_method: semantic
+    required: true
+    prompt: Verify the preview reuses existing reporting summary/ad measurement/QR/order data and does not duplicate core aggregation logic.
+    expected_evidence:
+      - code_review
+  - item_id: ARP-AUDIT-006
+    source: measurement_labels
+    verification_method: semantic
+    required: true
+    prompt: Verify displayed signals are labelled measured and incremental ROI, ROAS guarantee, attribution, and lift claims are explicitly not reported.
+    expected_evidence:
+      - code_review
+      - smoke_reporting_result
+  - item_id: ARP-AUDIT-007
+    source: decision_prompts
+    verification_method: semantic
+    required: true
+    prompt: Verify decision prompts are deterministic guidance only and do not let AI/prose decide campaign outcome or guarantee performance.
+    expected_evidence:
+      - code_review
+  - item_id: ARP-AUDIT-008
+    source: non_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify no advertiser/customer external report access, legal enforcement, regulated category support, billing, export, external integration, content_manifest creation, publish, or schedule activation is added.
+    expected_evidence:
+      - code_review
+      - forbidden_path_scan
+  - item_id: ARP-AUDIT-009
+    source: smoke
+    verification_method: executable
+    required: true
+    prompt: Verify smoke coverage proves success path, scope-required failures, filtered view, measured labels, no incremental/guarantee claim, and no content_manifest creation side effect.
+    expected_evidence:
+      - smoke_reporting_result
+  - item_id: ARP-AUDIT-010
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
