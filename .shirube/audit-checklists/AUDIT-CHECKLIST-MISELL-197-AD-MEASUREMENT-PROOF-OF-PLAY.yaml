@@ -1,0 +1,84 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-AD-MEASUREMENT-PROOF-OF-PLAY
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-ad-measurement-proof-of-play.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-AD-MEASUREMENT-PROOF-OF-PLAY.yaml
+  cell_id: CELL-MISELL-197-AD-MEASUREMENT-PROOF-OF-PLAY
+  pr: watchout/misell#TBD
+items:
+  - item_id: AMP-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: AMP-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden workflow, package, deploy, secret, branch/ruleset, public UI, or admin player path is changed.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: AMP-AUDIT-003
+    source: playlist_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify playlist schema supports item_type, campaign_id, creative_id, ad_slot_id, qr_link_id, content_id, manifest_hash, and duration fields without a separate ad schedule API.
+    expected_evidence:
+      - schema_review
+  - item_id: AMP-AUDIT-004
+    source: player_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify Player normalizes ad measurement fields and includes them in playback log payloads.
+    expected_evidence:
+      - code_review
+  - item_id: AMP-AUDIT-005
+    source: cloud_ingest_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify Cloud playlog ingest stores ad measurement fields additively and remains backward compatible with legacy payloads.
+    expected_evidence:
+      - code_review
+      - migration_review
+  - item_id: AMP-AUDIT-006
+    source: reporting_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify reporting exposes ad_measurement breakdown by campaign, content, item_type, ad_slot, creative, qr_link, and manifest hash.
+    expected_evidence:
+      - code_review
+      - smoke_reporting_result
+  - item_id: AMP-AUDIT-007
+    source: measurement_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify QR scan counts are treated as measured response evidence only and do not claim incremental ROI, ROAS, sales lift, or guaranteed outcomes.
+    expected_evidence:
+      - code_review
+      - wording_review
+  - item_id: AMP-AUDIT-008
+    source: non_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify no advertiser self-service, billing, external ad network, legal enforcement, separate ad schedule API, content_manifest creation, or publish activation is added.
+    expected_evidence:
+      - code_review
+  - item_id: AMP-AUDIT-009
+    source: smoke
+    verification_method: executable
+    required: true
+    prompt: Verify smoke coverage proves ad fields are persisted, reported, filterable, and do not break existing reporting summary/read-model/monthly snapshot behavior.
+    expected_evidence:
+      - smoke_reporting_result
+      - test_ci_result
+  - item_id: AMP-AUDIT-010
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
