@@ -1332,6 +1332,15 @@ app.get("/api/admin/reports/content-freshness", requireAdminAuth, (req, res, nex
   }
 });
 
+app.get("/api/admin/reports/advertiser-preview", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeAdvertiserReportPreviewCriteria(req.query || {});
+    res.json({ ok: true, report: buildAdvertiserReportPreview(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/reports/daily-metrics", requireAdminAuth, (req, res, next) => {
   try {
     const criteria = normalizeReportCriteria(req.query || {});
@@ -8664,6 +8673,13 @@ function normalizeContentFreshnessCriteria(input = {}) {
   };
 }
 
+function normalizeAdvertiserReportPreviewCriteria(input = {}) {
+  const criteria = normalizeReportCriteria(input);
+  if (!criteria.tenant_id) throw requestError("tenant_id is required for advertiser preview", 400);
+  if (!criteria.campaign_id) throw requestError("campaign_id is required for advertiser preview", 400);
+  return criteria;
+}
+
 function buildReportSummary(criteria, options = {}) {
   const generatedAt = cleanString(options.generatedAt) || nowIso();
   const rows = (options.dailyRows || aggregateReportDailyStoreMetrics(criteria).rows).map(publicReportDailyStoreMetric);
@@ -8893,6 +8909,163 @@ function summarizeContentFreshnessRows(rows) {
     summary.campaign_refresh_items += row.playlist.campaign_refresh_count;
   }
   return summary;
+}
+
+function buildAdvertiserReportPreview(criteria) {
+  const summary = buildReportSummary(criteria);
+  const totals = summary.totals;
+  const proofOfPlay = {
+    measurement_label: "measured",
+    play_started_count: totals.play_started_count,
+    play_completed_count: totals.play_completed_count,
+    play_failed_count: totals.play_failed_count,
+    play_duration_seconds: totals.play_duration_seconds,
+    completion_rate: measuredRatio(totals.play_completed_count, totals.play_started_count)
+  };
+  const response = {
+    measurement_label: "measured",
+    qr_scan_count: totals.qr_scan_count,
+    qr_scans_per_play_started: measuredRatio(totals.qr_scan_count, totals.play_started_count),
+    denominator: "play_started_count"
+  };
+  const conversion = {
+    measurement_label: "measured",
+    counter_orders_issued_count: totals.counter_orders_issued_count,
+    counter_orders_redeemed_count: totals.counter_orders_redeemed_count,
+    counter_order_total_amount: totals.counter_order_total_amount,
+    counter_order_redeemed_amount: totals.counter_order_redeemed_amount,
+    order_issue_per_qr_scan: measuredRatio(totals.counter_orders_issued_count, totals.qr_scan_count),
+    order_to_redeem_rate: measuredRatio(totals.counter_orders_redeemed_count, totals.counter_orders_issued_count)
+  };
+  const report = {
+    report_type: "advertiser_campaign_preview",
+    surface: "admin_internal_preview",
+    generated_at: summary.generated_at,
+    source: summary.source,
+    period: summary.period,
+    filters: summary.filters,
+    measurement_policy: {
+      proof_of_play: "measured",
+      qr_response: "measured",
+      counter_order: "measured",
+      roi_attribution: "not_reported",
+      roas_guarantee: "not_reported",
+      incremental_lift: "not_reported",
+      claim_boundary: "Misell rail evidence only; no incremental ROI, sales, visit, ROAS, or performance guarantee claim."
+    },
+    proof_of_play: proofOfPlay,
+    response,
+    conversion,
+    breakdowns: {
+      ad_measurement: summary.ad_measurement.map(publicAdvertiserPreviewAdMeasurement),
+      qr_links: summary.qr_links.map(publicAdvertiserPreviewQrLink),
+      counter_orders: summary.counter_orders.map(publicAdvertiserPreviewCounterOrder)
+    },
+    daily: summary.daily,
+    decision_prompts: []
+  };
+  report.decision_prompts = buildAdvertiserPreviewDecisionPrompts(report);
+  return report;
+}
+
+function publicAdvertiserPreviewAdMeasurement(item) {
+  return {
+    measurement_label: "measured",
+    store_id: cleanId(item.store_id),
+    campaign_id: cleanId(item.campaign_id),
+    content_id: cleanId(item.content_id),
+    item_type: cleanString(item.item_type),
+    ad_slot_id: cleanId(item.ad_slot_id),
+    creative_id: cleanId(item.creative_id),
+    qr_link_id: cleanId(item.qr_link_id),
+    manifest_hash: cleanString(item.manifest_hash),
+    playlist_version: cleanString(item.playlist_version),
+    playlist_item_id: cleanString(item.playlist_item_id),
+    play_started_count: asInteger(item.play_started_count) || 0,
+    play_completed_count: asInteger(item.play_completed_count) || 0,
+    play_failed_count: asInteger(item.play_failed_count) || 0,
+    planned_duration_seconds: asInteger(item.planned_duration_seconds) || 0,
+    played_duration_seconds: asInteger(item.played_duration_seconds) || 0,
+    qr_scan_count: asInteger(item.qr_scan_count) || 0,
+    qr_response_rate: Number(item.qr_response_rate) || 0
+  };
+}
+
+function publicAdvertiserPreviewQrLink(item) {
+  return {
+    measurement_label: "measured",
+    store_id: cleanId(item.store_id),
+    qr_link_id: cleanId(item.qr_link_id),
+    label: cleanString(item.label),
+    destination_type: cleanString(item.destination_type),
+    campaign_id: cleanId(item.campaign_id),
+    content_id: cleanId(item.content_id),
+    offer_id: cleanId(item.offer_id),
+    offer_revision_id: cleanId(item.offer_revision_id),
+    qr_scan_count: asInteger(item.qr_scan_count) || 0
+  };
+}
+
+function publicAdvertiserPreviewCounterOrder(item) {
+  return {
+    measurement_label: "measured",
+    store_id: cleanId(item.store_id),
+    campaign_id: cleanId(item.campaign_id),
+    content_id: cleanId(item.content_id),
+    offer_id: cleanId(item.offer_id),
+    offer_revision_id: cleanId(item.offer_revision_id),
+    issued_count: asInteger(item.issued_count) || 0,
+    redeemed_count: asInteger(item.redeemed_count) || 0,
+    cancelled_count: asInteger(item.cancelled_count) || 0,
+    expired_count: asInteger(item.expired_count) || 0,
+    total_amount: asInteger(item.total_amount) || 0,
+    redeemed_amount: asInteger(item.redeemed_amount) || 0
+  };
+}
+
+function buildAdvertiserPreviewDecisionPrompts(report) {
+  const prompts = [];
+  const proof = report.proof_of_play;
+  const response = report.response;
+  const conversion = report.conversion;
+  if (proof.play_started_count <= 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("check_delivery", "high", "No measured play_started events for this campaign scope."));
+  }
+  if (proof.play_failed_count > 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("check_playback_failures", "high", "Measured playback failures exist for this campaign scope."));
+  }
+  if (proof.play_started_count > 0 && response.qr_scan_count <= 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("review_qr_cta", "medium", "Measured plays exist but QR response is zero."));
+  }
+  if (response.qr_scan_count > 0 && conversion.counter_orders_issued_count <= 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("review_offer_or_landing", "medium", "Measured QR response exists but no Misell counter order was issued."));
+  }
+  if (conversion.counter_orders_issued_count > 0 && conversion.counter_orders_redeemed_count <= 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("review_redemption_flow", "medium", "Measured orders were issued but none were redeemed."));
+  }
+  if (report.breakdowns.ad_measurement.length === 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("confirm_ad_measurement_fields", "medium", "No ad measurement breakdown rows were found for this campaign scope."));
+  }
+  if (prompts.length === 0) {
+    prompts.push(advertiserPreviewDecisionPrompt("continue_with_refresh_hypothesis", "low", "Measured play, response, and order signals exist; review creative, CTA, slot, and period as the next operator decision."));
+  }
+  return prompts;
+}
+
+function advertiserPreviewDecisionPrompt(decisionKey, priority, reason) {
+  return {
+    decision_key: decisionKey,
+    priority,
+    reason,
+    authority: "operator_decision_required",
+    claim_boundary: "guidance_only_no_performance_guarantee"
+  };
+}
+
+function measuredRatio(numerator, denominator) {
+  const value = Math.max(0, Number(numerator) || 0);
+  const base = Math.max(0, Number(denominator) || 0);
+  return base > 0 ? value / base : 0;
 }
 
 function rebuildReportDailyStoreMetrics(criteria) {
@@ -9186,15 +9359,17 @@ function addCounterOrderMetrics(criteria, rowsByKey, settingsCache, generatedAt)
 }
 
 function listReportCounterOrderRows(criteria, selectColumns) {
-  return db.prepare(`
-    SELECT ${selectColumns}
+  const allowedQrLinkIds = reportAdFilteredQrLinkIds(criteria);
+  const bridgeByQrLink = allowedQrLinkIds ? 1 : 0;
+  const rows = db.prepare(`
+    SELECT ${selectColumns}, qr_link_id AS report_filter_qr_link_id
     FROM counter_orders
     WHERE business_date >= ?
       AND business_date <= ?
       AND (? = '' OR tenant_id = ?)
       AND (? = '' OR store_id = ?)
-      AND (? = '' OR campaign_id = ?)
-      AND (? = '' OR content_id = ?)
+      AND (? = '' OR ? = 1 OR campaign_id = ?)
+      AND (? = '' OR ? = 1 OR content_id = ?)
   `).all(
     criteria.from,
     criteria.to,
@@ -9203,10 +9378,16 @@ function listReportCounterOrderRows(criteria, selectColumns) {
     criteria.store_id,
     criteria.store_id,
     criteria.campaign_id,
+    bridgeByQrLink,
     criteria.campaign_id,
     criteria.content_id,
+    bridgeByQrLink,
     criteria.content_id
   );
+  return rows.filter((row) => {
+    const qrLinkId = cleanId(row.report_filter_qr_link_id || row.qr_link_id);
+    return !allowedQrLinkIds || allowedQrLinkIds.has(qrLinkId);
+  });
 }
 
 function addErrorMetrics(criteria, rowsByKey, settingsCache, generatedAt) {
@@ -9545,7 +9726,7 @@ function reportQrMeasurementKey(row) {
 }
 
 function reportAdFilteredQrLinkIds(criteria) {
-  if (!criteria.item_type && !criteria.ad_slot_id && !criteria.creative_id && !criteria.manifest_hash) return null;
+  if (!criteria.campaign_id && !criteria.item_type && !criteria.ad_slot_id && !criteria.creative_id && !criteria.manifest_hash) return null;
   const rows = listReportPlaylogRows(criteria, "qr_link_id");
   return new Set(rows.map((row) => cleanId(row.qr_link_id)).filter(Boolean));
 }
