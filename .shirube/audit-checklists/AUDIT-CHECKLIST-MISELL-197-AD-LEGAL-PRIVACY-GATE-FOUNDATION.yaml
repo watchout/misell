@@ -1,0 +1,88 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-ad-legal-privacy-gate-foundation.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION.yaml
+  cell_id: CELL-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION
+  pr: watchout/misell#TBD
+items:
+  - item_id: ALPG-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+      - diff_scope_report
+  - item_id: ALPG-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no DB migration, server route, public UI, Player, workflow, deploy, secret, branch-protection, or ruleset files are changed.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: ALPG-AUDIT-003
+    source: policy_helper
+    verification_method: semantic
+    required: true
+    prompt: Verify policy vocabularies and classification logic are centralized in apps/cloud/lib/ad-legal-privacy-gate.js and not duplicated across routes or smoke code.
+    expected_evidence:
+      - code_review
+  - item_id: ALPG-AUDIT-004
+    source: policy_helper
+    verification_method: semantic
+    required: true
+    prompt: Verify the helper states it is not legal advice, does not give LLMs decision authority, and does not approve publish or external advertiser access.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: ALPG-AUDIT-005
+    source: policy_rules
+    verification_method: semantic
+    required: true
+    prompt: Verify general/no-PII/measured/Misell-only data may pass automatic precheck while missing or invalid classifications block.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: ALPG-AUDIT-006
+    source: policy_rules
+    verification_method: semantic
+    required: true
+    prompt: Verify regulated industries, comparative/performance/health/incremental claims, PII-consented, estimated, advertiser-supplied, or external POS data require human review.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: ALPG-AUDIT-007
+    source: policy_rules
+    verification_method: semantic
+    required: true
+    prompt: Verify guaranteed outcome/ROAS guarantee, incremental without holdout/baseline, camera/biometric, sensitive profiling, ad network, revoked/expired/deleted records, and LLM approvals block.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: ALPG-AUDIT-008
+    source: gate_record
+    verification_method: semantic
+    required: true
+    prompt: Verify gate record builder returns scope IDs, reviewer/sign-off fields, expiry/revocation/soft-delete fields, verdict, reasons, and does not echo raw creative/body text.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: ALPG-AUDIT-009
+    source: non_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify no DB/API/UI/Player/publish/content_manifest/billing/external AI/POS/camera/ad network behavior is added.
+    expected_evidence:
+      - changed_files
+      - code_review
+      - forbidden_path_scan
+  - item_id: ALPG-AUDIT-010
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed, smoke is included in test:ci, and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
