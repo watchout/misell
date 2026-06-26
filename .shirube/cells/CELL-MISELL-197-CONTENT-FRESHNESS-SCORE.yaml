@@ -1,0 +1,76 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-CONTENT-FRESHNESS-SCORE
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Content freshness score
+cell_type: runtime_foundation
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an internal admin read-only content freshness report so host operators can see stale content, review due content, last play signal, and playlist composition before advertiser-facing reporting is expanded.
+non_scope:
+  - advertiser or agency report surface
+  - customer self-service UI/API
+  - legal/privacy/ad-review enforcement
+  - billing, pricing, guarantee, credit, or revenue settlement policy
+  - DB migration or new persistent table
+  - content_manifest creation side effect from report reads
+  - publish or schedule activation
+  - external AI, camera, POS, inventory, weather, or ad network integration
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-content-freshness-score.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-CONTENT-FRESHNESS-SCORE.yaml
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/public/**
+protected_surfaces:
+  - runtime
+  - api
+stop_conditions:
+  - DB migration or new persistent table is needed
+  - advertiser/customer external report access is needed
+  - legal/privacy/ad-review decision is needed
+  - publish, schedule activation, billing, guarantee, or settlement decision is needed
+  - external AI, camera, POS, inventory, weather, or ad network integration is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add a read-only admin API for content freshness under reports.
+  - The report computes freshness from existing content_manifests updated/published timestamps, playlist composition, and playlogs without DB migration.
+  - Freshness thresholds are centralized in environment-backed constants, not scattered through logic.
+  - The response includes freshness_status, freshness_score, next_review_at, stale_reasons, last_played_at, play_signal_status, and playlist composition counts.
+  - Tenant/store/screen_group/release_channel/status filters are enforced server-side.
+  - Content manifest report reads do not create content_manifest, publish, schedule, billing, or external report side effects.
+  - Smoke coverage verifies fresh and stale content, no-play signal, scope isolation, and ad/sponsor/campaign_refresh playlist counts.
+  - Existing reporting summary/read-model/monthly snapshot behavior remains backward compatible.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

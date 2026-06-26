@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 
 const adminUser = process.env.ADMIN_USER || "admin";
 const adminPassword = process.env.ADMIN_PASSWORD || "change-me";
@@ -13,6 +14,7 @@ const runId = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
 let baseUrl = process.env.BASE_URL || "";
 let serverProcess = null;
 let tmpDir = "";
+let dbPath = "";
 
 main().catch(async (error) => {
   console.error(error);
@@ -127,6 +129,7 @@ async function main() {
     if ((manifests.data.content_manifests || []).length !== 0) {
       throw new Error(`reporting smoke should not create content manifests: ${JSON.stringify(manifests.data.content_manifests)}`);
     }
+    await assertContentFreshness(records);
 
     console.log(JSON.stringify({
       ok: true,
@@ -138,6 +141,7 @@ async function main() {
       idempotent_rebuild: true,
       stable_snapshot_hash: true,
       ad_measurement: true,
+      content_freshness: true,
       no_content_manifest_creation: true,
       totals: reportSnapshot.summary.totals
     }, null, 2));
@@ -301,6 +305,7 @@ async function seedReportData() {
   return {
     tenantId,
     storeId,
+    screenGroupId,
     campaignId,
     contentId,
     adSlotId,
@@ -325,6 +330,7 @@ async function availablePort() {
 async function startServerIfNeeded() {
   if (baseUrl) return;
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "misell-cloud-reporting."));
+  dbPath = path.join(tmpDir, "misell-cloud.sqlite");
   const port = await availablePort();
   baseUrl = `http://127.0.0.1:${port}`;
   const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -340,7 +346,7 @@ async function startServerIfNeeded() {
       ADMIN_PASSWORD: adminPassword,
       REQUIRE_ADMIN_AUTH: "1",
       MISELL_CLOUD_DATA_DIR: tmpDir,
-      DB_PATH: path.join(tmpDir, "misell-cloud.sqlite"),
+      DB_PATH: dbPath,
       DEVICE_TOKEN_PEPPER: "reporting-smoke-pepper"
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -495,6 +501,138 @@ async function assertAdMeasurementFilters(criteria, records) {
     ...criteria,
     ad_slot_id: records.adSlotId
   })}`, null, 400, "ad-granular filters");
+}
+
+async function assertContentFreshness(records) {
+  const freshContentId = records.contentId;
+  const staleContentId = `CONTENT-STALE-${runId}`;
+  await admin("POST", "/api/admin/content-manifests", contentManifestPayload({
+    content_id: freshContentId,
+    playlist_version: `pl-fresh-${runId}`,
+    release_channel: "stable",
+    status: "active",
+    title: "Fresh report campaign",
+    tenant_id: records.tenantId,
+    store_id: records.storeId,
+    screen_group_id: records.screenGroupId,
+    campaign_id: records.campaignId,
+    ad_slot_id: records.adSlotId,
+    creative_id: records.creativeId,
+    qr_link_id: records.qrLinkId,
+    content_layer: "campaign_refresh"
+  }));
+  await admin("POST", "/api/admin/content-manifests", contentManifestPayload({
+    content_id: staleContentId,
+    playlist_version: `pl-stale-${runId}`,
+    release_channel: "canary",
+    status: "active",
+    title: "Stale static campaign",
+    tenant_id: records.tenantId,
+    store_id: records.storeId,
+    screen_group_id: records.screenGroupId,
+    campaign_id: `CAMPAIGN-STALE-${runId}`,
+    ad_slot_id: `AD-SLOT-STALE-${runId}`,
+    creative_id: `CREATIVE-STALE-${runId}`,
+    qr_link_id: "",
+    content_layer: ""
+  }));
+  const fixtureDb = new Database(dbPath);
+  try {
+    fixtureDb.prepare("UPDATE content_manifests SET updated_at = ?, published_at = ? WHERE content_id = ?")
+      .run("2026-06-18T00:00:00.000Z", "2026-06-18T00:00:00.000Z", freshContentId);
+    fixtureDb.prepare("UPDATE content_manifests SET updated_at = ?, published_at = ? WHERE content_id = ?")
+      .run("2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z", staleContentId);
+    fixtureDb.prepare(`
+      INSERT INTO playlogs (
+        device_id, tenant_id, store_id, screen_group_id, received_at,
+        content_id, event_type, result, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      `DEV-ALIEN-${runId}`,
+      `TEN-ALIEN-${runId}`,
+      `STO-ALIEN-${runId}`,
+      records.screenGroupId,
+      "2026-06-19T00:00:00.000Z",
+      freshContentId,
+      "playback_started",
+      "started",
+      JSON.stringify({ smoke: "content-freshness-scope-guard" })
+    );
+  } finally {
+    fixtureDb.close();
+  }
+
+  const freshness = await admin("GET", `/api/admin/reports/content-freshness?${new URLSearchParams({
+    tenant_id: records.tenantId,
+    store_id: records.storeId,
+    screen_group_id: records.screenGroupId,
+    test_now: "2026-06-20T00:00:00.000Z"
+  })}`);
+  const report = freshness.data.report;
+  if (report.thresholds.review_due_days !== 14 || report.thresholds.stale_days !== 30) {
+    throw new Error(`unexpected freshness thresholds: ${JSON.stringify(report.thresholds)}`);
+  }
+  if (report.summary.total !== 2 || report.summary.fresh !== 1 || report.summary.stale !== 1 || report.summary.not_played !== 1) {
+    throw new Error(`unexpected freshness summary: ${JSON.stringify(report.summary)}`);
+  }
+  const fresh = report.content.find((item) => item.content_id === freshContentId);
+  const stale = report.content.find((item) => item.content_id === staleContentId);
+  if (!fresh || fresh.freshness_status !== "fresh" || fresh.play_signal_status !== "played" || fresh.playlog_count !== 2 || fresh.playlist.ad_item_count !== 1 || fresh.playlist.campaign_refresh_count !== 1) {
+    throw new Error(`fresh content row mismatch: ${JSON.stringify(fresh)}`);
+  }
+  if (!stale || stale.freshness_status !== "stale" || !stale.stale_reasons.includes("unchanged_over_stale_threshold") || !stale.stale_reasons.includes("no_play_signal")) {
+    throw new Error(`stale content row mismatch: ${JSON.stringify(stale)}`);
+  }
+  const wrongTenant = await admin("GET", `/api/admin/reports/content-freshness?${new URLSearchParams({
+    tenant_id: `TEN-NO-MATCH-${runId}`,
+    test_now: "2026-06-20T00:00:00.000Z"
+  })}`);
+  if (wrongTenant.data.report.summary.total !== 0) {
+    throw new Error(`content freshness tenant isolation failed: ${JSON.stringify(wrongTenant.data.report)}`);
+  }
+}
+
+function contentManifestPayload(input) {
+  return {
+    content_id: input.content_id,
+    playlist_version: input.playlist_version,
+    release_channel: input.release_channel,
+    status: input.status,
+    title: input.title,
+    tenant_id: input.tenant_id,
+    store_id: input.store_id,
+    screen_group_id: input.screen_group_id,
+    playlist: {
+      playlist_version: input.playlist_version,
+      items: [
+        {
+          id: `${input.content_id}-ad`,
+          item_type: "ad",
+          type: "ad",
+          content_id: input.content_id,
+          campaign_id: input.campaign_id,
+          ad_slot_id: input.ad_slot_id,
+          creative_id: input.creative_id,
+          qr_link_id: input.qr_link_id,
+          content_layer: input.content_layer,
+          layout: "wide",
+          duration: 15,
+          wide: "/demo/karaoke-product.mp4"
+        },
+        {
+          id: `${input.content_id}-always-on`,
+          item_type: "content",
+          type: "content",
+          content_id: input.content_id,
+          content_layer: "always_on",
+          layout: "wide",
+          duration: 10,
+          wide: "/demo/hotel-guide.mp4"
+        }
+      ]
+    },
+    assets: []
+  };
 }
 
 function assertAdMeasurement(report, records, label) {
