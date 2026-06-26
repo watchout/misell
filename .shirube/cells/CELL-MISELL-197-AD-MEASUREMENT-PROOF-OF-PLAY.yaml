@@ -1,0 +1,83 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-AD-MEASUREMENT-PROOF-OF-PLAY
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Ad measurement Proof of Play foundation
+cell_type: runtime_foundation
+risk_class: R3
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Carry ad measurement identifiers through playlist items, Player playback logs, Cloud playlogs, and reporting summary breakdowns so advertiser and host ROI surfaces have a measured Proof-of-Play base.
+non_scope:
+  - advertiser self-service
+  - billing, pricing, guarantee, credits, or revenue settlement
+  - incremental ROI, holdout tests, baseline tests, or performance guarantee claims
+  - legal or regulated-industry review enforcement
+  - external ad network integration
+  - camera, POS, inventory, weather, or external analytics integration
+  - separate ad schedule API
+  - content_manifest creation or publish activation
+  - customer project editing or advertiser dashboard UI
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-AD-MEASUREMENT-PROOF-OF-PLAY.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-ad-measurement-proof-of-play.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-MEASUREMENT-PROOF-OF-PLAY.yaml
+  - apps/player/data/playlist.schema.json
+  - apps/player/public/player.js
+  - apps/player/server.js
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - package.json
+  - package-lock.json
+  - apps/cloud/public/**
+  - apps/player/public/admin.js
+historical_runtime_surfaces:
+  - db
+  - migrations
+  - runtime
+  - api
+stop_conditions:
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - non-additive DB migration required
+  - auth/RBAC behavior change required
+  - advertiser self-service or billing decision required
+  - legal, guarantee, or regulated-industry policy decision required
+  - external AI, camera, POS, inventory, weather, or ad network integration needed
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Playlist schema accepts item_type plus ad_slot_id, creative_id, qr_link_id, content_id, and manifest_hash without requiring a separate ad schedule API.
+  - Player normalizes playlist ad measurement fields and includes them in playback log payloads.
+  - Cloud device playlog API stores item_type, ad_slot_id, creative_id, qr_link_id, manifest_hash, planned_duration_seconds, and played_duration_seconds in additive playlogs columns.
+  - Cloud reporting summary exposes an ad_measurement breakdown grouped by campaign, content, item_type, ad_slot, creative, qr_link, and manifest hash.
+  - QR scan counts can be joined to ad measurement groups by qr_link_id without claiming incremental ROI.
+  - Report criteria can filter live summary by ad measurement fields, while persisted daily read model rejects ad-granular filters to avoid key mismatch.
+  - Existing content summary, daily metrics, monthly snapshots, and legacy playlog payloads remain backward compatible.
+  - Smoke coverage proves selected ad playback fields are persisted, reported, filterable, and do not create content_manifest or publish side effects.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/player run check
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT
