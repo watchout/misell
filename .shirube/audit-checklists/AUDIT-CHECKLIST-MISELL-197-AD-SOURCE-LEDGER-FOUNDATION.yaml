@@ -1,0 +1,81 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-ad-source-ledger-foundation.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+  cell_id: CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION
+  pr: watchout/misell#TBD
+items:
+  - item_id: ASL-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+      - diff_scope_report
+  - item_id: ASL-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no app/runtime/DB/workflow/package/deploy/secret/branch-protection files are changed.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: ASL-AUDIT-003
+    source: docs/100
+    verification_method: semantic
+    required: true
+    prompt: Verify docs/100 defines source ledger purpose and forbids external use unless external_ok=true.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-004
+    source: docs/100
+    verification_method: semantic
+    required: true
+    prompt: Verify ledger fields include story_id, company, claim, number, source_url, source_type, source_status, checked_at, external_ok, allowed_usage, and notes.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-005
+    source: docs/100
+    verification_method: semantic
+    required: true
+    prompt: Verify every initial story candidate remains external_ok=false and allowed_usage=internal_only.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-006
+    source: docs/100
+    verification_method: semantic
+    required: true
+    prompt: Verify this PR does not mark any source verified or external_ok=true.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-007
+    source: docs/98
+    verification_method: semantic
+    required: true
+    prompt: Verify docs/98 G12-8 points to docs/100 as the source ledger.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-008
+    source: docs/62
+    verification_method: semantic
+    required: true
+    prompt: Verify media kit warns that real-company/numeric external stories require docs/100 external_ok=true before use.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-009
+    source: discoverability
+    verification_method: semantic
+    required: true
+    prompt: Verify README and docs/README make docs/100 discoverable.
+    expected_evidence:
+      - reviewer_rationale
+  - item_id: ASL-AUDIT-010
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

@@ -1,0 +1,139 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION
+parent_ssot: https://github.com/watchout/misell/issues/197
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/197#issuecomment-4796867327
+premise_confirmation_ref: https://github.com/watchout/misell/issues/197
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/197
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational PR evidence for this Cell
+    - diff scope and handoff consistency checks
+    - checklist-driven audit request evidence
+  shirube_does_not_own:
+    - external source verification
+    - legal advice or final legal/privacy/ad-review sign-off
+    - production deployment or runtime operations
+    - branch protection or required-check configuration
+
+cell:
+  CELL-ID: CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION
+  cell_ref: .shirube/cells/CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+  cell_type: docs_contract
+  risk_class: R1
+  goal: Add a discoverable source ledger that prevents unverified real-company and numeric signage/retail-media stories from being used in external Misell sales or media-kit materials.
+  non_scope:
+    - verifying external sources as external_ok
+    - adding new external claims to sales copy
+    - runtime enforcement
+    - DB migration
+    - Cloud API, Player, Admin UI, customer UI, or advertiser UI behavior change
+    - legal advice or legal/privacy/ad-review sign-off
+    - media kit redesign, pricing, guarantee, billing, or revenue settlement
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+    - .shirube/control-handoffs/CH-MISELL-197-ad-source-ledger-foundation.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+    - README.md
+    - docs/README.md
+    - docs/62_MISELL_MEDIA_KIT.md
+    - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+    - docs/100_AD_EVIDENCE_SOURCE_LEDGER.md
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/**
+    - package.json
+    - package-lock.json
+  protected_surfaces:
+    - none
+  stop_conditions:
+    - source verification must mark a story external_ok=true
+    - legal advice or external claim approval is needed
+    - runtime enforcement, DB, API, UI, Player, publish, billing, pricing, or guarantee work is needed
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Add docs/100 as a source ledger for real-company and numeric ad/signage/retail-media stories.
+    - Ledger includes stable story IDs, company, claim, number, source_url, source_type, source_status, checked_at, external_ok, allowed_usage, and notes.
+    - Every initial story candidate is external_ok=false and allowed_usage=internal_only until a separate verification PR.
+    - docs/98 G12-8 points to docs/100 as the source ledger.
+    - docs/62 warns that real-company/numeric external stories require docs/100 external_ok=true before use.
+    - README and docs index make docs/100 discoverable.
+    - No runtime, app, DB, workflow, package, deploy, or secret files are changed.
+
+implementation_boundary:
+  summary: Documentation and source-ledger guardrail only. No source verification or external claim approval.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, external AI, ad network, POS, camera, or production mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+  audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+  acceptance_tests:
+    - docs/100 exists and is referenced from docs/98, docs/62, README, and docs/README.
+    - docs/100 initial rows use external_ok=false and allowed_usage=internal_only.
+    - no app/runtime files are changed.
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
