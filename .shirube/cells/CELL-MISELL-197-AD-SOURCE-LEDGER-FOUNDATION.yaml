@@ -1,0 +1,82 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Ad evidence source ledger foundation
+cell_type: docs_contract
+risk_class: R1
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add a discoverable source ledger that prevents unverified real-company and numeric signage/retail-media stories from being used in external Misell sales or media-kit materials.
+non_scope:
+  - verifying external sources as external_ok
+  - adding new external claims to sales copy
+  - runtime enforcement
+  - DB migration
+  - Cloud API, Player, Admin UI, customer UI, or advertiser UI behavior change
+  - legal advice or legal/privacy/ad-review sign-off
+  - media kit redesign, pricing, guarantee, billing, or revenue settlement
+inputs:
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+  - https://github.com/watchout/misell/issues/197
+outputs:
+  - docs/100_AD_EVIDENCE_SOURCE_LEDGER.md
+  - docs/62_MISELL_MEDIA_KIT.md
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - docs/README.md
+  - README.md
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-ad-source-ledger-foundation.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-SOURCE-LEDGER-FOUNDATION.yaml
+  - README.md
+  - docs/README.md
+  - docs/62_MISELL_MEDIA_KIT.md
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - docs/100_AD_EVIDENCE_SOURCE_LEDGER.md
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - none
+stop_conditions:
+  - source verification must mark a story external_ok=true
+  - legal advice or external claim approval is needed
+  - runtime enforcement, DB, API, UI, Player, publish, billing, pricing, or guarantee work is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add docs/100 as a source ledger for real-company and numeric ad/signage/retail-media stories.
+  - Ledger includes stable story IDs, company, claim, number, source_url, source_type, source_status, checked_at, external_ok, allowed_usage, and notes.
+  - Every initial story candidate is external_ok=false and allowed_usage=internal_only until a separate verification PR.
+  - docs/98 G12-8 points to docs/100 as the source ledger.
+  - docs/62 warns that real-company/numeric external stories require docs/100 external_ok=true before use.
+  - README and docs index make docs/100 discoverable.
+  - No runtime, app, DB, workflow, package, deploy, or secret files are changed.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-AD-SOURCE-LEDGER-VERIFICATION
+  - CELL-MISELL-197-MEDIA-KIT-REFRESH
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
