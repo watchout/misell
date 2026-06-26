@@ -1,0 +1,92 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Ad legal/privacy/ad-review gate runtime foundation
+cell_type: runtime_foundation
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add a deterministic, reusable Cloud helper and smoke coverage for docs/99 legal/privacy/ad-review gate classification before external advertiser surfaces are built.
+non_scope:
+  - legal advice or final legal/privacy/ad-review sign-off
+  - live runtime enforcement on publish, reporting, content manifests, or advertiser onboarding
+  - DB migration or persistent gate records
+  - Cloud API route, Player behavior, Admin UI, customer UI, or advertiser UI behavior change
+  - advertiser self-service or external advertiser/customer report access
+  - billing, pricing, guarantee, credit, revenue settlement, ROAS guarantee, or incremental ROI activation
+  - camera, POS, inventory, weather, external AI, ad network, CRM, or tracking tag integration
+  - content_manifest creation, publish path activation, or schedule activation
+inputs:
+  - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+  - https://github.com/watchout/misell/issues/197
+outputs:
+  - apps/cloud/lib/ad-legal-privacy-gate.js
+  - apps/cloud/scripts/smoke-ad-legal-privacy-gate.mjs
+  - package.json
+  - apps/cloud/package.json
+  - .shirube/control-handoffs/CH-MISELL-197-ad-legal-privacy-gate-foundation.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION.yaml
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-ad-legal-privacy-gate-foundation.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-LEGAL-PRIVACY-GATE-FOUNDATION.yaml
+  - apps/cloud/lib/ad-legal-privacy-gate.js
+  - apps/cloud/scripts/smoke-ad-legal-privacy-gate.mjs
+  - apps/cloud/package.json
+  - package.json
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/player/**
+  - apps/cloud/server.js
+  - apps/cloud/public/**
+  - apps/cloud/migrations/**
+protected_surfaces:
+  - runtime
+  - policy
+stop_conditions:
+  - legal advice, final sign-off, or regulated-industry approval is needed
+  - helper must be connected to publish, content_manifest, advertiser report, onboarding, or external surface
+  - DB migration or persistent gate records are needed
+  - Cloud API route, Player, Admin UI, customer UI, or advertiser UI behavior change is needed
+  - billing, guarantee, settlement, incremental ROI, holdout, baseline, or lift claim activation is needed
+  - camera, PII, sensitive profiling, POS, inventory, weather, ad network, CRM, tracking tag, or external AI integration is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add a central deterministic Cloud helper for docs/99 policy vocabularies and gate evaluation.
+  - Keep policy values in one helper module; do not duplicate classification logic across server routes or smoke scripts.
+  - The helper does not provide legal advice, does not make LLMs decision authorities, and does not approve publish or external advertiser access.
+  - General, no-PII, measured, Misell-only data can pass automatic precheck.
+  - Missing/invalid classifications block.
+  - Regulated industries, comparative/performance/health/incremental claims, PII-consented, estimated, advertiser-supplied, or external POS data require human review.
+  - Guaranteed outcome/ROAS guarantee, incremental without holdout/baseline, camera/biometric, sensitive profiling, ad network, revoked/expired/deleted records, and LLM approvals block.
+  - Gate record builder returns scope IDs, reviewer/sign-off fields, expiry/revocation/soft-delete fields, verdict, reasons, and no raw creative/body text.
+  - Smoke coverage verifies allow/human-review/block paths, LLM non-authority, soft-delete record shape, and no raw creative text echo.
+  - No DB, API route, UI, Player, publish, content_manifest, billing, external AI, POS, camera, ad network, or workflow behavior is added.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:ad-legal-privacy-gate
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT
