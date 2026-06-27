@@ -132,6 +132,7 @@ async function main() {
     }
     await assertContentFreshness(records);
     await assertAdInventoryReadModel(records);
+    await assertHostRoiPreview(records);
 
     console.log(JSON.stringify({
       ok: true,
@@ -146,6 +147,7 @@ async function main() {
       content_freshness: true,
       advertiser_report_preview: true,
       ad_inventory_read_model: true,
+      host_roi_preview: true,
       no_content_manifest_creation: true,
       totals: reportSnapshot.summary.totals
     }, null, 2));
@@ -791,6 +793,90 @@ async function assertAdInventoryReadModel(records) {
   }
   if (JSON.stringify(report).includes("incremental_roi") || JSON.stringify(report).includes("guaranteed_outcome")) {
     throw new Error("ad inventory must not expose incremental ROI or guaranteed outcome claims");
+  }
+}
+
+async function assertHostRoiPreview(records) {
+  const before = await admin("GET", "/api/admin/content-manifests");
+  const beforeCount = (before.data.content_manifests || []).length;
+  const criteria = {
+    month: "2026-06",
+    tenant_id: records.tenantId,
+    store_id: records.storeId,
+    screen_group_id: records.screenGroupId
+  };
+  const preview = await admin("GET", `/api/admin/reports/host-roi-preview?${new URLSearchParams(criteria)}`);
+  const report = preview.data.report;
+  if (report.report_type !== "host_roi_preview" || report.surface !== "admin_internal_read_model") {
+    throw new Error(`unexpected host ROI preview identity: ${JSON.stringify({ report_type: report.report_type, surface: report.surface })}`);
+  }
+  if (report.measurement_policy.proof_of_play !== "measured" || report.measurement_policy.counter_order_value !== "measured" || report.measurement_policy.ad_inventory !== "manifest_derived") {
+    throw new Error(`host ROI measurement policy label mismatch: ${JSON.stringify(report.measurement_policy)}`);
+  }
+  if (report.measurement_policy.ad_revenue !== "not_reported" || report.measurement_policy.payback_period !== "not_reported" || report.measurement_policy.roas !== "not_reported" || report.measurement_policy.performance_guarantee !== "not_reported") {
+    throw new Error(`host ROI forbidden financial policy mismatch: ${JSON.stringify(report.measurement_policy)}`);
+  }
+  assertTotals(report.proof_of_play, {
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    play_duration_seconds: 30
+  }, "host ROI proof of play");
+  assertTotals(report.host_response, { qr_scan_count: 1 }, "host ROI response");
+  assertTotals(report.host_conversion, {
+    counter_orders_issued_count: 1,
+    counter_orders_redeemed_count: 1,
+    counter_order_total_amount: 500,
+    counter_order_redeemed_amount: 500
+  }, "host ROI conversion");
+  assertTotals(report.ad_inventory, {
+    manifest_count: 2,
+    sellable_slot_count: 2,
+    filled_slot_count: 2,
+    empty_slot_count: 0,
+    active_campaign_count: 2
+  }, "host ROI ad inventory");
+  assertTotals(report.ad_inventory.measured, {
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    played_duration_seconds: 30,
+    qr_scan_count: 1
+  }, "host ROI inventory measured");
+  assertTotals(report.operations, {
+    content_count: 2,
+    stale_count: 1,
+    not_played_count: 1,
+    ad_or_sponsor_items: 2
+  }, "host ROI operations");
+  if (report.unavailable_financials.measurement_label !== "not_reported" || report.unavailable_financials.slot_unit_price !== "not_reported") {
+    throw new Error(`host ROI unavailable financials mismatch: ${JSON.stringify(report.unavailable_financials)}`);
+  }
+  if (!Array.isArray(report.decision_prompts) || !report.decision_prompts.some((item) => item.decision_key === "refresh_content")) {
+    throw new Error(`host ROI decision prompts mismatch: ${JSON.stringify(report.decision_prompts)}`);
+  }
+  const wrongStore = await admin("GET", `/api/admin/reports/host-roi-preview?${new URLSearchParams({
+    ...criteria,
+    store_id: `STO-NO-MATCH-${runId}`
+  })}`);
+  if (wrongStore.data.report.proof_of_play.play_started_count !== 0 || wrongStore.data.report.ad_inventory.sellable_slot_count !== 0 || wrongStore.data.report.operations.content_count !== 0) {
+    throw new Error(`host ROI store isolation failed: ${JSON.stringify(wrongStore.data.report)}`);
+  }
+  await expectAdminError("GET", `/api/admin/reports/host-roi-preview?${new URLSearchParams({
+    ...criteria,
+    tenant_id: ""
+  })}`, null, 400, "tenant_id is required");
+  await expectAdminError("GET", `/api/admin/reports/host-roi-preview?${new URLSearchParams({
+    ...criteria,
+    store_id: ""
+  })}`, null, 400, "store_id is required");
+  const after = await admin("GET", "/api/admin/content-manifests");
+  const afterCount = (after.data.content_manifests || []).length;
+  if (afterCount !== beforeCount) {
+    throw new Error(`host ROI preview read created content manifests: before=${beforeCount} after=${afterCount}`);
+  }
+  if (JSON.stringify(report).includes("incremental_roi") || JSON.stringify(report).includes("guaranteed_outcome")) {
+    throw new Error("host ROI preview must not expose incremental ROI or guaranteed outcome claims");
   }
 }
 

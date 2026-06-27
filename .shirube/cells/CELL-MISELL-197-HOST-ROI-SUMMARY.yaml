@@ -1,0 +1,84 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-HOST-ROI-SUMMARY
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Host ROI internal summary
+cell_type: runtime_foundation
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an internal admin-only, read-only host ROI preview that separates measured Misell rail signals, manifest-derived ad inventory, content freshness, and not-yet-reported financial ROI fields.
+non_scope:
+  - advertiser or agency login, self-service, or external report access
+  - customer self-service report access
+  - billing, pricing, ad revenue booking, settlement, guarantee, credit, invoice, or revenue recognition logic
+  - slot unit price configuration
+  - payback calculation from contract/device/install cost
+  - labor savings calculation
+  - incremental ROI, holdout, baseline, lift, ROAS, or performance guarantee claim
+  - legal/privacy/ad-review runtime enforcement or regulated category approval
+  - DB migration, new table, or persistent read model storage
+  - content_manifest creation, publish, schedule activation, player delivery mutation, or playlist mutation
+  - external AI, camera, POS, inventory, weather, CRM, tracking tag, or ad network integration
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-HOST-ROI-SUMMARY.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-host-roi-summary.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-HOST-ROI-SUMMARY.yaml
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/public/**
+protected_surfaces:
+  - runtime
+  - api
+stop_conditions:
+  - DB migration or new persistent table is needed
+  - external advertiser/customer access is needed
+  - billing, pricing, guarantee, settlement, invoice, revenue recognition, slot unit price, payback, or labor-savings decision is needed
+  - incremental ROI, holdout, baseline, lift, ROAS, or performance guarantee claim is needed
+  - legal/privacy/ad-review decision or regulated category support is needed
+  - publish, schedule activation, Player, or content delivery mutation is needed
+  - external AI, camera, POS, inventory, weather, CRM, tracking tag, or ad network integration is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add GET /api/admin/reports/host-roi-preview as an admin-only read-only endpoint.
+  - Require tenant_id and store_id so the host preview cannot be requested as a broad unscoped report.
+  - Build the preview by composing existing reporting summary, ad inventory, and content freshness helpers without DB migration.
+  - Label proof-of-play, QR response, and Misell counter-order value as measured.
+  - Label ad inventory and fill rate as manifest_derived.
+  - Mark ad revenue, slot unit price, payback period, labor savings, incremental ROI, ROAS, lift, and guarantees as not_reported.
+  - Include deterministic decision prompts for delivery, stale content, empty slots, QR response, and redemption flow without AI final authority.
+  - Preserve tenant/store/screen_group/release_channel/status/campaign/content/ad_slot/creative/qr filters server-side where applicable.
+  - Do not create content manifests, snapshots, publish, schedule, billing records, external reports, or external integrations.
+  - Smoke coverage verifies success path, required scope failures, wrong-store isolation, labels, forbidden claim absence, decision prompts, and no content_manifest creation side effect.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-MEDIA-KIT-REFRESH
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

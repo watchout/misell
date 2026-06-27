@@ -1356,6 +1356,15 @@ app.get("/api/admin/reports/ad-inventory", requireAdminAuth, (req, res, next) =>
   }
 });
 
+app.get("/api/admin/reports/host-roi-preview", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeHostRoiPreviewCriteria(req.query || {});
+    res.json({ ok: true, report: buildHostRoiPreview(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/reports/daily-metrics", requireAdminAuth, (req, res, next) => {
   try {
     const criteria = normalizeReportCriteria(req.query || {});
@@ -8715,6 +8724,12 @@ function normalizeAdInventoryReportCriteria(input = {}) {
   };
 }
 
+function normalizeHostRoiPreviewCriteria(input = {}) {
+  const criteria = normalizeAdInventoryReportCriteria(input);
+  if (!criteria.store_id) throw requestError("store_id is required for host ROI preview", 400);
+  return criteria;
+}
+
 function buildReportSummary(criteria, options = {}) {
   const generatedAt = cleanString(options.generatedAt) || nowIso();
   const rows = (options.dailyRows || aggregateReportDailyStoreMetrics(criteria).rows).map(publicReportDailyStoreMetric);
@@ -9393,6 +9408,203 @@ function summarizeAdInventory(entries, slots) {
     creative_count: creatives.size,
     qr_link_count: qrLinks.size,
     measured
+  };
+}
+
+function buildHostRoiPreview(criteria) {
+  const summary = buildReportSummary(criteria);
+  const inventory = buildAdInventoryReport(criteria);
+  const freshness = buildContentFreshnessReport({
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    screen_group_id: criteria.screen_group_id,
+    release_channel: criteria.release_channel,
+    status: criteria.status,
+    now: nowIso(),
+    review_due_days: CONTENT_FRESHNESS_REVIEW_DUE_DAYS,
+    stale_days: CONTENT_FRESHNESS_STALE_DAYS,
+    limit: criteria.limit
+  });
+  const proofOfPlay = hostRoiProofOfPlay(summary.totals);
+  const response = hostRoiResponse(summary.totals);
+  const conversion = hostRoiConversion(summary.totals);
+  const operations = hostRoiOperations(freshness);
+  const report = {
+    report_type: "host_roi_preview",
+    surface: "admin_internal_read_model",
+    generated_at: summary.generated_at,
+    source: {
+      reporting_summary: summary.source,
+      ad_inventory: inventory.source.inventory,
+      content_freshness: "content_manifests_and_playlogs"
+    },
+    period: summary.period,
+    filters: {
+      ...summary.filters,
+      screen_group_id: criteria.screen_group_id,
+      release_channel: criteria.release_channel,
+      status: criteria.status,
+      limit: criteria.limit
+    },
+    measurement_policy: {
+      proof_of_play: "measured",
+      qr_response: "measured",
+      counter_order_value: "measured",
+      ad_inventory: "manifest_derived",
+      content_freshness: "manifest_derived",
+      ad_revenue: "not_reported",
+      slot_unit_price: "not_reported",
+      payback_period: "not_reported",
+      labor_savings: "not_reported",
+      roi_attribution: "not_reported",
+      incremental_lift: "not_reported",
+      roas: "not_reported",
+      performance_guarantee: "not_reported",
+      claim_boundary: "Host ROI preview separates measured Misell rail signals from manifest-derived inventory. It does not report ad revenue, payback, labor savings, lift, ROAS, or guarantees."
+    },
+    proof_of_play: proofOfPlay,
+    host_response: response,
+    host_conversion: conversion,
+    ad_inventory: hostRoiInventory(inventory.summary),
+    operations,
+    unavailable_financials: hostRoiUnavailableFinancials(),
+    decision_prompts: []
+  };
+  report.decision_prompts = buildHostRoiDecisionPrompts(report);
+  return report;
+}
+
+function hostRoiProofOfPlay(totals) {
+  return {
+    measurement_label: "measured",
+    play_started_count: asInteger(totals.play_started_count) || 0,
+    play_completed_count: asInteger(totals.play_completed_count) || 0,
+    play_failed_count: asInteger(totals.play_failed_count) || 0,
+    play_duration_seconds: asInteger(totals.play_duration_seconds) || 0,
+    completion_rate: measuredRatio(totals.play_completed_count, totals.play_started_count)
+  };
+}
+
+function hostRoiResponse(totals) {
+  return {
+    measurement_label: "measured",
+    qr_scan_count: asInteger(totals.qr_scan_count) || 0,
+    qr_scans_per_play_started: measuredRatio(totals.qr_scan_count, totals.play_started_count),
+    denominator: "play_started_count"
+  };
+}
+
+function hostRoiConversion(totals) {
+  return {
+    measurement_label: "measured",
+    counter_orders_issued_count: asInteger(totals.counter_orders_issued_count) || 0,
+    counter_orders_redeemed_count: asInteger(totals.counter_orders_redeemed_count) || 0,
+    counter_orders_cancelled_count: asInteger(totals.counter_orders_cancelled_count) || 0,
+    counter_orders_expired_count: asInteger(totals.counter_orders_expired_count) || 0,
+    counter_order_total_amount: asInteger(totals.counter_order_total_amount) || 0,
+    counter_order_redeemed_amount: asInteger(totals.counter_order_redeemed_amount) || 0,
+    counter_order_value_label: "measured_misell_rail",
+    order_issue_per_qr_scan: measuredRatio(totals.counter_orders_issued_count, totals.qr_scan_count),
+    order_to_redeem_rate: measuredRatio(totals.counter_orders_redeemed_count, totals.counter_orders_issued_count)
+  };
+}
+
+function hostRoiInventory(summary) {
+  return {
+    inventory_label: "manifest_derived",
+    measurement_label: "measured",
+    manifest_count: asInteger(summary.manifest_count) || 0,
+    sellable_slot_count: asInteger(summary.sellable_slot_count) || 0,
+    filled_slot_count: asInteger(summary.filled_slot_count) || 0,
+    empty_slot_count: asInteger(summary.empty_slot_count) || 0,
+    slot_position_count: asInteger(summary.slot_position_count) || 0,
+    filled_position_count: asInteger(summary.filled_position_count) || 0,
+    empty_position_count: asInteger(summary.empty_position_count) || 0,
+    fill_rate: Number(summary.fill_rate) || 0,
+    position_fill_rate: Number(summary.position_fill_rate) || 0,
+    planned_duration_seconds: asInteger(summary.planned_duration_seconds) || 0,
+    active_campaign_count: asInteger(summary.active_campaign_count) || 0,
+    creative_count: asInteger(summary.creative_count) || 0,
+    qr_link_count: asInteger(summary.qr_link_count) || 0,
+    measured: {
+      measurement_label: "measured",
+      play_started_count: asInteger(summary.measured?.play_started_count) || 0,
+      play_completed_count: asInteger(summary.measured?.play_completed_count) || 0,
+      play_failed_count: asInteger(summary.measured?.play_failed_count) || 0,
+      played_duration_seconds: asInteger(summary.measured?.played_duration_seconds) || 0,
+      qr_scan_count: asInteger(summary.measured?.qr_scan_count) || 0,
+      qr_response_rate: Number(summary.measured?.qr_response_rate) || 0
+    }
+  };
+}
+
+function hostRoiOperations(freshness) {
+  return {
+    freshness_label: "manifest_derived",
+    play_signal_label: "measured",
+    thresholds: freshness.thresholds,
+    content_count: asInteger(freshness.summary?.total) || 0,
+    fresh_count: asInteger(freshness.summary?.fresh) || 0,
+    review_due_count: asInteger(freshness.summary?.review_due) || 0,
+    stale_count: asInteger(freshness.summary?.stale) || 0,
+    inactive_count: asInteger(freshness.summary?.inactive) || 0,
+    not_played_count: asInteger(freshness.summary?.not_played) || 0,
+    ad_or_sponsor_items: asInteger(freshness.summary?.ad_or_sponsor_items) || 0,
+    campaign_refresh_items: asInteger(freshness.summary?.campaign_refresh_items) || 0
+  };
+}
+
+function hostRoiUnavailableFinancials() {
+  return {
+    measurement_label: "not_reported",
+    ad_revenue: "not_reported",
+    slot_unit_price: "not_reported",
+    booked_period_revenue: "not_reported",
+    payback_period: "not_reported",
+    labor_savings: "not_reported",
+    roi_attribution: "not_reported",
+    incremental_lift: "not_reported",
+    roas: "not_reported",
+    performance_guarantee: "not_reported",
+    reason: "Billing, slot pricing, contract cost, labor baseline, and holdout/baseline data are outside this cell."
+  };
+}
+
+function buildHostRoiDecisionPrompts(report) {
+  const prompts = [];
+  if (report.proof_of_play.play_started_count <= 0) {
+    prompts.push(hostRoiDecisionPrompt("check_delivery", "high", "No measured play_started events were found for this host scope."));
+  }
+  if (report.proof_of_play.play_failed_count > 0) {
+    prompts.push(hostRoiDecisionPrompt("check_playback_failures", "high", "Measured playback failures exist for this host scope."));
+  }
+  if (report.ad_inventory.sellable_slot_count <= 0) {
+    prompts.push(hostRoiDecisionPrompt("define_sellable_ad_slots", "medium", "No manifest-derived sellable ad slots were found."));
+  } else if (report.ad_inventory.empty_slot_count > 0) {
+    prompts.push(hostRoiDecisionPrompt("fill_empty_ad_slots", "medium", "Manifest-derived ad inventory includes empty slots."));
+  }
+  if (report.operations.stale_count > 0 || report.operations.review_due_count > 0) {
+    prompts.push(hostRoiDecisionPrompt("refresh_content", "medium", "Content freshness shows stale or review-due content."));
+  }
+  if (report.proof_of_play.play_started_count > 0 && report.host_response.qr_scan_count <= 0) {
+    prompts.push(hostRoiDecisionPrompt("review_qr_cta", "medium", "Measured plays exist but QR response is zero."));
+  }
+  if (report.host_conversion.counter_orders_issued_count > 0 && report.host_conversion.counter_orders_redeemed_count <= 0) {
+    prompts.push(hostRoiDecisionPrompt("review_redemption_flow", "medium", "Measured orders were issued but none were redeemed."));
+  }
+  if (prompts.length === 0) {
+    prompts.push(hostRoiDecisionPrompt("continue_monthly_optimization", "low", "Measured delivery, response, conversion, inventory, and freshness signals exist; continue monthly operator review."));
+  }
+  return prompts;
+}
+
+function hostRoiDecisionPrompt(decisionKey, priority, reason) {
+  return {
+    decision_key: decisionKey,
+    priority,
+    reason,
+    authority: "operator_decision_required",
+    claim_boundary: "guidance_only_no_performance_guarantee"
   };
 }
 
