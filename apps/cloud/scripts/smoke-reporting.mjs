@@ -131,6 +131,7 @@ async function main() {
       throw new Error(`reporting smoke should not create content manifests: ${JSON.stringify(manifests.data.content_manifests)}`);
     }
     await assertContentFreshness(records);
+    await assertAdInventoryReadModel(records);
 
     console.log(JSON.stringify({
       ok: true,
@@ -144,6 +145,7 @@ async function main() {
       ad_measurement: true,
       content_freshness: true,
       advertiser_report_preview: true,
+      ad_inventory_read_model: true,
       no_content_manifest_creation: true,
       totals: reportSnapshot.summary.totals
     }, null, 2));
@@ -705,6 +707,91 @@ async function assertAdvertiserReportPreview(criteria, records) {
     ...criteria,
     campaign_id: ""
   })}`, null, 400, "campaign_id is required");
+}
+
+async function assertAdInventoryReadModel(records) {
+  const before = await admin("GET", "/api/admin/content-manifests");
+  const beforeCount = (before.data.content_manifests || []).length;
+  const criteria = {
+    month: "2026-06",
+    tenant_id: records.tenantId,
+    store_id: records.storeId,
+    screen_group_id: records.screenGroupId
+  };
+  const inventory = await admin("GET", `/api/admin/reports/ad-inventory?${new URLSearchParams(criteria)}`);
+  const report = inventory.data.report;
+  if (report.report_type !== "ad_inventory" || report.surface !== "admin_internal_read_model") {
+    throw new Error(`unexpected ad inventory identity: ${JSON.stringify({ report_type: report.report_type, surface: report.surface })}`);
+  }
+  if (report.measurement_policy.inventory !== "manifest_derived" || report.measurement_policy.proof_of_play !== "measured" || report.measurement_policy.ad_revenue !== "not_reported" || report.measurement_policy.roas_guarantee !== "not_reported") {
+    throw new Error(`ad inventory measurement policy mismatch: ${JSON.stringify(report.measurement_policy)}`);
+  }
+  assertTotals(report.summary, {
+    manifest_count: 2,
+    slot_position_count: 2,
+    sellable_slot_count: 2,
+    filled_slot_count: 2,
+    empty_slot_count: 0,
+    unclassified_position_count: 0,
+    active_campaign_count: 2,
+    creative_count: 2,
+    qr_link_count: 1
+  }, "ad inventory summary");
+  if (report.summary.fill_rate !== 1 || report.summary.position_fill_rate !== 1) {
+    throw new Error(`ad inventory fill rate mismatch: ${JSON.stringify(report.summary)}`);
+  }
+  assertTotals(report.summary.measured, {
+    play_event_count: 2,
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    played_duration_seconds: 30,
+    qr_scan_count: 1
+  }, "ad inventory measured summary");
+  const slot = report.slots.find((item) => item.ad_slot_id === records.adSlotId);
+  if (!slot || slot.inventory_label !== "manifest_derived" || slot.measurement_label !== "measured" || slot.slot_position_count !== 1 || slot.fill_rate !== 1) {
+    throw new Error(`ad inventory slot mismatch: ${JSON.stringify(report.slots)}`);
+  }
+  assertTotals(slot.measured, {
+    play_event_count: 2,
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    played_duration_seconds: 30,
+    qr_scan_count: 1
+  }, "ad inventory slot measured");
+  if (!slot.campaign_ids.includes(records.campaignId) || !slot.creative_ids.includes(records.creativeId) || !slot.qr_link_ids.includes(records.qrLinkId)) {
+    throw new Error(`ad inventory slot ids mismatch: ${JSON.stringify(slot)}`);
+  }
+
+  const filtered = await admin("GET", `/api/admin/reports/ad-inventory?${new URLSearchParams({
+    ...criteria,
+    ad_slot_id: records.adSlotId,
+    creative_id: records.creativeId,
+    qr_link_id: records.qrLinkId
+  })}`);
+  if (filtered.data.report.summary.sellable_slot_count !== 1 || filtered.data.report.summary.measured.play_started_count !== 1) {
+    throw new Error(`ad inventory filtered report mismatch: ${JSON.stringify(filtered.data.report)}`);
+  }
+  const wrongTenant = await admin("GET", `/api/admin/reports/ad-inventory?${new URLSearchParams({
+    ...criteria,
+    tenant_id: `TEN-NO-MATCH-${runId}`
+  })}`);
+  if (wrongTenant.data.report.summary.sellable_slot_count !== 0 || wrongTenant.data.report.summary.measured.play_started_count !== 0) {
+    throw new Error(`ad inventory tenant isolation failed: ${JSON.stringify(wrongTenant.data.report)}`);
+  }
+  await expectAdminError("GET", `/api/admin/reports/ad-inventory?${new URLSearchParams({
+    ...criteria,
+    tenant_id: ""
+  })}`, null, 400, "tenant_id is required");
+  const after = await admin("GET", "/api/admin/content-manifests");
+  const afterCount = (after.data.content_manifests || []).length;
+  if (afterCount !== beforeCount) {
+    throw new Error(`ad inventory read created content manifests: before=${beforeCount} after=${afterCount}`);
+  }
+  if (JSON.stringify(report).includes("incremental_roi") || JSON.stringify(report).includes("guaranteed_outcome")) {
+    throw new Error("ad inventory must not expose incremental ROI or guaranteed outcome claims");
+  }
 }
 
 function assertAdMeasurement(report, records, label) {
