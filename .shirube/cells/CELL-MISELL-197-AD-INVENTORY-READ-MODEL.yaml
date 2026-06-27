@@ -1,0 +1,79 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-AD-INVENTORY-READ-MODEL
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Ad inventory read model
+cell_type: runtime_foundation
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an internal admin-only, read-only ad inventory report that derives sellable ad slot availability and fill rate from active content manifests, then overlays measured play and QR response evidence.
+non_scope:
+  - advertiser or agency login, self-service, or external report access
+  - billing, pricing, ad revenue booking, settlement, guarantee, credit, or invoice logic
+  - incremental ROI, holdout, baseline, lift, ROAS, or performance guarantee claim
+  - legal/privacy/ad-review runtime enforcement or regulated category approval
+  - DB migration, new table, or persistent read model storage
+  - content_manifest creation, publish, schedule activation, player delivery mutation, or playlist mutation
+  - external AI, camera, POS, inventory, weather, CRM, tracking tag, or ad network integration
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-197-AD-INVENTORY-READ-MODEL.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-ad-inventory-read-model.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-AD-INVENTORY-READ-MODEL.yaml
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/public/**
+protected_surfaces:
+  - runtime
+  - api
+stop_conditions:
+  - DB migration or new persistent table is needed
+  - external advertiser/customer access is needed
+  - billing, pricing, guarantee, settlement, invoice, or revenue recognition decision is needed
+  - incremental ROI, holdout, baseline, lift, ROAS, or performance guarantee claim is needed
+  - legal/privacy/ad-review decision or regulated category support is needed
+  - publish, schedule activation, Player, or content delivery mutation is needed
+  - external AI, camera, POS, inventory, weather, CRM, tracking tag, or ad network integration is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add GET /api/admin/reports/ad-inventory as an admin-only read-only endpoint.
+  - Require tenant_id so the report cannot be requested as a broad cross-tenant inventory report.
+  - Derive ad inventory from existing content_manifests.playlist_json ad/sponsor items without DB migration.
+  - Default manifest status to active and support tenant/store/screen_group/release_channel/status/campaign/content/ad_slot/creative/qr/manifest filters server-side.
+  - Report manifest-derived slot_position_count, sellable_slot_count, filled_slot_count, empty_slot_count, fill_rate, position_fill_rate, and unclassified ad/sponsor positions.
+  - Overlay measured play and QR response evidence from existing reporting helpers without reporting revenue, ROI attribution, lift, ROAS, or guarantees.
+  - Label inventory as manifest_derived and measured signals as measured.
+  - Do not create content manifests, snapshots, publish, schedule, billing records, external reports, or external integrations.
+  - Smoke coverage verifies inventory summary, per-slot metrics, filtered view, tenant isolation, missing tenant rejection, no forbidden claims, and no content_manifest creation side effect.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-HOST-ROI-SUMMARY
+  - CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

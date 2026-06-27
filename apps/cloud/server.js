@@ -276,6 +276,12 @@ const CONTENT_FRESHNESS_REPORT_LIMIT = normalizedLimit(
   1,
   500
 );
+const AD_INVENTORY_REPORT_LIMIT = normalizedLimit(
+  process.env.MISELL_AD_INVENTORY_REPORT_LIMIT,
+  100,
+  1,
+  500
+);
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(CLOUD_ASSETS_DIR, { recursive: true });
@@ -1336,6 +1342,15 @@ app.get("/api/admin/reports/advertiser-preview", requireAdminAuth, (req, res, ne
   try {
     const criteria = normalizeAdvertiserReportPreviewCriteria(req.query || {});
     res.json({ ok: true, report: buildAdvertiserReportPreview(criteria) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/reports/ad-inventory", requireAdminAuth, (req, res, next) => {
+  try {
+    const criteria = normalizeAdInventoryReportCriteria(req.query || {});
+    res.json({ ok: true, report: buildAdInventoryReport(criteria) });
   } catch (error) {
     next(error);
   }
@@ -8680,6 +8695,26 @@ function normalizeAdvertiserReportPreviewCriteria(input = {}) {
   return criteria;
 }
 
+function normalizeAdInventoryReportCriteria(input = {}) {
+  const criteria = normalizeReportCriteria(input);
+  if (!criteria.tenant_id) throw requestError("tenant_id is required for ad inventory report", 400);
+  const releaseChannel = cleanString(input.release_channel || input.releaseChannel);
+  if (releaseChannel && !RELEASE_CHANNELS.has(releaseChannel)) {
+    throw requestError(`release_channel must be one of: ${Array.from(RELEASE_CHANNELS).join(", ")}`, 400);
+  }
+  const status = cleanString(input.status || "active");
+  if (!CONTENT_MANIFEST_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(CONTENT_MANIFEST_STATUS).join(", ")}`, 400);
+  }
+  return {
+    ...criteria,
+    screen_group_id: cleanId(input.screen_group_id || input.screenGroupId || input.display_wall_id || input.displayWallId),
+    release_channel: releaseChannel,
+    status,
+    limit: Math.max(1, Math.min(asInteger(input.limit) || AD_INVENTORY_REPORT_LIMIT, AD_INVENTORY_REPORT_LIMIT))
+  };
+}
+
 function buildReportSummary(criteria, options = {}) {
   const generatedAt = cleanString(options.generatedAt) || nowIso();
   const rows = (options.dailyRows || aggregateReportDailyStoreMetrics(criteria).rows).map(publicReportDailyStoreMetric);
@@ -9060,6 +9095,314 @@ function advertiserPreviewDecisionPrompt(decisionKey, priority, reason) {
     authority: "operator_decision_required",
     claim_boundary: "guidance_only_no_performance_guarantee"
   };
+}
+
+function buildAdInventoryReport(criteria) {
+  const generatedAt = nowIso();
+  const entries = listAdInventoryManifestRows(criteria).flatMap((row) => adInventoryEntriesFromManifest(row, criteria));
+  const groups = buildAdInventorySlotGroups(entries);
+  applyAdInventoryMeasurements(groups, buildReportAdMeasurementBreakdown(criteria));
+  const allSlots = Array.from(groups.values())
+    .map(finalizeAdInventorySlot)
+    .sort((a, b) => {
+      const byStore = a.store_id.localeCompare(b.store_id);
+      if (byStore !== 0) return byStore;
+      const byGroup = a.screen_group_id.localeCompare(b.screen_group_id);
+      if (byGroup !== 0) return byGroup;
+      return a.ad_slot_id.localeCompare(b.ad_slot_id);
+    });
+  const slots = allSlots.slice(0, criteria.limit);
+  return {
+    report_type: "ad_inventory",
+    surface: "admin_internal_read_model",
+    generated_at: generatedAt,
+    source: {
+      inventory: "content_manifests.playlist_json",
+      proof_of_play: "playlogs",
+      qr_response: "qr_scans"
+    },
+    period: {
+      from: criteria.from,
+      to: criteria.to,
+      to_exclusive: criteria.to_exclusive,
+      days: criteria.days.length
+    },
+    filters: {
+      ...reportCriteriaFilters(criteria),
+      screen_group_id: criteria.screen_group_id,
+      release_channel: criteria.release_channel,
+      status: criteria.status,
+      limit: criteria.limit
+    },
+    measurement_policy: {
+      inventory: "manifest_derived",
+      fill_rate: "manifest_derived",
+      proof_of_play: "measured",
+      qr_response: "measured",
+      ad_revenue: "not_reported",
+      pricing: "not_reported",
+      roi_attribution: "not_reported",
+      incremental_lift: "not_reported",
+      roas_guarantee: "not_reported",
+      claim_boundary: "Ad inventory is derived from configured playlist ad slots; revenue, ROI attribution, lift, and guarantees are not reported."
+    },
+    summary: summarizeAdInventory(entries, allSlots),
+    slots
+  };
+}
+
+function listAdInventoryManifestRows(criteria) {
+  return db.prepare(`
+    SELECT * FROM content_manifests
+    WHERE tenant_id = ?
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR screen_group_id = ?)
+      AND (? = '' OR release_channel = ?)
+      AND status = ?
+      AND (? = '' OR content_id = ?)
+      AND (? = '' OR content_hash = ?)
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(
+    criteria.tenant_id,
+    criteria.store_id,
+    criteria.store_id,
+    criteria.screen_group_id,
+    criteria.screen_group_id,
+    criteria.release_channel,
+    criteria.release_channel,
+    criteria.status,
+    criteria.content_id,
+    criteria.content_id,
+    criteria.manifest_hash,
+    criteria.manifest_hash,
+    criteria.limit * 5
+  );
+}
+
+function adInventoryEntriesFromManifest(row, criteria) {
+  const playlist = parseJson(row.playlist_json, {});
+  const items = Array.isArray(playlist?.items) ? playlist.items : [];
+  const entries = [];
+  for (const [index, item] of items.entries()) {
+    const itemType = normalizeFreshnessItemType(item?.item_type || item?.type);
+    if (itemType !== "ad" && itemType !== "sponsor") continue;
+    const entry = {
+      tenant_id: cleanId(row.tenant_id),
+      store_id: cleanId(row.store_id),
+      screen_group_id: cleanId(row.screen_group_id),
+      screen_slot_id: cleanId(row.screen_slot_id),
+      release_channel: cleanString(row.release_channel),
+      status: cleanString(row.status),
+      content_id: cleanId(item?.content_id || item?.contentId || row.content_id),
+      manifest_content_id: cleanId(row.content_id),
+      manifest_hash: cleanString(item?.manifest_hash || item?.manifestHash || playlist?.manifest_hash || playlist?.content_manifest_hash || row.content_hash),
+      playlist_version: cleanString(row.playlist_version || playlist?.playlist_version),
+      playlist_item_id: cleanId(item?.item_id || item?.itemId || item?.id || `item-${index + 1}`),
+      item_type: itemType,
+      ad_slot_id: cleanId(item?.ad_slot_id || item?.adSlotId),
+      campaign_id: cleanId(item?.campaign_id || item?.campaignId),
+      creative_id: cleanId(item?.creative_id || item?.creativeId),
+      qr_link_id: cleanId(item?.qr_link_id || item?.qrLinkId),
+      planned_duration_seconds: Math.max(0, asInteger(item?.duration_seconds ?? item?.duration) || 0)
+    };
+    if (criteria.campaign_id && entry.campaign_id !== criteria.campaign_id) continue;
+    if (criteria.content_id && entry.content_id !== criteria.content_id && entry.manifest_content_id !== criteria.content_id) continue;
+    if (criteria.item_type && entry.item_type !== criteria.item_type) continue;
+    if (criteria.ad_slot_id && entry.ad_slot_id !== criteria.ad_slot_id) continue;
+    if (criteria.creative_id && entry.creative_id !== criteria.creative_id) continue;
+    if (criteria.qr_link_id && entry.qr_link_id !== criteria.qr_link_id) continue;
+    if (criteria.manifest_hash && entry.manifest_hash !== criteria.manifest_hash) continue;
+    entries.push(entry);
+  }
+  return entries;
+}
+
+function buildAdInventorySlotGroups(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    if (!entry.ad_slot_id) continue;
+    const key = [
+      entry.tenant_id,
+      entry.store_id,
+      entry.screen_group_id,
+      entry.release_channel,
+      entry.ad_slot_id
+    ].join("|");
+    const target = groups.get(key) || {
+      inventory_label: "manifest_derived",
+      measurement_label: "measured",
+      tenant_id: entry.tenant_id,
+      store_id: entry.store_id,
+      screen_group_id: entry.screen_group_id,
+      release_channel: entry.release_channel,
+      status: entry.status,
+      ad_slot_id: entry.ad_slot_id,
+      slot_position_count: 0,
+      filled_position_count: 0,
+      empty_position_count: 0,
+      planned_duration_seconds: 0,
+      play_event_count: 0,
+      play_started_count: 0,
+      play_completed_count: 0,
+      play_failed_count: 0,
+      played_duration_seconds: 0,
+      qr_scan_count: 0,
+      _item_types: new Set(),
+      _manifest_content_ids: new Set(),
+      _content_ids: new Set(),
+      _manifest_hashes: new Set(),
+      _campaign_ids: new Set(),
+      _creative_ids: new Set(),
+      _qr_link_ids: new Set()
+    };
+    target.slot_position_count += 1;
+    if (adInventoryEntryIsFilled(entry)) target.filled_position_count += 1;
+    else target.empty_position_count += 1;
+    target.planned_duration_seconds += entry.planned_duration_seconds;
+    addNonEmpty(target._item_types, entry.item_type);
+    addNonEmpty(target._manifest_content_ids, entry.manifest_content_id);
+    addNonEmpty(target._content_ids, entry.content_id);
+    addNonEmpty(target._manifest_hashes, entry.manifest_hash);
+    addNonEmpty(target._campaign_ids, entry.campaign_id);
+    addNonEmpty(target._creative_ids, entry.creative_id);
+    addNonEmpty(target._qr_link_ids, entry.qr_link_id);
+    groups.set(key, target);
+  }
+  return groups;
+}
+
+function adInventoryEntryIsFilled(entry) {
+  return Boolean(entry.campaign_id || entry.creative_id);
+}
+
+function applyAdInventoryMeasurements(groups, measurementRows) {
+  for (const row of measurementRows) {
+    const adSlotId = cleanId(row.ad_slot_id);
+    const storeId = cleanId(row.store_id);
+    if (!adSlotId || !storeId) continue;
+    for (const slot of groups.values()) {
+      if (slot.ad_slot_id !== adSlotId || slot.store_id !== storeId) continue;
+      const manifestHash = cleanString(row.manifest_hash);
+      const contentId = cleanId(row.content_id);
+      const contentMatches = !contentId ||
+        slot._content_ids.has(contentId) ||
+        slot._manifest_content_ids.has(contentId);
+      const manifestMatches = !manifestHash ||
+        slot._manifest_hashes.size <= 0 ||
+        slot._manifest_hashes.has(manifestHash);
+      if (!contentMatches) continue;
+      if (!manifestMatches && !contentId) continue;
+      slot.play_event_count += asInteger(row.play_event_count) || 0;
+      slot.play_started_count += asInteger(row.play_started_count) || 0;
+      slot.play_completed_count += asInteger(row.play_completed_count) || 0;
+      slot.play_failed_count += asInteger(row.play_failed_count) || 0;
+      slot.played_duration_seconds += asInteger(row.played_duration_seconds) || 0;
+      slot.qr_scan_count += asInteger(row.qr_scan_count) || 0;
+    }
+  }
+}
+
+function finalizeAdInventorySlot(slot) {
+  return {
+    inventory_label: slot.inventory_label,
+    measurement_label: slot.measurement_label,
+    tenant_id: slot.tenant_id,
+    store_id: slot.store_id,
+    screen_group_id: slot.screen_group_id,
+    release_channel: slot.release_channel,
+    status: slot.status,
+    ad_slot_id: slot.ad_slot_id,
+    slot_position_count: slot.slot_position_count,
+    filled_position_count: slot.filled_position_count,
+    empty_position_count: slot.empty_position_count,
+    fill_rate: measuredRatio(slot.filled_position_count, slot.slot_position_count),
+    planned_duration_seconds: slot.planned_duration_seconds,
+    manifest_count: slot._manifest_content_ids.size,
+    item_types: sortedSet(slot._item_types),
+    content_ids: sortedSet(slot._content_ids),
+    campaign_ids: sortedSet(slot._campaign_ids),
+    creative_ids: sortedSet(slot._creative_ids),
+    qr_link_ids: sortedSet(slot._qr_link_ids),
+    measured: {
+      measurement_label: "measured",
+      play_event_count: slot.play_event_count,
+      play_started_count: slot.play_started_count,
+      play_completed_count: slot.play_completed_count,
+      play_failed_count: slot.play_failed_count,
+      played_duration_seconds: slot.played_duration_seconds,
+      qr_scan_count: slot.qr_scan_count,
+      qr_response_rate: measuredRatio(slot.qr_scan_count, slot.play_started_count)
+    }
+  };
+}
+
+function summarizeAdInventory(entries, slots) {
+  const campaigns = new Set();
+  const creatives = new Set();
+  const qrLinks = new Set();
+  const manifestIds = new Set();
+  let slotPositionCount = 0;
+  let filledPositionCount = 0;
+  let emptyPositionCount = 0;
+  let unclassifiedPositionCount = 0;
+  let plannedDurationSeconds = 0;
+  for (const entry of entries) {
+    slotPositionCount += 1;
+    plannedDurationSeconds += entry.planned_duration_seconds;
+    if (!entry.ad_slot_id) unclassifiedPositionCount += 1;
+    if (entry.ad_slot_id && adInventoryEntryIsFilled(entry)) filledPositionCount += 1;
+    if (entry.ad_slot_id && !adInventoryEntryIsFilled(entry)) emptyPositionCount += 1;
+    addNonEmpty(campaigns, entry.campaign_id);
+    addNonEmpty(creatives, entry.creative_id);
+    addNonEmpty(qrLinks, entry.qr_link_id);
+    addNonEmpty(manifestIds, entry.manifest_content_id);
+  }
+  const measured = slots.reduce((summary, slot) => {
+    summary.play_event_count += slot.measured.play_event_count;
+    summary.play_started_count += slot.measured.play_started_count;
+    summary.play_completed_count += slot.measured.play_completed_count;
+    summary.play_failed_count += slot.measured.play_failed_count;
+    summary.played_duration_seconds += slot.measured.played_duration_seconds;
+    summary.qr_scan_count += slot.measured.qr_scan_count;
+    return summary;
+  }, {
+    play_event_count: 0,
+    play_started_count: 0,
+    play_completed_count: 0,
+    play_failed_count: 0,
+    played_duration_seconds: 0,
+    qr_scan_count: 0
+  });
+  measured.qr_response_rate = measuredRatio(measured.qr_scan_count, measured.play_started_count);
+  return {
+    inventory_label: "manifest_derived",
+    measurement_label: "measured",
+    manifest_count: manifestIds.size,
+    slot_position_count: slotPositionCount,
+    sellable_slot_count: slots.length,
+    filled_slot_count: slots.filter((slot) => slot.filled_position_count > 0).length,
+    empty_slot_count: slots.filter((slot) => slot.filled_position_count <= 0).length,
+    filled_position_count: filledPositionCount,
+    empty_position_count: emptyPositionCount,
+    unclassified_position_count: unclassifiedPositionCount,
+    fill_rate: measuredRatio(slots.filter((slot) => slot.filled_position_count > 0).length, slots.length),
+    position_fill_rate: measuredRatio(filledPositionCount, filledPositionCount + emptyPositionCount),
+    planned_duration_seconds: plannedDurationSeconds,
+    active_campaign_count: campaigns.size,
+    creative_count: creatives.size,
+    qr_link_count: qrLinks.size,
+    measured
+  };
+}
+
+function addNonEmpty(target, value) {
+  const cleaned = cleanString(value);
+  if (cleaned) target.add(cleaned);
+}
+
+function sortedSet(value) {
+  return Array.from(value).sort();
 }
 
 function measuredRatio(numerator, denominator) {
