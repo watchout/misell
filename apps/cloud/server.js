@@ -9451,6 +9451,7 @@ function buildHostRoiPreview(criteria) {
       qr_response: "measured",
       counter_order_value: "measured",
       ad_inventory: "manifest_derived",
+      fill_rate: "manifest_derived",
       content_freshness: "manifest_derived",
       ad_revenue: "not_reported",
       slot_unit_price: "not_reported",
@@ -9512,7 +9513,8 @@ function hostRoiConversion(totals) {
 function hostRoiInventory(summary) {
   return {
     inventory_label: "manifest_derived",
-    measurement_label: "measured",
+    fill_rate_label: "manifest_derived",
+    position_fill_rate_label: "manifest_derived",
     manifest_count: asInteger(summary.manifest_count) || 0,
     sellable_slot_count: asInteger(summary.sellable_slot_count) || 0,
     filled_slot_count: asInteger(summary.filled_slot_count) || 0,

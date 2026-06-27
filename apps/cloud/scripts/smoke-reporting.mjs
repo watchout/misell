@@ -810,7 +810,7 @@ async function assertHostRoiPreview(records) {
   if (report.report_type !== "host_roi_preview" || report.surface !== "admin_internal_read_model") {
     throw new Error(`unexpected host ROI preview identity: ${JSON.stringify({ report_type: report.report_type, surface: report.surface })}`);
   }
-  if (report.measurement_policy.proof_of_play !== "measured" || report.measurement_policy.counter_order_value !== "measured" || report.measurement_policy.ad_inventory !== "manifest_derived") {
+  if (report.measurement_policy.proof_of_play !== "measured" || report.measurement_policy.counter_order_value !== "measured" || report.measurement_policy.ad_inventory !== "manifest_derived" || report.measurement_policy.fill_rate !== "manifest_derived") {
     throw new Error(`host ROI measurement policy label mismatch: ${JSON.stringify(report.measurement_policy)}`);
   }
   if (report.measurement_policy.ad_revenue !== "not_reported" || report.measurement_policy.payback_period !== "not_reported" || report.measurement_policy.roas !== "not_reported" || report.measurement_policy.performance_guarantee !== "not_reported") {
@@ -836,6 +836,12 @@ async function assertHostRoiPreview(records) {
     empty_slot_count: 0,
     active_campaign_count: 2
   }, "host ROI ad inventory");
+  if (report.ad_inventory.inventory_label !== "manifest_derived" || report.ad_inventory.fill_rate_label !== "manifest_derived" || report.ad_inventory.position_fill_rate_label !== "manifest_derived") {
+    throw new Error(`host ROI inventory labels mismatch: ${JSON.stringify(report.ad_inventory)}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(report.ad_inventory, "measurement_label")) {
+    throw new Error(`host ROI inventory must not expose top-level measurement_label: ${JSON.stringify(report.ad_inventory)}`);
+  }
   assertTotals(report.ad_inventory.measured, {
     play_started_count: 1,
     play_completed_count: 1,
@@ -843,6 +849,14 @@ async function assertHostRoiPreview(records) {
     played_duration_seconds: 30,
     qr_scan_count: 1
   }, "host ROI inventory measured");
+  if (report.ad_inventory.measured.measurement_label !== "measured" || report.proof_of_play.measurement_label !== "measured" || report.host_response.measurement_label !== "measured" || report.host_conversion.measurement_label !== "measured") {
+    throw new Error(`host ROI measured labels mismatch: ${JSON.stringify({
+      proof_of_play: report.proof_of_play,
+      host_response: report.host_response,
+      host_conversion: report.host_conversion,
+      ad_inventory_measured: report.ad_inventory.measured
+    })}`);
+  }
   assertTotals(report.operations, {
     content_count: 2,
     stale_count: 1,
