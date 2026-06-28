@@ -11,7 +11,7 @@ repo_spec_ref: .shirube/repo-spec.yaml
 premise_ref: .shirube/repo-spec.yaml
 owner_confirmation_ref: https://github.com/watchout/misell/issues/210#issuecomment-4825043732
 premise_confirmation_ref: https://github.com/watchout/misell/issues/210#issuecomment-4825043732
-spec_review_state: approved_for_implementation
+spec_review_state: ready_for_implementation
 
 repo: watchout/misell
 repo_local_issue: https://github.com/watchout/misell/issues/210
