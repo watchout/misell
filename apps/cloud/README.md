@@ -169,6 +169,14 @@ CampaignProject and Scene draft records. It supports project creation from a
 selected campaign proposal, an existing campaign brief, or admin/operator free
 input.
 
+For demo-ready operator flow, project creation accepts `auto_generate_scenes`
+or `generate_scenes` to create an initial three-scene draft from the normalized
+CampaignBrief using a deterministic server-side template. Existing empty
+projects can also call `POST /api/admin/campaign-projects/:id/generate-scenes`
+to add the same initial draft. This is script-controlled template generation:
+it does not call external AI, does not render media, does not create
+`content_manifest` rows, and does not publish.
+
 Project status is one of `draft`, `validated`, `archived`, or `deleted`. Scene
 status is one of `draft`, `valid`, `invalid`, or `deleted`. Deletes are soft
 deletes.

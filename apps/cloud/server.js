@@ -819,6 +819,15 @@ app.post("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_pro
   }
 });
 
+app.post("/api/admin/campaign-projects/:campaign_project_id/generate-scenes", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = generateCampaignProjectScenes(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/campaign-projects/:campaign_project_id/scenes/:campaign_project_scene_id/regeneration-requests", requireAdminAuth, (req, res, next) => {
   try {
     const request = createCampaignProjectRegenerationRequest(cleanId(req.params.campaign_project_id), cleanId(req.params.campaign_project_scene_id), req.body || {}, req.adminActor);
@@ -7291,7 +7300,10 @@ function createCampaignProjectFromProposal(input, actor = {}) {
     campaign_brief_id: brief.campaign_brief_id,
     title: cleanString(input.title || proposal.title).slice(0, 200) || campaignBrief.objective,
     campaignBrief,
-    scenes: input.scenes || []
+    scenes: resolveCampaignProjectInitialScenes(input, campaignBrief, {
+      source_type: "campaign_proposal",
+      title: input.title || proposal.title
+    })
   }, actor);
 }
 
@@ -7319,7 +7331,10 @@ function createCampaignProjectFromBrief(input, actor = {}) {
     campaign_brief_id: brief.campaign_brief_id,
     title: cleanString(input.title || proposal.title).slice(0, 200) || campaignBrief.objective,
     campaignBrief,
-    scenes: input.scenes || []
+    scenes: resolveCampaignProjectInitialScenes(input, campaignBrief, {
+      source_type: "campaign_brief",
+      title: input.title || proposal.title
+    })
   }, actor);
 }
 
@@ -7341,7 +7356,10 @@ function createCampaignProjectFromFreeInput(input, actor = {}) {
     campaign_brief_id: "",
     title: cleanString(input.title).slice(0, 200) || campaignBrief.objective,
     campaignBrief,
-    scenes: input.scenes || []
+    scenes: resolveCampaignProjectInitialScenes(input, campaignBrief, {
+      source_type: "free_input",
+      title: input.title
+    })
   }, actor);
 }
 
@@ -7392,6 +7410,16 @@ function insertCampaignProject({ input, scope, source_type: sourceType, source_p
       now
     );
     const sceneInputs = normalizeCampaignProjectSceneInputs(scenes);
+    const generatedInitialSceneMetadata = shouldAutoGenerateCampaignScenes(input) && sceneInputs.length > 0
+      ? {
+          ...deterministicCampaignSceneGeneratorMetadata(),
+          scene_count: sceneInputs.length,
+          auto_generate_scenes: true
+        }
+      : {
+          scene_count: sceneInputs.length,
+          auto_generate_scenes: false
+        };
     for (const sceneInput of sceneInputs) {
       insertCampaignProjectScene(projectId, scope, sceneInput, now);
     }
@@ -7399,6 +7427,7 @@ function insertCampaignProject({ input, scope, source_type: sourceType, source_p
       source_type: sourceType,
       source_proposal_id: cleanId(sourceProposalId),
       campaign_brief_id: cleanId(campaignBriefId),
+      ...generatedInitialSceneMetadata,
       no_external_ai: true,
       no_media_generation: true,
       no_content_manifest_creation: true,
@@ -7411,6 +7440,7 @@ function insertCampaignProject({ input, scope, source_type: sourceType, source_p
     store_id: project.store_id,
     screen_group_id: project.screen_group_id,
     source_type: project.source_type,
+    ...((project.events || []).find((event) => event.action === "project.created")?.metadata || {}),
     no_external_ai: true,
     no_content_manifest_creation: true
   }, project.created_at || nowIso());
@@ -7886,6 +7916,55 @@ function duplicateCampaignProjectScene(projectId, sceneId, input = {}, actor = {
   })();
 }
 
+function generateCampaignProjectScenes(projectId, input = {}, actor = {}) {
+  assertCampaignGeneratorInput(input);
+  const projectRow = getCampaignProjectRow(projectId);
+  if (!projectRow) throw requestError("Campaign project not found", 404);
+  if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+  const scope = normalizeCampaignProjectScopeQuery(input);
+  if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+    assertCampaignProjectInputScope(scope, projectRow, "Campaign project");
+  }
+  const activeScenes = listCampaignProjectScenes(projectRow.campaign_project_id);
+  if (activeScenes.length > 0) {
+    throw requestError("Campaign project already has active scenes; edit, duplicate, or delete existing scenes before generating initial scenes", 409);
+  }
+  const generated = db.transaction(() => {
+    const now = nowIso();
+    const startOrder = nextCampaignProjectSceneOrder(projectRow.campaign_project_id);
+    const scenes = buildDeterministicCampaignProjectScenes(
+      campaignBriefFromProjectRow(projectRow),
+      { title: projectRow.title, source_type: projectRow.source_type, start_order: startOrder }
+    );
+    const inserted = scenes.map((scene) => insertCampaignProjectScene(projectRow.campaign_project_id, projectRow, scene, now));
+    touchCampaignProjectDraft(projectRow.campaign_project_id, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, "", "project.scenes.generated", "admin", actor.actor_id || "admin", {
+      generator_type: "deterministic_template",
+      generator_version: "campaign-demo-v1",
+      scene_count: inserted.length,
+      no_external_ai: true,
+      no_media_generation: true,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_credit_consumption: true
+    }, now);
+    return {
+      generated_scenes: inserted,
+      campaign_project: getCampaignProject(projectRow.campaign_project_id, null, { includeScenes: true, includeEvents: true }),
+      generator: deterministicCampaignSceneGeneratorMetadata()
+    };
+  })();
+  recordAuditLog("admin", actor.actor_id || "admin", "campaign_project.scenes.generate", "campaign_project", projectRow.campaign_project_id, null, generated, {
+    tenant_id: projectRow.tenant_id,
+    store_id: projectRow.store_id,
+    screen_group_id: projectRow.screen_group_id,
+    no_external_ai: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  }, nowIso());
+  return generated;
+}
+
 function createCampaignProjectRegenerationRequest(projectId, sceneId, input = {}, actor = {}) {
   assertCampaignGeneratorInput(input);
   const requestType = cleanString(input.request_type || input.requestType).slice(0, 80);
@@ -8131,6 +8210,112 @@ function normalizeCampaignProjectSceneInputs(scenes) {
   if (scenes === undefined || scenes === null || scenes === "") return [];
   if (!Array.isArray(scenes)) throw requestError("scenes must be an array", 400);
   return scenes.map((scene, index) => normalizeSceneForStorage(scene, { scene_order: index + 1 }));
+}
+
+function resolveCampaignProjectInitialScenes(input = {}, campaignBrief = {}, source = {}) {
+  if (hasSuppliedCampaignProjectScenes(input)) {
+    if (shouldAutoGenerateCampaignScenes(input)) {
+      throw requestError("scenes cannot be supplied together with auto_generate_scenes; choose explicit scenes or deterministic generation", 400);
+    }
+    return input.scenes;
+  }
+  if (!shouldAutoGenerateCampaignScenes(input)) return [];
+  return buildDeterministicCampaignProjectScenes(campaignBrief, source);
+}
+
+function hasSuppliedCampaignProjectScenes(input = {}) {
+  return input.scenes !== undefined && input.scenes !== null && input.scenes !== "";
+}
+
+function shouldAutoGenerateCampaignScenes(input = {}) {
+  return normalizeBooleanFlag(
+    input.auto_generate_scenes ??
+    input.autoGenerateScenes ??
+    input.generate_scenes ??
+    input.generateScenes
+  );
+}
+
+function campaignBriefFromProjectRow(row = {}) {
+  const stored = parseJson(row.campaign_brief_json || "{}", {});
+  return {
+    objective: cleanString(stored.objective || row.objective),
+    target_audience: cleanString(stored.target_audience || row.target_audience),
+    store_context: cleanString(stored.store_context || row.store_context),
+    offer_or_message: cleanString(stored.offer_or_message || row.offer_or_message),
+    cta: cleanString(stored.cta || row.cta),
+    success_metrics: parseJson(row.success_metrics_json || "[]", stored.success_metrics || []),
+    constraints: parseJson(row.constraints_json || "[]", stored.constraints || []),
+    source_proposal_id: cleanId(stored.source_proposal_id || row.source_proposal_id),
+    source_context_snapshot_id: cleanId(stored.source_context_snapshot_id || row.source_context_snapshot_id),
+    created_by_user_id: cleanString(stored.created_by_user_id || row.created_by_user_id)
+  };
+}
+
+function deterministicCampaignSceneGeneratorMetadata() {
+  return {
+    generator_type: "deterministic_template",
+    generator_version: "campaign-demo-v1",
+    external_ai_used: false,
+    media_generated: false,
+    content_manifest_created: false,
+    publish_created: false
+  };
+}
+
+function buildDeterministicCampaignProjectScenes(campaignBrief = {}, source = {}) {
+  const title = campaignSceneText(source.title || campaignBrief.objective || "キャンペーン告知", 80);
+  const objective = campaignSceneText(campaignBrief.objective || title, 220);
+  const audience = campaignSceneText(campaignBrief.target_audience || "来店中のお客様", 160);
+  const storeContext = campaignSceneText(displayableCampaignStoreContext(campaignBrief.store_context), 260);
+  const offer = campaignSceneText(campaignBrief.offer_or_message || objective, 260);
+  const cta = campaignSceneText(campaignBrief.cta || "QRから詳しく見る", 80);
+  const startOrder = Math.max(1, asInteger(source.start_order) || 1);
+  const visualConstraint = Array.isArray(campaignBrief.constraints) && campaignBrief.constraints.length
+    ? "運用制約は編集時に確認し、表示文には危険表現を入れない"
+    : "短いコピーで3秒以内に意味が伝わる構成";
+  return [
+    {
+      scene_order: startOrder,
+      scene_type: "intro",
+      headline: title,
+      body_text: storeContext || objective,
+      visual_direction: `入口で視認できる大きな写真と短い見出し。${visualConstraint}`,
+      cta_text: cta,
+      duration_seconds: 6,
+      asset_requirements: ["store_or_context_photo"]
+    },
+    {
+      scene_order: startOrder + 1,
+      scene_type: "offer",
+      headline: audience,
+      body_text: offer,
+      visual_direction: "訴求内容を中央に置き、対象者が一目で自分向けと分かる商品・空間写真を添える",
+      cta_text: cta,
+      duration_seconds: 8,
+      asset_requirements: ["offer_photo", "supporting_copy"]
+    },
+    {
+      scene_order: startOrder + 2,
+      scene_type: "cta",
+      headline: "詳しくはこちら",
+      body_text: `${cta}。案内を確認して、必要な情報だけすぐ見られます。`,
+      visual_direction: "QRとCTAを大きく配置し、余白を確保して読み取りやすくする",
+      cta_text: cta,
+      duration_seconds: 6,
+      asset_requirements: ["qr_code"]
+    }
+  ];
+}
+
+function campaignSceneText(value, maxLength) {
+  return cleanString(value).replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function displayableCampaignStoreContext(value) {
+  const text = cleanString(value);
+  if (!text || /^context_snapshot:/i.test(text)) return "店舗の前提に合わせた案内";
+  return text;
 }
 
 function normalizeSceneForStorage(input, defaults = {}) {

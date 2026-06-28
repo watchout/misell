@@ -1,0 +1,77 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-147-DEMO-SCENE-GENERATION
+parent_ssot: https://github.com/watchout/misell/issues/147
+title: Demo-ready deterministic scene generation
+cell_type: runtime_foundation
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add server-side deterministic initial Scene generation for CampaignProject demo readiness without external AI, media rendering, content_manifest creation, or publish.
+non_scope:
+  - external AI, LLM provider call, or model-generated final authority
+  - image/video/media rendering, MP4 export, generated_media, or asset creation
+  - content_manifest creation, schedule activation, publish, or device/player mutation
+  - customer project editing or customer-facing generation controls
+  - billing, credits, quota, guarantee, ROI, advertiser surface, or ad delivery behavior
+  - DB migration, new persistent table, or schema change
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-147-DEMO-SCENE-GENERATION.yaml
+  - .shirube/control-handoffs/CH-MISELL-147-demo-scene-generation.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-SCENE-GENERATION.yaml
+  - apps/cloud/README.md
+  - apps/cloud/server.js
+  - apps/cloud/public/admin.js
+  - apps/cloud/public/style.css
+  - apps/cloud/scripts/smoke-campaign-generator-foundation.mjs
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/player/**
+  - apps/cloud/migrations/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - runtime
+  - api
+  - admin_ui
+stop_conditions:
+  - DB migration or new persistent table is needed
+  - external AI/provider integration is needed
+  - generated media, rendering, content_manifest, publish, schedule activation, Player, or device mutation is needed
+  - customer-facing editing or external share surface is needed
+  - billing, credit, guarantee, ROI, advertiser, or ad-delivery behavior is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Project creation can opt into deterministic initial Scene generation with auto_generate_scenes/generate_scenes.
+  - Existing non-deleted empty CampaignProject can create initial Scenes through an admin-only generate-scenes API.
+  - Generated Scenes are editable draft records using the existing campaign_project_scenes table and validation pipeline.
+  - The generator is server-side, deterministic, reusable across proposal, brief, and free-input project sources, and records no-external-AI/no-media/no-manifest/no-publish evidence.
+  - Generation refuses to run when active scenes already exist, avoiding accidental overwrite.
+  - Admin UI exposes initial Scene generation without duplicating template logic in browser JavaScript.
+  - Smoke coverage proves create-time generation, existing-project generation, scope rejection, duplicate generation rejection, validation pass, and no content_manifest/publish/credit side effect.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:campaign-generator-foundation
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-147-DEMO-SEED-RUNBOOK
+  - CELL-MISELL-147-CAMPAIGN-PREVIEW-POLISH

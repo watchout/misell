@@ -1634,6 +1634,10 @@
             `).join("")}
           </select>
           <input name="title" type="text" placeholder="プロジェクト名（空欄なら提案名）" aria-label="プロジェクト名">
+          <label class="inline-option">
+            <input name="auto_generate_scenes" type="checkbox" checked>
+            <span>初期Sceneを自動作成</span>
+          </label>
           <button type="submit"${proposalDisabled}>提案から作成</button>
         </form>
         <form class="campaign-project-create campaign-project-from-brief">
@@ -1644,6 +1648,10 @@
             `).join("")}
           </select>
           <input name="title" type="text" placeholder="プロジェクト名（空欄なら提案名）" aria-label="プロジェクト名">
+          <label class="inline-option">
+            <input name="auto_generate_scenes" type="checkbox" checked>
+            <span>初期Sceneを自動作成</span>
+          </label>
           <button type="submit"${briefDisabled}>Briefから作成</button>
         </form>
         <form class="campaign-project-create campaign-project-free-input">
@@ -1667,6 +1675,10 @@
           <input name="cta" type="text" placeholder="CTA" aria-label="CTA" required>
           <textarea name="success_metrics" rows="2" placeholder="成功指標（1行1項目）" aria-label="成功指標"></textarea>
           <textarea name="constraints" rows="2" placeholder="制約（1行1項目）" aria-label="制約"></textarea>
+          <label class="inline-option">
+            <input name="auto_generate_scenes" type="checkbox" checked>
+            <span>初期Sceneを自動作成</span>
+          </label>
           <button type="submit">入力から作成</button>
         </form>
       </div>
@@ -1695,6 +1707,9 @@
     });
     els.campaignProjects.querySelectorAll("[data-campaign-project-delete]").forEach((button) => {
       button.addEventListener("click", handleCampaignProjectDelete);
+    });
+    els.campaignProjects.querySelectorAll("[data-campaign-project-generate-scenes]").forEach((button) => {
+      button.addEventListener("click", handleCampaignProjectGenerateScenes);
     });
     els.campaignProjects.querySelectorAll(".campaign-project-scene-create").forEach((form) => {
       form.addEventListener("submit", handleCampaignProjectSceneCreate);
@@ -1742,6 +1757,7 @@
           <div class="campaign-project-actions">
             <a class="campaign-project-preview-link" href="/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview?editor=1" target="_blank" rel="noreferrer" data-campaign-project-editor="${escapeAttr(project.campaign_project_id)}">編集</a>
             <a class="campaign-project-preview-link" href="/admin/campaign-projects/${encodeURIComponent(project.campaign_project_id || "")}/preview" target="_blank" rel="noreferrer" data-campaign-project-preview="${escapeAttr(project.campaign_project_id)}">プレビュー</a>
+            ${scenes.length === 0 ? `<button class="secondary" type="button" data-campaign-project-generate-scenes="${escapeAttr(project.campaign_project_id)}">初期Scene生成</button>` : ""}
             <button class="secondary" type="button" data-campaign-project-validate="${escapeAttr(project.campaign_project_id)}">検証</button>
             <button class="danger" type="button" data-campaign-project-delete="${escapeAttr(project.campaign_project_id)}">削除</button>
           </div>
@@ -1834,7 +1850,7 @@
         body: JSON.stringify({
           campaign_proposal_id: proposal.campaign_proposal_id,
           title: form.elements.title.value || proposal.title || "",
-          scenes: defaultScenesFromProposal(proposal)
+          auto_generate_scenes: form.elements.auto_generate_scenes?.checked !== false
         })
       });
       form.reset();
@@ -1861,7 +1877,7 @@
         body: JSON.stringify({
           campaign_brief_id: proposal.campaign_brief_id,
           title: form.elements.title.value || proposal.title || "",
-          scenes: defaultScenesFromProposal(proposal)
+          auto_generate_scenes: form.elements.auto_generate_scenes?.checked !== false
         })
       });
       form.reset();
@@ -1898,10 +1914,7 @@
           screen_group_id: form.elements.screen_group_id.value,
           title: form.elements.title.value,
           ...brief,
-          scenes: defaultScenesFromBrief({
-            title: form.elements.title.value,
-            ...brief
-          })
+          auto_generate_scenes: form.elements.auto_generate_scenes?.checked !== false
         })
       });
       form.reset();
@@ -1945,6 +1958,25 @@
     } catch (error) {
       window.alert(error.message || "プロジェクト削除に失敗しました。");
       button.disabled = false;
+    }
+  }
+
+  async function handleCampaignProjectGenerateScenes(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "生成中";
+    try {
+      const result = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(button.dataset.campaignProjectGenerateScenes || "")}/generate-scenes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      window.alert(`${result.generated_scenes?.length || 0}件の初期Sceneを作成しました。`);
+      await loadDashboard();
+    } catch (error) {
+      window.alert(error.message || "初期Scene生成に失敗しました。");
+      button.disabled = false;
+      button.textContent = "初期Scene生成";
     }
   }
 
@@ -2026,87 +2058,6 @@
     return payload;
   }
 
-  function defaultScenesFromProposal(proposal) {
-    const outline = outlineTextItems(proposal.three_screen_outline);
-    const cta = safeText(proposal.qr_flow || proposal.cta || "QRコードから詳細を確認", 80);
-    return [
-      {
-        scene_order: 1,
-        scene_type: "intro",
-        headline: safeText(proposal.title || "キャンペーン告知", 80),
-        body_text: safeText(proposal.objective || "店舗の今月の案内をわかりやすく伝える", 300),
-        visual_direction: safeText(outline[0] || "店舗の雰囲気と対象商品の写真を大きく見せる", 300),
-        cta_text: cta,
-        duration_seconds: 5,
-        asset_requirements: ["operator_selected_image"]
-      },
-      {
-        scene_order: 2,
-        scene_type: "offer",
-        headline: safeText(proposal.target_audience || "おすすめ情報", 80),
-        body_text: safeText(proposal.expected_effect || proposal.objective || "来店中のお客様に見てもらいたい内容を短く伝える", 300),
-        visual_direction: safeText(outline[1] || outline[0] || "商品・サービスの利用シーンを中心に配置する", 300),
-        cta_text: cta,
-        duration_seconds: 5,
-        asset_requirements: ["operator_selected_image"]
-      },
-      {
-        scene_order: 3,
-        scene_type: "cta",
-        headline: "詳しくはこちら",
-        body_text: safeText(proposal.qr_flow || "画面のQRコードから詳細を確認できます", 300),
-        visual_direction: safeText(outline[2] || "QRコードと短い案内文を読みやすく配置する", 300),
-        cta_text: cta,
-        duration_seconds: 5,
-        asset_requirements: ["qr_code", "operator_selected_image"]
-      }
-    ];
-  }
-
-  function defaultScenesFromBrief(brief) {
-    const cta = safeText(brief.cta || "詳しく確認", 80);
-    return [
-      {
-        scene_order: 1,
-        scene_type: "intro",
-        headline: safeText(brief.title || brief.objective || "キャンペーン告知", 80),
-        body_text: safeText(brief.store_context || brief.objective || "店舗の前提を踏まえて案内する", 300),
-        visual_direction: "店舗写真または商品写真を中央に配置する",
-        cta_text: cta,
-        duration_seconds: 5,
-        asset_requirements: ["operator_selected_image"]
-      },
-      {
-        scene_order: 2,
-        scene_type: "offer",
-        headline: safeText(brief.target_audience || "おすすめ", 80),
-        body_text: safeText(brief.offer_or_message || brief.objective || "訴求内容を短く表示する", 300),
-        visual_direction: "訴求文と対象商品を並べて視認性を優先する",
-        cta_text: cta,
-        duration_seconds: 5,
-        asset_requirements: ["operator_selected_image"]
-      },
-      {
-        scene_order: 3,
-        scene_type: "cta",
-        headline: "詳しくはこちら",
-        body_text: safeText(brief.cta || "次の行動を案内する", 300),
-        visual_direction: "CTAとQR配置の余白を確保する",
-        cta_text: cta,
-        duration_seconds: 5,
-        asset_requirements: ["qr_code"]
-      }
-    ];
-  }
-
-  function outlineTextItems(value) {
-    if (!Array.isArray(value)) return [];
-    return value.map((item) => {
-      if (typeof item === "string") return item;
-      return item?.copy || item?.headline || item?.body_text || "";
-    }).map((item) => String(item || "").trim()).filter(Boolean);
-  }
-
   function listFromText(value) {
     return String(value || "").split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
   }
@@ -2117,10 +2068,6 @@
       if (typeof item === "string") return item;
       return JSON.stringify(item);
     }).join("\n");
-  }
-
-  function safeText(value, maxLength) {
-    return String(value || "").trim().slice(0, maxLength);
   }
 
   async function handleCampaignProposalCreate(event) {
