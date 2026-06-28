@@ -1,0 +1,59 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-147-DEMO-RUNBOOK
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-147-demo-runbook.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-147-DEMO-RUNBOOK.yaml
+  cell_id: CELL-MISELL-147-DEMO-RUNBOOK
+  pr: watchout/misell#TBD
+items:
+  - item_id: DRB-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: DRB-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden paths are touched, especially apps, workflows, packages, deploy, secrets, branch protection, or rulesets.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: DRB-AUDIT-003
+    source: docs_only
+    verification_method: semantic
+    required: true
+    prompt: Verify the PR is docs-only and does not change runtime behavior.
+    expected_evidence:
+      - code_review
+  - item_id: DRB-AUDIT-004
+    source: runbook
+    verification_method: semantic
+    required: true
+    prompt: Verify the runbook covers dashboard, quick-fill, generated CampaignProject creation, preview, validate, display mode, and fallback steps.
+    expected_evidence:
+      - docs_review
+  - item_id: DRB-AUDIT-005
+    source: non_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify the runbook clearly separates demo-ready behavior from not-yet-implemented/non-scope behavior.
+    expected_evidence:
+      - docs_review
+  - item_id: DRB-AUDIT-006
+    source: index
+    verification_method: semantic
+    required: true
+    prompt: Verify README.md and docs/README.md reference the new document with the correct number.
+    expected_evidence:
+      - docs_review
+  - item_id: DRB-AUDIT-007
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify git diff --check, YAML safe_load, and shirube smoke passed.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

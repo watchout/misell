@@ -1,0 +1,131 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-147-DEMO-RUNBOOK
+parent_ssot: https://github.com/watchout/misell/issues/147
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4824002501
+premise_confirmation_ref: https://github.com/watchout/misell/issues/147
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/147
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational gate evidence for this PR
+    - structured audit exact-head admissibility
+    - owner exact-head decision admissibility
+    - diff scope and handoff consistency checks
+  shirube_does_not_own:
+    - branch protection or required-check configuration
+    - security/CEO approval labels and protected authorization decisions
+    - production deployment or runtime operations
+
+cell:
+  CELL-ID: CELL-MISELL-147-DEMO-RUNBOOK
+  cell_type: docs
+  risk_class: R1_DOCS
+  goal: Add a docs-only runbook for the CampaignProject demo flow.
+  non_scope:
+    - runtime code, backend route, API contract, DB migration, or schema change
+    - external AI/provider call, generated media, rendering, MP4 export, or asset creation
+    - content_manifest creation, schedule activation, publish, Player/device mutation, or customer/public route
+    - billing, credits, quota, guarantee, ROI, advertiser, or ad delivery behavior
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-147-DEMO-RUNBOOK.yaml
+    - .shirube/control-handoffs/CH-MISELL-147-demo-runbook.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-RUNBOOK.yaml
+    - README.md
+    - docs/README.md
+    - docs/101_CAMPAIGN_CONTENT_GENERATION_DEMO_RUNBOOK.md
+  protected_surfaces:
+    - docs_only
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/**
+    - package.json
+    - package-lock.json
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - runtime/API/DB/workflow/package/deploy/secret/protected behavior needed
+    - external AI/provider/media/render/content_manifest/publish/customer/public behavior needed
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Runbook covers admin dashboard, demo quick-fill, generated CampaignProject creation, preview, validation, display mode, and fallback paths.
+    - Runbook states demo-ready, not-yet-implemented, and intentionally non-scope boundaries.
+    - README.md and docs/README.md link the new document.
+
+implementation_boundary:
+  summary: Documentation only. Do not edit application code or runtime configuration.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - external API/provider call
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  pr_head_sha: supplied_by_github_pr_metadata_and_audit_request
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm run shirube:smoke-full-operational
+    - Shirube Full Operational Gates
+  required_evidence:
+    - PR_head_SHA
+    - changed_files
+    - validation_commands
+    - validation_results
+    - structured_audit_comment
+    - owner_decision
+  acceptance_tests:
+    - docs-only file scope
+    - runbook has demo steps and fallback steps
+    - runbook has explicit non-scope boundaries
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff

@@ -1,0 +1,58 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-147-DEMO-RUNBOOK
+parent_ssot: https://github.com/watchout/misell/issues/147
+title: Campaign/content generation demo runbook
+cell_type: docs
+risk_class: R1_DOCS
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add a docs-only runbook for the CampaignProject demo flow now that deterministic Scene generation and quick-start UI are merged.
+non_scope:
+  - runtime code, backend route, API contract, DB migration, or schema change
+  - external AI/provider call, media generation, rendering, MP4 export, or asset creation
+  - content_manifest creation, schedule activation, publish, Player/device mutation, or customer/public route
+  - billing, credits, quota, guarantee, ROI, advertiser, or ad delivery behavior
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-147-DEMO-RUNBOOK.yaml
+  - .shirube/control-handoffs/CH-MISELL-147-demo-runbook.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-RUNBOOK.yaml
+  - README.md
+  - docs/README.md
+  - docs/101_CAMPAIGN_CONTENT_GENERATION_DEMO_RUNBOOK.md
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - docs_only
+stop_conditions:
+  - runtime, API, DB, workflow, package, deploy, secret, or protected surface change is needed
+  - external AI/provider/media/render/content_manifest/publish/customer/public behavior is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Runbook explains a repeatable admin demo path from dashboard to quick-fill to generated CampaignProject preview.
+  - Runbook clearly separates demo-ready behavior from non-scope/not-yet-implemented behavior.
+  - Runbook includes fallback steps if a popup is blocked or no project is selected.
+  - README and docs index include the new document.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
