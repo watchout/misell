@@ -1,0 +1,69 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-147-DEMO-QUICK-START-UI
+parent_ssot: https://github.com/watchout/misell/issues/147
+title: Campaign demo quick-start UI
+cell_type: ui_lite
+risk_class: R1
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an authenticated admin UI quick-start path so operators can prefill a realistic CampaignBrief and create a generated CampaignProject demo without backend, DB, external AI, media, content_manifest, or publish changes.
+non_scope:
+  - backend route, API contract, DB migration, or schema change
+  - external AI/provider call, media generation, rendering, MP4 export, or generated asset creation
+  - content_manifest creation, schedule activation, publish, Player/device mutation, or customer/public route
+  - billing, credits, quota, guarantee, ROI, advertiser, or ad delivery behavior
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-147-DEMO-QUICK-START-UI.yaml
+  - .shirube/control-handoffs/CH-MISELL-147-demo-quick-start-ui.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-QUICK-START-UI.yaml
+  - apps/cloud/README.md
+  - apps/cloud/public/admin.js
+  - apps/cloud/public/style.css
+  - tests/e2e/misell-ui.spec.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/player/**
+  - apps/cloud/server.js
+  - apps/cloud/migrations/**
+  - apps/cloud/package.json
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - admin_ui
+  - existing_authenticated_admin_route_only
+stop_conditions:
+  - backend route, API mutation, DB migration, or schema change is needed
+  - external AI/provider/media/render/content_manifest/publish path is needed
+  - customer/public route or external share surface is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Admin CampaignProject free-input form exposes a quick-fill demo control.
+  - Quick-fill uses existing tenant/store/screen_group options and does not create data by itself.
+  - The filled demo brief keeps auto_generate_scenes enabled so the existing server-side deterministic generator can run.
+  - The form exposes an optional create-then-preview control using the existing authenticated CampaignProject preview route.
+  - No backend, DB, API, external AI, media generation, content_manifest, publish, billing, customer, Player, or workflow changes are introduced.
+  - E2E proves the quick-fill control populates the form and the existing create flow still produces a generated CampaignProject.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm run test:e2e
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision

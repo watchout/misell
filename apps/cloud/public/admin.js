@@ -122,6 +122,16 @@
   };
 
   const CAMPAIGN_SCENE_TYPE_OPTIONS = window.MisellCampaignProjectUi?.sceneTypeOptions || [];
+  const CAMPAIGN_PROJECT_DEMO_BRIEF = {
+    title: "雨の日のファミリー訴求",
+    objective: "平日昼の来店客に、雨の日でも使いやすい店内サービスを短く伝える",
+    target_audience: "受付後に待っている家族連れ",
+    store_context: "駅前店舗。雨の日は待ち時間が長く、画面の前に滞在しやすい。",
+    offer_or_message: "個室、軽食、充電、当日おすすめを3秒で伝わる順番に整理する",
+    cta: "QRから当日のおすすめを見る",
+    success_metrics: "play_count\nqr_scan_count\ncounter_order_issued_count",
+    constraints: "個人情報を入れない\n効果を断定しない\n価格や在庫は運用確認後に反映"
+  };
 
   const ROLLOUT_STATUS_LABELS = {
     ready: "反映済み",
@@ -1655,6 +1665,13 @@
           <button type="submit"${briefDisabled}>Briefから作成</button>
         </form>
         <form class="campaign-project-create campaign-project-free-input">
+          <div class="campaign-project-demo-actions">
+            <button class="secondary" type="button" data-campaign-project-demo-fill>デモ入力</button>
+            <label class="inline-option">
+              <input name="open_preview_after_create" type="checkbox">
+              <span>作成後にプレビュー</span>
+            </label>
+          </div>
           <select name="tenant_id" aria-label="顧客" required>
             <option value="">顧客</option>
             ${tenants.map((tenant) => `<option value="${escapeHtml(tenant.tenant_id || "")}">${escapeHtml(tenant.tenant_name || tenant.tenant_id || "")}</option>`).join("")}
@@ -1702,6 +1719,7 @@
     els.campaignProjects.querySelector(".campaign-project-from-proposal")?.addEventListener("submit", handleCampaignProjectFromProposal);
     els.campaignProjects.querySelector(".campaign-project-from-brief")?.addEventListener("submit", handleCampaignProjectFromBrief);
     els.campaignProjects.querySelector(".campaign-project-free-input")?.addEventListener("submit", handleCampaignProjectFreeInput);
+    els.campaignProjects.querySelector("[data-campaign-project-demo-fill]")?.addEventListener("click", handleCampaignProjectDemoFill);
     els.campaignProjects.querySelectorAll("[data-campaign-project-validate]").forEach((button) => {
       button.addEventListener("click", handleCampaignProjectValidate);
     });
@@ -1892,7 +1910,8 @@
   async function handleCampaignProjectFreeInput(event) {
     event.preventDefault();
     const form = event.currentTarget;
-    const button = form.querySelector("button");
+    const button = form.querySelector("button[type='submit']");
+    const openPreviewAfterCreate = form.elements.open_preview_after_create?.checked === true;
     const brief = {
       objective: form.elements.objective.value,
       target_audience: form.elements.target_audience.value,
@@ -1905,7 +1924,7 @@
     button.disabled = true;
     button.textContent = "作成中";
     try {
-      await fetchJson("/api/admin/campaign-projects/free-input", {
+      const result = await fetchJson("/api/admin/campaign-projects/free-input", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1917,13 +1936,54 @@
           auto_generate_scenes: form.elements.auto_generate_scenes?.checked !== false
         })
       });
+      const projectId = result.campaign_project?.campaign_project_id || "";
       form.reset();
       await loadDashboard();
+      if (openPreviewAfterCreate && projectId) {
+        window.open(`/admin/campaign-projects/${encodeURIComponent(projectId)}/preview?display=1`, "_blank", "noopener");
+      }
     } catch (error) {
       window.alert(error.message || "入力からプロジェクトを作成できませんでした。");
       button.disabled = false;
       button.textContent = "入力から作成";
     }
+  }
+
+  function handleCampaignProjectDemoFill(event) {
+    const form = event.currentTarget.closest("form");
+    if (!form) return;
+    const stores = state.storeSettings || [];
+    const groups = uniqueScreenGroupsFromDevices(state.devices || []);
+    const currentTenantId = form.elements.tenant_id.value;
+    const currentStoreId = form.elements.store_id.value;
+    const selectedStore = stores.find((store) => store.store_id === currentStoreId) ||
+      stores.find((store) => !currentTenantId || store.tenant_id === currentTenantId) ||
+      stores[0] ||
+      {};
+    const tenantId = currentTenantId || selectedStore.tenant_id || firstSelectValue(form.elements.tenant_id);
+    const store = selectedStore.store_id ? selectedStore : stores.find((item) => item.tenant_id === tenantId) || stores[0] || {};
+    const group = groups.find((item) => item.store_id === store.store_id) ||
+      groups.find((item) => item.screen_group_id === form.elements.screen_group_id.value) ||
+      groups[0] ||
+      {};
+
+    setSelectValue(form.elements.tenant_id, tenantId || store.tenant_id || "");
+    setSelectValue(form.elements.store_id, store.store_id || firstSelectValue(form.elements.store_id));
+    setSelectValue(form.elements.screen_group_id, group.screen_group_id || firstSelectValue(form.elements.screen_group_id));
+    for (const [field, value] of Object.entries(CAMPAIGN_PROJECT_DEMO_BRIEF)) {
+      if (form.elements[field]) form.elements[field].value = value;
+    }
+    if (form.elements.auto_generate_scenes) form.elements.auto_generate_scenes.checked = true;
+  }
+
+  function firstSelectValue(select) {
+    return Array.from(select?.options || []).find((option) => option.value)?.value || "";
+  }
+
+  function setSelectValue(select, value) {
+    if (!select || !value) return;
+    const hasOption = Array.from(select.options || []).some((option) => option.value === value);
+    if (hasOption) select.value = value;
   }
 
   async function handleCampaignProjectValidate(event) {

@@ -177,6 +177,13 @@ to add the same initial draft. This is script-controlled template generation:
 it does not call external AI, does not render media, does not create
 `content_manifest` rows, and does not publish.
 
+The Cloud admin CampaignProject free-input form also includes a UI-only demo
+quick-fill control. It fills a sample CampaignBrief against existing
+tenant/store/screen-group options and keeps `auto_generate_scenes` enabled, but
+does not create data until the operator submits the existing form. The optional
+post-create preview uses the existing authenticated CampaignProject preview
+route.
+
 Project status is one of `draft`, `validated`, `archived`, or `deleted`. Scene
 status is one of `draft`, `valid`, `invalid`, or `deleted`. Deletes are soft
 deletes.
