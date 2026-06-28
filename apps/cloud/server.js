@@ -45,6 +45,25 @@ const {
   buildRenderManifestContract,
   runRenderQaContract
 } = require("./lib/studio-cut-plan-render-contract");
+const {
+  PROVIDER_CONTRACT_VERSION,
+  PROVIDER_IDS,
+  PROVIDER_CAPABILITIES,
+  ASSET_ROLES,
+  GENERATION_JOB_STATUSES,
+  ERROR_CLASSES,
+  ASSET_SOURCE_TYPES,
+  LICENSE_STATUSES,
+  RIGHTS_REVIEW_STATUSES,
+  defaultProviderCatalog,
+  assertStudioB1InputBoundary,
+  buildGenerationJobContract,
+  validateGenerationJobContract,
+  buildAssetProvenanceContract,
+  validateAssetProvenanceContract,
+  canAssetEnterPublishCandidate,
+  normalizeJobTransition
+} = require("./lib/studio-provider-job-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -881,6 +900,122 @@ app.delete("/api/admin/studio-render-manifests/:render_manifest_id", requireAdmi
   try {
     const manifest = softDeleteStudioRenderManifest(cleanId(req.params.render_manifest_id), req.adminActor);
     res.json({ ok: true, studio_render_manifest: manifest });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-generation-providers", requireAdminAuth, (req, res, next) => {
+  try {
+    res.json({ ok: true, studio_generation_providers: listStudioGenerationProviders() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/ai-generation-jobs", requireAdminAuth, (req, res, next) => {
+  try {
+    res.json({ ok: true, ai_generation_jobs: listAiGenerationJobs(req.query || {}) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/ai-generation-jobs", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createAiGenerationJob(req.body || {}, req.adminActor);
+    res.status(result.idempotency_reused ? 200 : 201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/ai-generation-jobs/:ai_generation_job_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const job = getAiGenerationJob(cleanId(req.params.ai_generation_job_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeProvenance: true });
+    if (!job) throw requestError("AI generation job not found", 404);
+    res.json({ ok: true, ai_generation_job: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/ai-generation-jobs/:ai_generation_job_id/start", requireAdminAuth, (req, res, next) => {
+  try {
+    const job = startAiGenerationJob(cleanId(req.params.ai_generation_job_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ai_generation_job: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/ai-generation-jobs/:ai_generation_job_id/complete", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = completeAiGenerationJob(cleanId(req.params.ai_generation_job_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/ai-generation-jobs/:ai_generation_job_id/fail", requireAdminAuth, (req, res, next) => {
+  try {
+    const job = failAiGenerationJob(cleanId(req.params.ai_generation_job_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ai_generation_job: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/ai-generation-jobs/:ai_generation_job_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const job = softDeleteAiGenerationJob(cleanId(req.params.ai_generation_job_id), req.adminActor);
+    res.json({ ok: true, ai_generation_job: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/asset-provenance", requireAdminAuth, (req, res, next) => {
+  try {
+    res.json({ ok: true, asset_provenance: listAssetProvenance(req.query || {}) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/asset-provenance", requireAdminAuth, (req, res, next) => {
+  try {
+    const provenance = createAssetProvenance(req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, asset_provenance: provenance });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/asset-provenance/:asset_provenance_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const provenance = getAssetProvenance(cleanId(req.params.asset_provenance_id), normalizeCampaignProjectScopeQuery(req.query || {}));
+    if (!provenance) throw requestError("Asset provenance not found", 404);
+    res.json({ ok: true, asset_provenance: provenance });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/asset-provenance/:asset_provenance_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = updateAssetProvenance(cleanId(req.params.asset_provenance_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/asset-provenance/:asset_provenance_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const provenance = softDeleteAssetProvenance(cleanId(req.params.asset_provenance_id), req.adminActor);
+    res.json({ ok: true, asset_provenance: provenance });
   } catch (error) {
     next(error);
   }
@@ -4206,6 +4341,137 @@ function schemaMigrations() {
           template.created_at,
           template.updated_at
         );
+      }
+    },
+    {
+      version: 14,
+      name: "studio_provider_job_foundation",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS studio_generation_providers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id TEXT NOT NULL UNIQUE,
+            provider_type TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            capabilities_json TEXT NOT NULL DEFAULT '[]',
+            external_network_allowed INTEGER NOT NULL DEFAULT 0,
+            secrets_required INTEGER NOT NULL DEFAULT 0,
+            mcp_runtime_dependency INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS ai_generation_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ai_generation_job_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL DEFAULT '',
+            campaign_project_revision INTEGER NOT NULL DEFAULT 0,
+            campaign_project_scene_id TEXT NOT NULL DEFAULT '',
+            requested_asset_role TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            provider_model TEXT NOT NULL DEFAULT '',
+            capability TEXT NOT NULL,
+            input_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            input_sha256 TEXT NOT NULL,
+            prompt_hash TEXT NOT NULL DEFAULT '',
+            reference_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            error_class TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            provider_job_id TEXT NOT NULL DEFAULT '',
+            output_asset_id TEXT NOT NULL DEFAULT '',
+            cost_estimate_units INTEGER NOT NULL DEFAULT 0,
+            cost_actual_units INTEGER,
+            actor_type TEXT NOT NULL DEFAULT 'operator',
+            actor_id TEXT NOT NULL DEFAULT '',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 1,
+            no_external_provider_call INTEGER NOT NULL DEFAULT 1,
+            no_paid_provider_call INTEGER NOT NULL DEFAULT 1,
+            no_mcp_runtime_dependency INTEGER NOT NULL DEFAULT 1,
+            no_secret_material INTEGER NOT NULL DEFAULT 1,
+            no_credit_consumption INTEGER NOT NULL DEFAULT 1,
+            no_content_manifest_creation INTEGER NOT NULL DEFAULT 1,
+            no_publish INTEGER NOT NULL DEFAULT 1,
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT
+          );
+
+          CREATE TABLE IF NOT EXISTS asset_provenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_provenance_id TEXT NOT NULL UNIQUE,
+            asset_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL DEFAULT '',
+            ai_generation_job_id TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL,
+            license_status TEXT NOT NULL,
+            commercial_use_allowed INTEGER NOT NULL DEFAULT 0,
+            rights_review_status TEXT NOT NULL,
+            generated_by_provider TEXT NOT NULL DEFAULT '',
+            provider_model TEXT NOT NULL DEFAULT '',
+            provider_job_id TEXT NOT NULL DEFAULT '',
+            prompt_hash TEXT NOT NULL DEFAULT '',
+            reference_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            source_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            created_by_actor_type TEXT NOT NULL DEFAULT 'operator',
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            reviewed_by_actor_id TEXT NOT NULL DEFAULT '',
+            review_notes TEXT NOT NULL DEFAULT '',
+            publish_candidate_allowed INTEGER NOT NULL DEFAULT 0,
+            no_external_provider_call INTEGER NOT NULL DEFAULT 1,
+            no_secret_material INTEGER NOT NULL DEFAULT 1,
+            no_credit_consumption INTEGER NOT NULL DEFAULT 1,
+            no_content_manifest_creation INTEGER NOT NULL DEFAULT 1,
+            no_publish INTEGER NOT NULL DEFAULT 1,
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_generation_jobs_idempotency
+            ON ai_generation_jobs(tenant_id, idempotency_key);
+          CREATE INDEX IF NOT EXISTS idx_ai_generation_jobs_scope
+            ON ai_generation_jobs(tenant_id, store_id, screen_group_id, campaign_project_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_ai_generation_jobs_scene
+            ON ai_generation_jobs(campaign_project_scene_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_asset_provenance_scope
+            ON asset_provenance(tenant_id, store_id, screen_group_id, campaign_project_id, rights_review_status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_asset_provenance_job
+            ON asset_provenance(ai_generation_job_id, updated_at DESC);
+        `);
+
+        for (const provider of defaultProviderCatalog(nowIso())) {
+          db.prepare(`
+            INSERT OR IGNORE INTO studio_generation_providers (
+              provider_id, provider_type, display_name, capabilities_json,
+              external_network_allowed, secrets_required, mcp_runtime_dependency,
+              status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            provider.provider_id,
+            provider.provider_type,
+            provider.display_name,
+            safeJsonStringify(provider.capabilities, 10000),
+            provider.external_network_allowed ? 1 : 0,
+            provider.secrets_required ? 1 : 0,
+            provider.mcp_runtime_dependency ? 1 : 0,
+            provider.status,
+            provider.created_at,
+            provider.updated_at
+          );
+        }
       }
     }
   ];
@@ -8804,6 +9070,739 @@ function insertStudioRenderQaResult(renderManifestId, qa, createdAt = nowIso()) 
     createdAt
   );
   return qaId;
+}
+
+function listStudioGenerationProviders() {
+  return db.prepare(`
+    SELECT * FROM studio_generation_providers
+    WHERE status = 'active'
+    ORDER BY provider_id ASC
+  `).all().map(publicStudioGenerationProvider);
+}
+
+function createAiGenerationJob(input = {}, actor = {}) {
+  assertStudioB1RouteBoundary(input);
+  const result = db.transaction(() => {
+    const scope = resolveStudioB1Scope(input);
+    const sceneId = cleanId(input.campaign_project_scene_id || input.campaignProjectSceneId);
+    if (sceneId) assertStudioB1SceneScope(sceneId, scope.projectRow);
+    const jobId = cleanId(input.ai_generation_job_id || input.aiGenerationJobId) ||
+      nextEntityId("aigj", `${scope.store_id}-${scope.screen_group_id}`);
+    const contract = buildGenerationJobContract(input, {
+      ai_generation_job_id: jobId,
+      tenant_id: scope.tenant_id,
+      store_id: scope.store_id,
+      screen_group_id: scope.screen_group_id,
+      campaign_project_id: scope.campaign_project_id,
+      campaign_project_revision: scope.campaign_project_revision,
+      campaign_project_scene_id: sceneId,
+      actor_type: "admin",
+      actor_id: actor.actor_id || "admin"
+    });
+    assertValidGenerationJobContract(contract);
+    const existing = db.prepare(`
+      SELECT * FROM ai_generation_jobs
+      WHERE tenant_id = ?
+        AND idempotency_key = ?
+      LIMIT 1
+    `).get(contract.tenant_id, contract.idempotency_key);
+    if (existing) {
+      if (existing.input_sha256 !== contract.input_sha256) {
+        throw requestError("idempotency_key already exists for different generation input", 409);
+      }
+      return {
+        ai_generation_job: publicAiGenerationJob(existing, { includeProvenance: true }),
+        idempotency_reused: true
+      };
+    }
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO ai_generation_jobs (
+        ai_generation_job_id, tenant_id, store_id, screen_group_id, campaign_project_id,
+        campaign_project_revision, campaign_project_scene_id, requested_asset_role,
+        provider_id, provider_model, capability, input_snapshot_json, input_sha256,
+        prompt_hash, reference_asset_ids_json, idempotency_key, status, error_class,
+        error_message, provider_job_id, output_asset_id, cost_estimate_units,
+        cost_actual_units, actor_type, actor_id, retry_count, max_retries,
+        no_external_provider_call, no_paid_provider_call, no_mcp_runtime_dependency,
+        no_secret_material, no_credit_consumption, no_content_manifest_creation,
+        no_publish, deleted_at, created_at, started_at, completed_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', '', '', '', ?, 0, NULL, ?, ?, 0, ?, 1, 1, 1, 1, 1, 1, 1, NULL, ?, NULL, NULL, ?)
+    `).run(
+      contract.ai_generation_job_id,
+      contract.tenant_id,
+      contract.store_id,
+      contract.screen_group_id,
+      contract.campaign_project_id,
+      contract.campaign_project_revision,
+      contract.campaign_project_scene_id,
+      contract.requested_asset_role,
+      contract.provider_id,
+      contract.provider_model,
+      contract.capability,
+      safeJsonStringify(contract.input_snapshot, 30000),
+      contract.input_sha256,
+      contract.prompt_hash,
+      safeJsonStringify(contract.reference_asset_ids, 20000),
+      contract.idempotency_key,
+      contract.output_asset_id,
+      contract.actor_type,
+      contract.actor_id,
+      contract.max_retries,
+      now,
+      now
+    );
+    if (scope.campaign_project_id) {
+      recordCampaignProjectEvent(scope.campaign_project_id, sceneId, "ai_generation_job.created", "admin", actor.actor_id || "admin", {
+        ai_generation_job_id: contract.ai_generation_job_id,
+        provider_id: contract.provider_id,
+        capability: contract.capability,
+        requested_asset_role: contract.requested_asset_role,
+        no_external_provider_call: true,
+        no_secret_material: true,
+        no_credit_consumption: true,
+        no_content_manifest_creation: true,
+        no_publish: true
+      }, now);
+    }
+    return {
+      ai_generation_job: getAiGenerationJob(contract.ai_generation_job_id, null, { includeProvenance: true }),
+      idempotency_reused: false
+    };
+  })();
+  recordAuditLog("admin", actor.actor_id || "admin", "ai_generation_job.create", "ai_generation_job", result.ai_generation_job.ai_generation_job_id, null, result.ai_generation_job, {
+    tenant_id: result.ai_generation_job.tenant_id,
+    store_id: result.ai_generation_job.store_id,
+    screen_group_id: result.ai_generation_job.screen_group_id,
+    provider_id: result.ai_generation_job.provider_id,
+    no_external_provider_call: true,
+    no_credit_consumption: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  }, result.ai_generation_job.created_at || nowIso());
+  return result;
+}
+
+function listAiGenerationJobs(query = {}) {
+  const scope = normalizeCampaignProjectScopeQuery(query);
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  const status = cleanString(query.status);
+  if (status && !GENERATION_JOB_STATUSES.includes(status)) {
+    throw requestError(`status must be one of: ${GENERATION_JOB_STATUSES.join(", ")}`, 400);
+  }
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM ai_generation_jobs
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR screen_group_id = ?)
+      AND (? = '' OR campaign_project_id = ?)
+      AND (? = '' OR campaign_project_scene_id = ?)
+      AND (? = '' OR status = ?)
+      AND (? = 1 OR deleted_at IS NULL)
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(
+    scope.tenant_id, scope.tenant_id,
+    scope.store_id, scope.store_id,
+    scope.screen_group_id, scope.screen_group_id,
+    cleanId(query.campaign_project_id || query.campaignProjectId), cleanId(query.campaign_project_id || query.campaignProjectId),
+    cleanId(query.campaign_project_scene_id || query.campaignProjectSceneId), cleanId(query.campaign_project_scene_id || query.campaignProjectSceneId),
+    status, status,
+    includeDeleted ? 1 : 0,
+    limit
+  ).map((row) => publicAiGenerationJob(row));
+}
+
+function getAiGenerationJob(jobId, scope = null, options = {}) {
+  const row = getAiGenerationJobRow(jobId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "AI generation job");
+  return publicAiGenerationJob(row, options);
+}
+
+function startAiGenerationJob(jobId, input = {}, actor = {}) {
+  assertStudioB1RouteBoundary(input);
+  return db.transaction(() => {
+    const row = getAiGenerationJobRow(jobId);
+    if (!row || row.deleted_at) throw requestError("AI generation job not found", 404);
+    assertCampaignProjectInputScope(input, row, "AI generation job");
+    const transition = normalizeStudioB1JobTransition(row.status, { status: "running" });
+    const now = nowIso();
+    db.prepare(`
+      UPDATE ai_generation_jobs SET
+        status = ?,
+        error_class = '',
+        error_message = '',
+        started_at = COALESCE(started_at, ?),
+        updated_at = ?
+      WHERE ai_generation_job_id = ?
+    `).run(transition.status, now, now, row.ai_generation_job_id);
+    recordStudioB1Event(row, "ai_generation_job.started", actor, { status: transition.status }, now);
+    return getAiGenerationJob(row.ai_generation_job_id, null, { includeProvenance: true });
+  })();
+}
+
+function completeAiGenerationJob(jobId, input = {}, actor = {}) {
+  assertStudioB1RouteBoundary(input);
+  const result = db.transaction(() => {
+    const row = getAiGenerationJobRow(jobId);
+    if (!row || row.deleted_at) throw requestError("AI generation job not found", 404);
+    assertCampaignProjectInputScope(input, row, "AI generation job");
+    const outputAssetId = cleanId(input.output_asset_id || input.outputAssetId);
+    if (!outputAssetId) throw requestError("output_asset_id is required", 400);
+    const providerJobId = cleanId(input.provider_job_id || input.providerJobId) || `mock:${row.ai_generation_job_id}`;
+    const transition = normalizeStudioB1JobTransition(row.status, {
+      status: "asset_review_required",
+      provider_job_id: providerJobId,
+      output_asset_id: outputAssetId
+    });
+    const now = nowIso();
+    db.prepare(`
+      UPDATE ai_generation_jobs SET
+        status = ?,
+        error_class = '',
+        error_message = '',
+        provider_job_id = ?,
+        output_asset_id = ?,
+        cost_actual_units = 0,
+        completed_at = ?,
+        updated_at = ?
+      WHERE ai_generation_job_id = ?
+    `).run(
+      transition.status,
+      transition.provider_job_id,
+      transition.output_asset_id,
+      now,
+      now,
+      row.ai_generation_job_id
+    );
+    const updated = getAiGenerationJobRow(row.ai_generation_job_id);
+    const provenance = ensureAssetProvenanceForCompletedJob(updated, input, actor, now);
+    recordStudioB1Event(updated, "ai_generation_job.completed", actor, {
+      status: transition.status,
+      output_asset_id: outputAssetId,
+      asset_provenance_id: provenance.asset_provenance_id,
+      provider_id: updated.provider_id,
+      no_external_provider_call: true,
+      no_credit_consumption: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return {
+      ai_generation_job: getAiGenerationJob(row.ai_generation_job_id, null, { includeProvenance: true }),
+      asset_provenance: provenance
+    };
+  })();
+  return result;
+}
+
+function failAiGenerationJob(jobId, input = {}, actor = {}) {
+  assertStudioB1RouteBoundary(input);
+  return db.transaction(() => {
+    const row = getAiGenerationJobRow(jobId);
+    if (!row || row.deleted_at) throw requestError("AI generation job not found", 404);
+    assertCampaignProjectInputScope(input, row, "AI generation job");
+    const nextStatus = cleanString(input.status || input.next_status || input.nextStatus || "failed");
+    const errorClass = cleanString(input.error_class || input.errorClass || (nextStatus === "timeout" ? "timeout" : "unknown_provider_error"));
+    const transition = normalizeStudioB1JobTransition(row.status, {
+      status: nextStatus,
+      error_class: errorClass,
+      error_message: cleanString(input.error_message || input.errorMessage || "manual failure recorded"),
+      retry_increment: true
+    });
+    const retryCount = Math.min((asInteger(row.retry_count) || 0) + 1, asInteger(row.max_retries) || 0);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE ai_generation_jobs SET
+        status = ?,
+        error_class = ?,
+        error_message = ?,
+        retry_count = ?,
+        completed_at = CASE WHEN ? IN ('failed_terminal') THEN ? ELSE completed_at END,
+        updated_at = ?
+      WHERE ai_generation_job_id = ?
+    `).run(
+      transition.status,
+      transition.error_class,
+      transition.error_message,
+      retryCount,
+      transition.status,
+      now,
+      now,
+      row.ai_generation_job_id
+    );
+    const updated = getAiGenerationJobRow(row.ai_generation_job_id);
+    recordStudioB1Event(updated, "ai_generation_job.failed", actor, {
+      status: updated.status,
+      error_class: updated.error_class,
+      retry_count: updated.retry_count,
+      no_external_provider_call: true,
+      no_credit_consumption: true
+    }, now);
+    return publicAiGenerationJob(updated, { includeProvenance: true });
+  })();
+}
+
+function softDeleteAiGenerationJob(jobId, actor = {}) {
+  return db.transaction(() => {
+    const row = getAiGenerationJobRow(jobId);
+    if (!row || row.deleted_at) throw requestError("AI generation job not found", 404);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE ai_generation_jobs SET
+        deleted_at = ?,
+        updated_at = ?
+      WHERE ai_generation_job_id = ?
+    `).run(now, now, row.ai_generation_job_id);
+    const updated = getAiGenerationJobRow(row.ai_generation_job_id);
+    recordStudioB1Event(updated, "ai_generation_job.deleted", actor, { deleted_at: now }, now);
+    return publicAiGenerationJob(updated, { includeProvenance: true });
+  })();
+}
+
+function createAssetProvenance(input = {}, actor = {}) {
+  assertStudioB1RouteBoundary(input);
+  const provenance = db.transaction(() => {
+    const scope = resolveStudioB1Scope(input);
+    const existing = getAssetProvenanceRowByAsset(cleanId(input.asset_id || input.assetId));
+    if (existing && !existing.deleted_at) throw requestError("asset_id already has provenance", 409);
+    const contract = buildAssetProvenanceContract(input, {
+      asset_provenance_id: cleanId(input.asset_provenance_id || input.assetProvenanceId) ||
+        nextEntityId("apv", `${scope.store_id}-${scope.screen_group_id}`),
+      tenant_id: scope.tenant_id,
+      store_id: scope.store_id,
+      screen_group_id: scope.screen_group_id,
+      campaign_project_id: scope.campaign_project_id,
+      created_by_actor_type: "admin",
+      created_by_actor_id: actor.actor_id || "admin"
+    });
+    assertValidAssetProvenanceContract(contract);
+    insertAssetProvenanceContract(contract, nowIso());
+    return getAssetProvenance(contract.asset_provenance_id);
+  })();
+  return provenance;
+}
+
+function listAssetProvenance(query = {}) {
+  const scope = normalizeCampaignProjectScopeQuery(query);
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  const rightsStatus = cleanString(query.rights_review_status || query.rightsReviewStatus);
+  if (rightsStatus && !RIGHTS_REVIEW_STATUSES.includes(rightsStatus)) {
+    throw requestError(`rights_review_status must be one of: ${RIGHTS_REVIEW_STATUSES.join(", ")}`, 400);
+  }
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM asset_provenance
+    WHERE (? = '' OR tenant_id = ?)
+      AND (? = '' OR store_id = ?)
+      AND (? = '' OR screen_group_id = ?)
+      AND (? = '' OR campaign_project_id = ?)
+      AND (? = '' OR ai_generation_job_id = ?)
+      AND (? = '' OR rights_review_status = ?)
+      AND (? = 1 OR deleted_at IS NULL)
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(
+    scope.tenant_id, scope.tenant_id,
+    scope.store_id, scope.store_id,
+    scope.screen_group_id, scope.screen_group_id,
+    cleanId(query.campaign_project_id || query.campaignProjectId), cleanId(query.campaign_project_id || query.campaignProjectId),
+    cleanId(query.ai_generation_job_id || query.aiGenerationJobId), cleanId(query.ai_generation_job_id || query.aiGenerationJobId),
+    rightsStatus, rightsStatus,
+    includeDeleted ? 1 : 0,
+    limit
+  ).map(publicAssetProvenance);
+}
+
+function getAssetProvenance(provenanceId, scope = null) {
+  const row = getAssetProvenanceRow(provenanceId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Asset provenance");
+  return publicAssetProvenance(row);
+}
+
+function updateAssetProvenance(provenanceId, input = {}, actor = {}) {
+  assertStudioB1RouteBoundary(input);
+  return db.transaction(() => {
+    const row = getAssetProvenanceRow(provenanceId);
+    if (!row || row.deleted_at) throw requestError("Asset provenance not found", 404);
+    assertCampaignProjectInputScope(input, row, "Asset provenance");
+    const patch = {
+      ...publicAssetProvenance(row),
+      license_status: cleanString(input.license_status || input.licenseStatus || row.license_status),
+      commercial_use_allowed: normalizeOptionalBoolean(input.commercial_use_allowed ?? input.commercialUseAllowed, row.commercial_use_allowed === 1),
+      rights_review_status: cleanString(input.rights_review_status || input.rightsReviewStatus || row.rights_review_status),
+      reviewed_by_actor_id: cleanId(input.reviewed_by_actor_id || input.reviewedByActorId || actor.actor_id || row.reviewed_by_actor_id),
+      review_notes: cleanString(input.review_notes || input.reviewNotes || row.review_notes).slice(0, 2000)
+    };
+    const wantsPublishCandidate = input.publish_candidate_allowed !== undefined || input.publishCandidateAllowed !== undefined
+      ? normalizeBooleanFlag(input.publish_candidate_allowed ?? input.publishCandidateAllowed)
+      : row.publish_candidate_allowed === 1;
+    patch.publish_candidate_allowed = wantsPublishCandidate;
+    assertValidAssetProvenanceContract(patch);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE asset_provenance SET
+        license_status = ?,
+        commercial_use_allowed = ?,
+        rights_review_status = ?,
+        reviewed_by_actor_id = ?,
+        review_notes = ?,
+        publish_candidate_allowed = ?,
+        updated_at = ?
+      WHERE asset_provenance_id = ?
+    `).run(
+      patch.license_status,
+      patch.commercial_use_allowed ? 1 : 0,
+      patch.rights_review_status,
+      patch.reviewed_by_actor_id,
+      patch.review_notes,
+      patch.publish_candidate_allowed ? 1 : 0,
+      now,
+      row.asset_provenance_id
+    );
+    const updated = getAssetProvenanceRow(row.asset_provenance_id);
+    let linkedJob = null;
+    if (updated.ai_generation_job_id && updated.rights_review_status === "approved" && updated.publish_candidate_allowed === 1) {
+      db.prepare(`
+        UPDATE ai_generation_jobs SET
+          status = CASE WHEN status = 'asset_review_required' THEN 'succeeded' ELSE status END,
+          updated_at = ?
+        WHERE ai_generation_job_id = ?
+      `).run(now, updated.ai_generation_job_id);
+      linkedJob = getAiGenerationJob(updated.ai_generation_job_id, null, { includeProvenance: true });
+    }
+    if (updated.campaign_project_id) {
+      recordCampaignProjectEvent(updated.campaign_project_id, "", "asset_provenance.updated", "admin", actor.actor_id || "admin", {
+        asset_provenance_id: updated.asset_provenance_id,
+        asset_id: updated.asset_id,
+        rights_review_status: updated.rights_review_status,
+        publish_candidate_allowed: updated.publish_candidate_allowed === 1,
+        no_content_manifest_creation: true,
+        no_publish: true
+      }, now);
+    }
+    return {
+      asset_provenance: publicAssetProvenance(updated),
+      ai_generation_job: linkedJob
+    };
+  })();
+}
+
+function softDeleteAssetProvenance(provenanceId, actor = {}) {
+  return db.transaction(() => {
+    const row = getAssetProvenanceRow(provenanceId);
+    if (!row || row.deleted_at) throw requestError("Asset provenance not found", 404);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE asset_provenance SET
+        deleted_at = ?,
+        updated_at = ?
+      WHERE asset_provenance_id = ?
+    `).run(now, now, row.asset_provenance_id);
+    const updated = getAssetProvenanceRow(row.asset_provenance_id);
+    if (updated.campaign_project_id) {
+      recordCampaignProjectEvent(updated.campaign_project_id, "", "asset_provenance.deleted", "admin", actor.actor_id || "admin", {
+        asset_provenance_id: updated.asset_provenance_id,
+        asset_id: updated.asset_id
+      }, now);
+    }
+    return publicAssetProvenance(updated);
+  })();
+}
+
+function ensureAssetProvenanceForCompletedJob(jobRow, input = {}, actor = {}, createdAt = nowIso()) {
+  const existing = getAssetProvenanceRowByAsset(jobRow.output_asset_id);
+  if (existing && !existing.deleted_at) return publicAssetProvenance(existing);
+  const sourceType = jobRow.provider_id === "manual_upload" ? "manual_upload" : "mock_fixture";
+  const contract = buildAssetProvenanceContract(input, {
+    asset_provenance_id: nextEntityId("apv", jobRow.output_asset_id),
+    asset_id: jobRow.output_asset_id,
+    tenant_id: jobRow.tenant_id,
+    store_id: jobRow.store_id,
+    screen_group_id: jobRow.screen_group_id,
+    campaign_project_id: jobRow.campaign_project_id,
+    ai_generation_job_id: jobRow.ai_generation_job_id,
+    source_type: sourceType,
+    generated_by_provider: jobRow.provider_id,
+    provider_model: jobRow.provider_model,
+    provider_job_id: jobRow.provider_job_id,
+    prompt_hash: jobRow.prompt_hash,
+    reference_asset_ids: parseJson(jobRow.reference_asset_ids_json || "[]", []),
+    created_by_actor_type: "admin",
+    created_by_actor_id: actor.actor_id || "admin",
+    commercial_use_allowed: false
+  });
+  assertValidAssetProvenanceContract(contract);
+  insertAssetProvenanceContract(contract, createdAt);
+  return getAssetProvenance(contract.asset_provenance_id);
+}
+
+function insertAssetProvenanceContract(contract, createdAt = nowIso()) {
+  db.prepare(`
+    INSERT INTO asset_provenance (
+      asset_provenance_id, asset_id, tenant_id, store_id, screen_group_id,
+      campaign_project_id, ai_generation_job_id, source_type, license_status,
+      commercial_use_allowed, rights_review_status, generated_by_provider,
+      provider_model, provider_job_id, prompt_hash, reference_asset_ids_json,
+      source_asset_ids_json, created_by_actor_type, created_by_actor_id,
+      reviewed_by_actor_id, review_notes, publish_candidate_allowed,
+      no_external_provider_call, no_secret_material, no_credit_consumption,
+      no_content_manifest_creation, no_publish, deleted_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 1, NULL, ?, ?)
+  `).run(
+    contract.asset_provenance_id,
+    contract.asset_id,
+    contract.tenant_id,
+    contract.store_id,
+    contract.screen_group_id,
+    contract.campaign_project_id,
+    contract.ai_generation_job_id,
+    contract.source_type,
+    contract.license_status,
+    contract.commercial_use_allowed ? 1 : 0,
+    contract.rights_review_status,
+    contract.generated_by_provider,
+    contract.provider_model,
+    contract.provider_job_id,
+    contract.prompt_hash,
+    safeJsonStringify(contract.reference_asset_ids, 20000),
+    safeJsonStringify(contract.source_asset_ids, 20000),
+    contract.created_by_actor_type,
+    contract.created_by_actor_id,
+    contract.reviewed_by_actor_id,
+    contract.review_notes,
+    contract.publish_candidate_allowed ? 1 : 0,
+    createdAt,
+    createdAt
+  );
+}
+
+function resolveStudioB1Scope(input = {}) {
+  const projectId = cleanId(input.campaign_project_id || input.campaignProjectId);
+  if (projectId) {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow || projectRow.status === "deleted") throw requestError("Campaign project not found", 404);
+    assertCampaignProjectInputScope(input, projectRow, "Campaign project");
+    return {
+      tenant_id: cleanId(projectRow.tenant_id),
+      store_id: cleanId(projectRow.store_id),
+      screen_group_id: cleanId(projectRow.screen_group_id),
+      campaign_project_id: cleanId(projectRow.campaign_project_id),
+      campaign_project_revision: 1,
+      projectRow
+    };
+  }
+  const scope = normalizeCampaignScope(input, { requireStore: true, requireScreenGroup: true });
+  return {
+    tenant_id: scope.tenant_id,
+    store_id: scope.store_id,
+    screen_group_id: scope.screen_group_id,
+    campaign_project_id: "",
+    campaign_project_revision: 0,
+    projectRow: null
+  };
+}
+
+function assertStudioB1SceneScope(sceneId, projectRow) {
+  const scene = getCampaignProjectSceneRow(sceneId);
+  if (!scene || scene.status === "deleted") throw requestError("Campaign project scene not found", 404);
+  if (!projectRow || cleanId(scene.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+    throw requestError("Campaign project scene is outside project scope", 403);
+  }
+  collectScopeMismatchErrorsOrThrow(projectRow, scene, "Campaign project scene");
+}
+
+function collectScopeMismatchErrorsOrThrow(projectRow, source, sourceName) {
+  for (const field of ["tenant_id", "store_id", "screen_group_id"]) {
+    if (cleanId(projectRow[field]) !== cleanId(source[field])) {
+      throw requestError(`${sourceName} is outside ${field.replace("_id", "")} scope`, 403);
+    }
+  }
+}
+
+function assertStudioB1RouteBoundary(input = {}) {
+  try {
+    assertStudioB1InputBoundary(input);
+  } catch (error) {
+    throw requestError(error.message || "Studio Execution B1 input is out of scope", 400);
+  }
+}
+
+function assertValidGenerationJobContract(contract) {
+  const validation = validateGenerationJobContract(contract);
+  if (!validation.valid) {
+    throw requestError(`generation job contract is invalid: ${validation.errors.map((error) => error.code).join(", ")}`, 400);
+  }
+}
+
+function assertValidAssetProvenanceContract(contract) {
+  const validation = validateAssetProvenanceContract(contract);
+  if (!validation.valid) {
+    throw requestError(`asset provenance contract is invalid: ${validation.errors.map((error) => `${error.field}:${error.code}`).join(", ")}`, 400);
+  }
+}
+
+function normalizeStudioB1JobTransition(status, input) {
+  try {
+    return normalizeJobTransition(status, input);
+  } catch (error) {
+    throw requestError(error.message || "generation job transition is invalid", 400);
+  }
+}
+
+function recordStudioB1Event(jobRow, action, actor = {}, metadata = {}, createdAt = nowIso()) {
+  if (jobRow.campaign_project_id) {
+    recordCampaignProjectEvent(jobRow.campaign_project_id, jobRow.campaign_project_scene_id || "", action, "admin", actor.actor_id || "admin", {
+      ai_generation_job_id: jobRow.ai_generation_job_id,
+      ...metadata,
+      no_external_provider_call: true,
+      no_secret_material: true,
+      no_credit_consumption: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, createdAt);
+  }
+}
+
+function getAiGenerationJobRow(jobId) {
+  return db.prepare("SELECT * FROM ai_generation_jobs WHERE ai_generation_job_id = ?").get(cleanId(jobId));
+}
+
+function getAssetProvenanceRow(provenanceId) {
+  return db.prepare("SELECT * FROM asset_provenance WHERE asset_provenance_id = ?").get(cleanId(provenanceId));
+}
+
+function getAssetProvenanceRowByAsset(assetId) {
+  return db.prepare("SELECT * FROM asset_provenance WHERE asset_id = ?").get(cleanId(assetId));
+}
+
+function listAssetProvenanceForJob(jobId) {
+  return db.prepare(`
+    SELECT * FROM asset_provenance
+    WHERE ai_generation_job_id = ?
+      AND deleted_at IS NULL
+    ORDER BY created_at DESC, id DESC
+  `).all(cleanId(jobId)).map(publicAssetProvenance);
+}
+
+function publicStudioGenerationProvider(row) {
+  return {
+    schema_version: "studio-generation-provider/b1",
+    provider_id: cleanId(row.provider_id),
+    provider_type: cleanString(row.provider_type),
+    display_name: cleanString(row.display_name),
+    capabilities: parseJson(row.capabilities_json || "[]", []),
+    external_network_allowed: row.external_network_allowed === 1,
+    secrets_required: row.secrets_required === 1,
+    mcp_runtime_dependency: row.mcp_runtime_dependency === 1,
+    status: cleanString(row.status),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    no_external_provider_call: true,
+    no_paid_provider_call: true,
+    no_mcp_runtime_dependency: true,
+    no_secret_material: true,
+    no_credit_consumption: true
+  };
+}
+
+function publicAiGenerationJob(row, options = {}) {
+  const job = {
+    schema_version: "studio-generation-job/b1",
+    provider_contract_version: PROVIDER_CONTRACT_VERSION,
+    ai_generation_job_id: cleanId(row.ai_generation_job_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 0,
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    requested_asset_role: cleanString(row.requested_asset_role),
+    provider_id: cleanString(row.provider_id),
+    provider_model: cleanString(row.provider_model),
+    capability: cleanString(row.capability),
+    input_snapshot: parseJson(row.input_snapshot_json || "{}", {}),
+    input_sha256: cleanString(row.input_sha256),
+    prompt_hash: cleanString(row.prompt_hash),
+    reference_asset_ids: parseJson(row.reference_asset_ids_json || "[]", []),
+    idempotency_key: cleanString(row.idempotency_key),
+    status: cleanString(row.status),
+    error_class: cleanString(row.error_class),
+    error_message: cleanString(row.error_message),
+    provider_job_id: cleanString(row.provider_job_id),
+    output_asset_id: cleanId(row.output_asset_id),
+    cost_estimate_units: asInteger(row.cost_estimate_units) || 0,
+    cost_actual_units: asInteger(row.cost_actual_units),
+    actor_type: cleanString(row.actor_type),
+    actor_id: cleanId(row.actor_id),
+    retry_count: asInteger(row.retry_count) || 0,
+    max_retries: asInteger(row.max_retries) || 0,
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    started_at: cleanString(row.started_at),
+    completed_at: cleanString(row.completed_at),
+    updated_at: cleanString(row.updated_at),
+    no_external_provider_call: row.no_external_provider_call === 1,
+    no_paid_provider_call: row.no_paid_provider_call === 1,
+    no_mcp_runtime_dependency: row.no_mcp_runtime_dependency === 1,
+    no_secret_material: row.no_secret_material === 1,
+    no_credit_consumption: row.no_credit_consumption === 1,
+    no_content_manifest_creation: row.no_content_manifest_creation === 1,
+    no_publish: row.no_publish === 1
+  };
+  if (options.includeProvenance) {
+    job.asset_provenance = listAssetProvenanceForJob(job.ai_generation_job_id);
+  }
+  return job;
+}
+
+function publicAssetProvenance(row) {
+  return {
+    schema_version: "studio-asset-provenance/b1",
+    asset_provenance_id: cleanId(row.asset_provenance_id),
+    asset_id: cleanId(row.asset_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    ai_generation_job_id: cleanId(row.ai_generation_job_id),
+    source_type: cleanString(row.source_type),
+    license_status: cleanString(row.license_status),
+    commercial_use_allowed: row.commercial_use_allowed === 1 || row.commercial_use_allowed === true,
+    rights_review_status: cleanString(row.rights_review_status),
+    generated_by_provider: cleanString(row.generated_by_provider),
+    provider_model: cleanString(row.provider_model),
+    provider_job_id: cleanString(row.provider_job_id),
+    prompt_hash: cleanString(row.prompt_hash),
+    reference_asset_ids: parseJson(row.reference_asset_ids_json || "[]", []),
+    source_asset_ids: parseJson(row.source_asset_ids_json || "[]", []),
+    created_by_actor_type: cleanString(row.created_by_actor_type),
+    created_by_actor_id: cleanId(row.created_by_actor_id),
+    reviewed_by_actor_id: cleanId(row.reviewed_by_actor_id),
+    review_notes: cleanString(row.review_notes),
+    publish_candidate_allowed: row.publish_candidate_allowed === 1 || row.publish_candidate_allowed === true,
+    can_enter_publish_candidate: canAssetEnterPublishCandidate({
+      source_type: cleanString(row.source_type),
+      license_status: cleanString(row.license_status),
+      commercial_use_allowed: row.commercial_use_allowed === 1 || row.commercial_use_allowed === true,
+      rights_review_status: cleanString(row.rights_review_status)
+    }),
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    no_external_provider_call: row.no_external_provider_call === 1,
+    no_secret_material: row.no_secret_material === 1,
+    no_credit_consumption: row.no_credit_consumption === 1,
+    no_content_manifest_creation: row.no_content_manifest_creation === 1,
+    no_publish: row.no_publish === 1
+  };
+}
+
+function normalizeOptionalBoolean(value, fallback) {
+  if (value === undefined || value === null || value === "") return Boolean(fallback);
+  return normalizeBooleanFlag(value);
 }
 
 function getStudioLayoutTemplate(layoutTemplateId = "") {

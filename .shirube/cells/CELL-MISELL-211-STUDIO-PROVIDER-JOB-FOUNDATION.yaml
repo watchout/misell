@@ -1,0 +1,88 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-211-STUDIO-PROVIDER-JOB-FOUNDATION
+parent_ssot: https://github.com/watchout/misell/issues/211
+title: Studio provider-job and asset-provenance foundation
+cell_type: runtime_foundation
+risk_class: R3
+owner:
+  role: repo_owner
+  actor: watchout
+approval_ref: https://github.com/watchout/misell/issues/211#issuecomment-4825240265
+security_approval_ref: https://github.com/watchout/misell/issues/211#issuecomment-4825217987
+goal: Add Studio Execution B1 provider-job foundation for manual upload/mock provider jobs and asset provenance, without real provider integration, external AI calls, paid calls, MCP runtime dependency, credit mutation, content_manifest creation, publish, schedule activation, Player/device mutation, or customer controls.
+non_scope:
+  - real provider integration including fal, Replicate, Higgsfield, MiniMax, Runway, Veo, Sora, Kling, Seedance, Luma, OpenAI, Gemini, or local ComfyUI
+  - paid calls, API key storage, webhooks, external network calls, MCP runtime dependency inside Cloud, or secret handling
+  - customer-facing controls, customer project editing, customer provider selection, or public unauthenticated routes
+  - quota, credit ledger, pricing, billing, guarantee, or account balance mutation
+  - generated final copy, legal text, price, CTA, logo, or LLM final authority
+  - content_manifest creation, schedule activation, publish, Player/device mutation, delivery policy mutation, or ad delivery behavior
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-211-STUDIO-PROVIDER-JOB-FOUNDATION.yaml
+  - .shirube/control-handoffs/CH-MISELL-211-studio-provider-job-foundation.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-211-STUDIO-PROVIDER-JOB-FOUNDATION.yaml
+  - apps/cloud/README.md
+  - apps/cloud/lib/studio-provider-job-contract.js
+  - apps/cloud/package.json
+  - apps/cloud/scripts/smoke-studio-provider-job-foundation.mjs
+  - apps/cloud/server.js
+  - package.json
+  - scripts/ci/db-migration-dry-run.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/player/**
+  - apps/cloud/public/**
+  - apps/cloud/scripts/backup-*.mjs
+  - apps/cloud/scripts/restore-*.mjs
+protected_surfaces:
+  - db_migration
+  - runtime
+  - admin_api
+stop_conditions:
+  - real provider, external AI, paid call, secret storage, webhook, or MCP runtime integration is needed
+  - generated media, production render, MP4 export, content_manifest creation, publish, schedule activation, Player, or device mutation is needed
+  - customer/public provider UI or customer editing is needed
+  - quota/ledger, pricing, billing, guarantee, advertiser report, or ad delivery behavior is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing validation evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add additive Cloud schema for studio_generation_providers, ai_generation_jobs, and asset_provenance.
+  - Provider catalog is limited to manual_upload and mock_provider, both with no external network, no secrets, and no MCP runtime dependency.
+  - Admin/operator APIs can create/list/get/start/complete/fail/soft-delete B1 generation jobs.
+  - Admin/operator APIs can create/list/get/update/soft-delete asset provenance.
+  - Generation jobs require tenant/store/screen_group scope, idempotency_key, bounded status lifecycle, retry_count/max_retries, error_class, actor evidence, and zero-cost/no-side-effect guard fields.
+  - Asset provenance records source_type, license_status, commercial_use_allowed, rights_review_status, provider evidence, prompt/reference hashes, actor/reviewer evidence, and publish_candidate_allowed gate.
+  - Scope mismatches reject by tenant/store/screen_group and deleted records are hidden by default.
+  - Real provider IDs, secret-like fields, external provider calls, and credit/content_manifest/publish inputs are rejected.
+  - Smoke coverage proves idempotency, retry/error classification, provenance requirement, no external provider call, no secret exposure, no credit consumption, no content_manifest creation, and no publish.
+  - Existing CI DB dry-run validates the B1 schema and root test:ci includes the B1 smoke.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-provider-job-foundation
+    - npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract
+    - node scripts/ci/db-migration-dry-run.js
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-211-REAL-PROVIDER-ADAPTER-GATE
+  - CELL-MISELL-211-PROVIDER-WEBHOOK-AND-SECRET-HANDLING
+  - CELL-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING
