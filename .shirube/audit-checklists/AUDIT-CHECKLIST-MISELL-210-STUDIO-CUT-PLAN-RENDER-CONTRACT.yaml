@@ -1,0 +1,104 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-210-STUDIO-CUT-PLAN-RENDER-CONTRACT
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-210-studio-cut-plan-render-contract.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-210-STUDIO-CUT-PLAN-RENDER-CONTRACT.yaml
+  cell_id: CELL-MISELL-210-STUDIO-CUT-PLAN-RENDER-CONTRACT
+  pr: watchout/misell#TBD
+items:
+  - item_id: SCP-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: SCP-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden paths are touched, especially deploy, secrets, branch protection/rulesets, Player, public UI, backup/restore scripts, or external surfaces.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: SCP-AUDIT-003
+    source: schema
+    verification_method: semantic
+    required: true
+    prompt: Verify migration is additive and creates studio_layout_templates, studio_cut_plans, studio_render_manifests, and studio_render_qa_results without destructive changes.
+    expected_evidence:
+      - code_review
+      - db_migration_dry_run
+  - item_id: SCP-AUDIT-004
+    source: cut_plan_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify Scene-to-cut-plan mapping is deterministic and records source_scene_ids, cut_plan_version, layout template, screen/copy bindings, deterministic identity, and source-of-truth guard fields.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SCP-AUDIT-005
+    source: api_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify Admin APIs enforce tenant/store/screen_group scope for project/cut-plan/render-manifest list, detail, validate, QA, and delete operations.
+    expected_evidence:
+      - route_review
+      - smoke_result
+  - item_id: SCP-AUDIT-006
+    source: validation
+    verification_method: semantic
+    required: true
+    prompt: Verify invalid cut-plans are rejected or marked failed by executable checks for schema, layout, duration, CTA, guaranteed claims, direct PII, deterministic price/legal/CTA rendering, and no critical copy across bezel.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SCP-AUDIT-007
+    source: render_manifest
+    verification_method: semantic
+    required: true
+    prompt: Verify render_manifest is html_preview only, stores render_state_json/output_sha256/renderer_version/template_version, and treats MP4 as export artifact only.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SCP-AUDIT-008
+    source: qa_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify executable QA creates studio_render_qa_results, updates manifest qa_status, and QA-failed output cannot become a publish candidate in this slice.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SCP-AUDIT-009
+    source: side_effect_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify A1 does not call external AI, create provider jobs, generate media, export MP4, create content_manifest rows, publish, mutate Player/device delivery, or consume credits.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SCP-AUDIT-010
+    source: soft_delete
+    verification_method: semantic
+    required: true
+    prompt: Verify cut plans and render manifests use soft delete and default list APIs hide deleted rows.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SCP-AUDIT-011
+    source: ci_gate
+    verification_method: executable
+    required: true
+    prompt: Verify smoke:studio-cut-plan-render-contract is included in package scripts/root test:ci, and db-migration-dry-run asserts the A1 schema. Verify this PR does not mutate workflow files.
+    expected_evidence:
+      - package_script
+      - db_migration_dry_run
+      - workflow_non_mutation
+  - item_id: SCP-AUDIT-012
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

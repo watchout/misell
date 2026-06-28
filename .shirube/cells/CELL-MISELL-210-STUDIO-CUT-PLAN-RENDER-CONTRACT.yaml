@@ -1,0 +1,84 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-210-STUDIO-CUT-PLAN-RENDER-CONTRACT
+parent_ssot: https://github.com/watchout/misell/issues/210
+title: Studio cut-plan and deterministic render-manifest contract
+cell_type: runtime_foundation
+risk_class: R3
+owner:
+  role: repo_owner
+  actor: watchout
+approval_ref: https://github.com/watchout/misell/issues/210#issuecomment-4825043732
+goal: Add Studio Execution A1 contract-first persistence and Admin APIs for Scene-to-cut-plan mapping, deterministic HTML preview render manifests, and executable QA without AI providers, MP4 export, publish, or content_manifest creation.
+non_scope:
+  - external AI, LLM provider call, provider adapter, or model-generated final authority
+  - image/video/media generation, production Remotion render, MP4 export, generated_media, or asset creation
+  - content_manifest creation, schedule activation, publish, Player/device mutation, or delivery policy mutation
+  - measurement/QR binding beyond approved hook fields already present in the cut-plan contract
+  - credit ledger, pricing, quota, billing, guarantee, advertiser surface, or ad delivery behavior
+  - external preview token, customer collaboration route, public unauthenticated route, or customer editing
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-210-STUDIO-CUT-PLAN-RENDER-CONTRACT.yaml
+  - .shirube/control-handoffs/CH-MISELL-210-studio-cut-plan-render-contract.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-210-STUDIO-CUT-PLAN-RENDER-CONTRACT.yaml
+  - apps/cloud/README.md
+  - apps/cloud/lib/studio-cut-plan-render-contract.js
+  - apps/cloud/package.json
+  - apps/cloud/scripts/smoke-studio-cut-plan-render-contract.mjs
+  - apps/cloud/server.js
+  - package.json
+  - scripts/ci/db-migration-dry-run.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/player/**
+  - apps/cloud/public/**
+  - apps/cloud/scripts/backup-*.mjs
+  - apps/cloud/scripts/restore-*.mjs
+protected_surfaces:
+  - db_migration
+  - runtime
+  - admin_api
+stop_conditions:
+  - external AI/provider integration is needed
+  - generated media, Remotion render, MP4 export, content_manifest creation, publish, schedule activation, Player, or device mutation is needed
+  - public/customer/external preview surface is needed
+  - measurement/QR, quota/ledger, pricing, billing, advertiser reporting, or ad delivery behavior is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing validation evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Add additive Cloud schema for layout templates, cut plans, render manifests, and render QA results.
+  - Admin API can create/list/get/validate/soft-delete cut plans from non-deleted CampaignProjects with active Scenes.
+  - Scene-to-cut-plan mapping is deterministic and stores source_scene_ids, cut_plan_version, screen bindings, copy bindings, asset requirements, and deterministic identity.
+  - Admin API can create/get/list/soft-delete html_preview render manifests from validated cut plans.
+  - Render manifest stores render_state_json, output_sha256, renderer_version, template_version, QA status, and source-of-truth evidence.
+  - Executable QA checks schema/layout/copy safety/source-of-truth and records render QA result rows.
+  - Scope mismatches reject by tenant/store/screen_group.
+  - Invalid cut-plan inputs reject before persistence.
+  - Smoke coverage proves no external AI, no media generation, no MP4 export, no content_manifest creation, no publish, and no credit consumption.
+  - Existing CI DB dry-run validates the new A1 schema and root test:ci includes the A1 smoke.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract
+    - npm --prefix apps/cloud run smoke:campaign-generator-foundation
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING
+  - CELL-MISELL-211-PROVIDER-JOBS-PROVENANCE

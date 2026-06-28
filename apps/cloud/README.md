@@ -196,6 +196,31 @@ tenant/store/screen-group scope mismatches.
 This foundation slice does not call external AI, does not generate media, does
 not render, does not create `content_manifest` rows, and does not publish.
 
+Studio Execution A1 adds the first contract layer after editable Scenes:
+`CampaignProject` + active Scenes can create a validated `studio_cut_plan`,
+then a deterministic `studio_render_manifest` with executable
+`studio_render_qa_results`. The source of truth remains the structured
+CampaignProject/Scene/cut-plan/render-state data; MP4 is an export artifact and
+is not created in A1.
+
+Admin-only endpoints:
+
+- `GET /api/admin/campaign-projects/:id/cut-plans`
+- `POST /api/admin/campaign-projects/:id/cut-plans`
+- `GET /api/admin/studio-cut-plans/:cut_plan_id`
+- `POST /api/admin/studio-cut-plans/:cut_plan_id/validate`
+- `DELETE /api/admin/studio-cut-plans/:cut_plan_id`
+- `GET /api/admin/studio-cut-plans/:cut_plan_id/render-manifests`
+- `POST /api/admin/studio-cut-plans/:cut_plan_id/render-manifests`
+- `GET /api/admin/studio-render-manifests/:render_manifest_id`
+- `POST /api/admin/studio-render-manifests/:render_manifest_id/qa`
+- `DELETE /api/admin/studio-render-manifests/:render_manifest_id`
+
+A1 refuses external AI/provider jobs, generated media, MP4 export,
+`content_manifest` creation, publish, and credit/billing behavior. QA checks are
+deterministic and include schema/layout/copy-safety/source-of-truth assertions.
+The smoke target is `npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract`.
+
 Scene Editor partial regeneration requests are also event-only stubs. Operators
 can request `scene_regeneration`, `copy_regeneration`, or
 `qr_cta_regeneration` for a non-deleted scene, and Cloud records a
