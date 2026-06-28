@@ -52,7 +52,16 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
   const Database = require(path.join(repoRoot, "apps/cloud/node_modules/better-sqlite3"));
   const db = new Database(dbPath, { readonly: true });
   try {
-    for (const table of ["screen_slots", "screen_device_bindings", "content_approvals", "publish_history"]) {
+    for (const table of [
+      "screen_slots",
+      "screen_device_bindings",
+      "content_approvals",
+      "publish_history",
+      "studio_layout_templates",
+      "studio_cut_plans",
+      "studio_render_manifests",
+      "studio_render_qa_results"
+    ]) {
       const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
       if (!row) throw new Error(`Expected Studio Phase 1 table '${table}' to exist`);
     }
@@ -87,6 +96,33 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "content_hash",
       "approval_snapshot_json",
       "approval_hash"
+    ]);
+    assertColumns(db, "studio_cut_plans", [
+      "cut_plan_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "campaign_project_id",
+      "cut_plan_version",
+      "layout_template_id",
+      "deterministic_identity_json",
+      "validation_status"
+    ]);
+    assertColumns(db, "studio_render_manifests", [
+      "render_manifest_id",
+      "cut_plan_id",
+      "renderer_version",
+      "output_type",
+      "output_sha256",
+      "qa_status",
+      "render_state_json"
+    ]);
+    assertColumns(db, "studio_render_qa_results", [
+      "render_qa_result_id",
+      "render_manifest_id",
+      "qa_suite_version",
+      "checks_json",
+      "blocked_reasons_json"
     ]);
   } finally {
     db.close();

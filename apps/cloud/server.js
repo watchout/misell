@@ -35,6 +35,16 @@ const {
   validateSceneDraft,
   assertNoOutOfScopeCampaignGeneratorInput
 } = require("./lib/campaign-generator-contract");
+const {
+  CUT_PLAN_STATUSES,
+  RENDERER_VERSION,
+  QA_SUITE_VERSION,
+  defaultLayoutTemplate,
+  buildCutPlanContract,
+  validateCutPlanContract,
+  buildRenderManifestContract,
+  runRenderQaContract
+} = require("./lib/studio-cut-plan-render-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -169,6 +179,7 @@ const CUSTOMER_VISIBLE_CAMPAIGN_PROPOSAL_STATUS = new Set(["proposed", "selected
 const CAMPAIGN_PROJECT_STATUS = new Set(CAMPAIGN_PROJECT_STATUSES);
 const CAMPAIGN_PROJECT_SCENE_STATUS = new Set(CAMPAIGN_PROJECT_SCENE_STATUSES);
 const CAMPAIGN_PROJECT_SOURCE_TYPE = new Set(CAMPAIGN_PROJECT_SOURCE_TYPES);
+const STUDIO_CUT_PLAN_STATUS = new Set(CUT_PLAN_STATUSES);
 const CAMPAIGN_PROJECT_REGENERATION_REQUEST_TYPES = new Set(["scene_regeneration", "copy_regeneration", "qr_cta_regeneration"]);
 const CAMPAIGN_PROJECT_REGENERATION_ACTIONS = Object.freeze({
   scene_regeneration: "scene.regeneration_requested",
@@ -778,6 +789,98 @@ app.get("/api/admin/campaign-projects/:campaign_project_id/schedule-handoff-draf
     const draft = getCampaignProjectScheduleHandoffDraft(cleanId(req.params.campaign_project_id), normalizeCampaignProjectScopeQuery(req.query || {}));
     if (!draft) throw requestError("Campaign project not found", 404);
     res.json({ ok: true, schedule_handoff_draft: draft });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-projects/:campaign_project_id/cut-plans", requireAdminAuth, (req, res, next) => {
+  try {
+    const cutPlans = listStudioCutPlansForProject(cleanId(req.params.campaign_project_id), req.query || {});
+    res.json({ ok: true, studio_cut_plans: cutPlans });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/cut-plans", requireAdminAuth, (req, res, next) => {
+  try {
+    const cutPlan = createStudioCutPlanFromProject(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, studio_cut_plan: cutPlan });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-cut-plans/:cut_plan_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const cutPlan = getStudioCutPlan(cleanId(req.params.cut_plan_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeRenderManifests: true });
+    if (!cutPlan) throw requestError("Studio cut plan not found", 404);
+    res.json({ ok: true, studio_cut_plan: cutPlan });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/studio-cut-plans/:cut_plan_id/validate", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = validateStudioCutPlan(cleanId(req.params.cut_plan_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/studio-cut-plans/:cut_plan_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const cutPlan = softDeleteStudioCutPlan(cleanId(req.params.cut_plan_id), req.adminActor);
+    res.json({ ok: true, studio_cut_plan: cutPlan });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-cut-plans/:cut_plan_id/render-manifests", requireAdminAuth, (req, res, next) => {
+  try {
+    const manifests = listStudioRenderManifestsForCutPlan(cleanId(req.params.cut_plan_id), req.query || {});
+    res.json({ ok: true, studio_render_manifests: manifests });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/studio-cut-plans/:cut_plan_id/render-manifests", requireAdminAuth, (req, res, next) => {
+  try {
+    const manifest = createStudioRenderManifest(cleanId(req.params.cut_plan_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, studio_render_manifest: manifest });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-render-manifests/:render_manifest_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const manifest = getStudioRenderManifest(cleanId(req.params.render_manifest_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeQaResults: true });
+    if (!manifest) throw requestError("Studio render manifest not found", 404);
+    res.json({ ok: true, studio_render_manifest: manifest });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/studio-render-manifests/:render_manifest_id/qa", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = rerunStudioRenderQa(cleanId(req.params.render_manifest_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/studio-render-manifests/:render_manifest_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const manifest = softDeleteStudioRenderManifest(cleanId(req.params.render_manifest_id), req.adminActor);
+    res.json({ ok: true, studio_render_manifest: manifest });
   } catch (error) {
     next(error);
   }
@@ -3955,6 +4058,154 @@ function schemaMigrations() {
           CREATE INDEX IF NOT EXISTS idx_playlogs_manifest_hash
             ON playlogs(manifest_hash, occurred_at);
         `);
+      }
+    },
+    {
+      version: 13,
+      name: "studio_cut_plan_render_contract",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS studio_layout_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            layout_template_id TEXT NOT NULL UNIQUE,
+            template_version TEXT NOT NULL,
+            screen_mode TEXT NOT NULL,
+            canvas_width INTEGER NOT NULL,
+            canvas_height INTEGER NOT NULL,
+            fps INTEGER NOT NULL,
+            safe_area_json TEXT NOT NULL DEFAULT '{}',
+            bezel_policy TEXT NOT NULL,
+            regions_json TEXT NOT NULL DEFAULT '[]',
+            min_font_px INTEGER NOT NULL,
+            max_line_length_chars INTEGER NOT NULL,
+            contrast_policy TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS studio_cut_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cut_plan_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_revision INTEGER NOT NULL,
+            source_scene_ids_json TEXT NOT NULL DEFAULT '[]',
+            cut_plan_version TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            layout_template_id TEXT NOT NULL,
+            scene_order_json TEXT NOT NULL DEFAULT '[]',
+            screen_bindings_json TEXT NOT NULL DEFAULT '{}',
+            copy_bindings_json TEXT NOT NULL DEFAULT '{}',
+            visual_direction_json TEXT NOT NULL DEFAULT '{}',
+            asset_requirements_json TEXT NOT NULL DEFAULT '[]',
+            brand_constraints_json TEXT NOT NULL DEFAULT '{}',
+            forbidden_elements_json TEXT NOT NULL DEFAULT '[]',
+            measurement_goal TEXT NOT NULL DEFAULT '',
+            expected_action TEXT NOT NULL DEFAULT '',
+            deterministic_identity_json TEXT NOT NULL DEFAULT '{}',
+            validation_status TEXT NOT NULL DEFAULT 'pending',
+            validation_errors_json TEXT NOT NULL DEFAULT '[]',
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT,
+            FOREIGN KEY(layout_template_id) REFERENCES studio_layout_templates(layout_template_id) ON DELETE RESTRICT
+          );
+
+          CREATE TABLE IF NOT EXISTS studio_render_manifests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            render_manifest_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_revision INTEGER NOT NULL,
+            cut_plan_id TEXT NOT NULL,
+            cut_plan_version TEXT NOT NULL,
+            layout_template_id TEXT NOT NULL,
+            template_version TEXT NOT NULL,
+            renderer TEXT NOT NULL,
+            renderer_version TEXT NOT NULL,
+            scene_ids_json TEXT NOT NULL DEFAULT '[]',
+            source_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            generated_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            provider_job_ids_json TEXT NOT NULL DEFAULT '[]',
+            output_type TEXT NOT NULL,
+            output_ref TEXT NOT NULL DEFAULT '',
+            output_sha256 TEXT NOT NULL DEFAULT '',
+            resolution_width INTEGER NOT NULL,
+            resolution_height INTEGER NOT NULL,
+            fps INTEGER NOT NULL,
+            duration_seconds INTEGER NOT NULL,
+            screen_layout TEXT NOT NULL,
+            qa_status TEXT NOT NULL DEFAULT 'pending',
+            qa_errors_json TEXT NOT NULL DEFAULT '[]',
+            render_state_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'active',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(cut_plan_id) REFERENCES studio_cut_plans(cut_plan_id) ON DELETE RESTRICT
+          );
+
+          CREATE TABLE IF NOT EXISTS studio_render_qa_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            render_qa_result_id TEXT NOT NULL UNIQUE,
+            render_manifest_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            cut_plan_id TEXT NOT NULL,
+            qa_suite_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            checks_json TEXT NOT NULL DEFAULT '[]',
+            blocked_reasons_json TEXT NOT NULL DEFAULT '[]',
+            errors_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(render_manifest_id) REFERENCES studio_render_manifests(render_manifest_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_studio_cut_plans_project
+            ON studio_cut_plans(campaign_project_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_cut_plans_scope
+            ON studio_cut_plans(tenant_id, store_id, screen_group_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_render_manifests_cut_plan
+            ON studio_render_manifests(cut_plan_id, status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_render_manifests_scope
+            ON studio_render_manifests(tenant_id, store_id, screen_group_id, qa_status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_render_qa_results_manifest
+            ON studio_render_qa_results(render_manifest_id, created_at DESC);
+        `);
+
+        const template = defaultLayoutTemplate(nowIso());
+        db.prepare(`
+          INSERT OR IGNORE INTO studio_layout_templates (
+            layout_template_id, template_version, screen_mode, canvas_width, canvas_height, fps,
+            safe_area_json, bezel_policy, regions_json, min_font_px, max_line_length_chars,
+            contrast_policy, status, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          template.layout_template_id,
+          template.template_version,
+          template.screen_mode,
+          template.canvas_width,
+          template.canvas_height,
+          template.fps,
+          safeJsonStringify(template.safe_area_px, 10000),
+          template.bezel_policy,
+          safeJsonStringify(template.regions, 20000),
+          template.min_font_px,
+          template.max_line_length_chars,
+          template.contrast_policy,
+          template.status,
+          template.created_at,
+          template.updated_at
+        );
       }
     }
   ];
@@ -8161,6 +8412,415 @@ function softDeleteCampaignProjectScene(projectId, sceneId, actor = {}) {
   return scene;
 }
 
+function createStudioCutPlanFromProject(projectId, input = {}, actor = {}) {
+  assertStudioA1InputBoundary(input);
+  const created = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const scope = normalizeCampaignProjectScopeQuery(input);
+    if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+      assertCampaignProjectInputScope(scope, projectRow, "Campaign project");
+    }
+    const scenes = listCampaignProjectScenes(projectRow.campaign_project_id);
+    if (scenes.length === 0) throw requestError("at least one active scene is required before creating a cut plan", 400);
+    const layoutTemplate = getStudioLayoutTemplate(cleanId(input.layout_template_id || input.layoutTemplateId) || "");
+    const publicProject = publicCampaignProject(projectRow);
+    const cutPlanId = cleanId(input.cut_plan_id || input.cutPlanId) ||
+      nextEntityId("scp", `${projectRow.store_id}-${projectRow.screen_group_id}`);
+    const cutPlanContract = buildCutPlanContract(publicProject, scenes, layoutTemplate, { cut_plan_id: cutPlanId });
+    const validation = validateCutPlanContract(cutPlanContract, layoutTemplate);
+    if (!validation.valid) {
+      throw requestError(`cut plan validation failed: ${validation.errors.map((error) => error.code).join(", ")}`, 400);
+    }
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO studio_cut_plans (
+        cut_plan_id, tenant_id, store_id, screen_group_id, campaign_project_id,
+        campaign_project_revision, source_scene_ids_json, cut_plan_version, status,
+        layout_template_id, scene_order_json, screen_bindings_json, copy_bindings_json,
+        visual_direction_json, asset_requirements_json, brand_constraints_json,
+        forbidden_elements_json, measurement_goal, expected_action, deterministic_identity_json,
+        validation_status, validation_errors_json, created_by_actor_id, deleted_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '[]', ?, NULL, ?, ?)
+    `).run(
+      cutPlanId,
+      cutPlanContract.tenant_id,
+      cutPlanContract.store_id,
+      cutPlanContract.screen_group_id,
+      cutPlanContract.campaign_project_id,
+      cutPlanContract.campaign_project_revision,
+      safeJsonStringify(cutPlanContract.source_scene_ids, 20000),
+      cutPlanContract.cut_plan_version,
+      cutPlanContract.layout_template_id,
+      safeJsonStringify(cutPlanContract.scene_order, 30000),
+      safeJsonStringify(cutPlanContract.screen_bindings, 30000),
+      safeJsonStringify(cutPlanContract.copy_bindings, 50000),
+      safeJsonStringify(cutPlanContract.visual_direction, 30000),
+      safeJsonStringify(cutPlanContract.asset_requirements, 30000),
+      safeJsonStringify(cutPlanContract.brand_constraints, 20000),
+      safeJsonStringify(cutPlanContract.forbidden_elements, 10000),
+      cutPlanContract.measurement_goal,
+      cutPlanContract.expected_action,
+      safeJsonStringify(cutPlanContract.deterministic_identity, 20000),
+      cleanString(actor.actor_id || "admin").slice(0, 120),
+      now,
+      now
+    );
+    recordCampaignProjectEvent(projectRow.campaign_project_id, "", "cut_plan.created", "admin", actor.actor_id || "admin", {
+      cut_plan_id: cutPlanId,
+      cut_plan_version: cutPlanContract.cut_plan_version,
+      layout_template_id: cutPlanContract.layout_template_id,
+      scene_count: cutPlanContract.source_scene_ids.length,
+      renderer_version: RENDERER_VERSION,
+      no_external_ai: true,
+      no_media_generation: true,
+      no_mp4_export: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return getStudioCutPlan(cutPlanId, null, { includeLayoutTemplate: true });
+  })();
+  recordAuditLog("admin", actor.actor_id || "admin", "studio_cut_plan.create", "studio_cut_plan", created.cut_plan_id, null, created, {
+    tenant_id: created.tenant_id,
+    store_id: created.store_id,
+    screen_group_id: created.screen_group_id,
+    campaign_project_id: created.campaign_project_id,
+    cut_plan_version: created.cut_plan_version,
+    no_external_ai: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  }, created.created_at || nowIso());
+  return created;
+}
+
+function listStudioCutPlansForProject(projectId, query = {}) {
+  const projectRow = getCampaignProjectRow(projectId);
+  if (!projectRow) throw requestError("Campaign project not found", 404);
+  assertCampaignProjectInputScope(query, projectRow, "Campaign project");
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  const status = cleanString(query.status);
+  if (status && !STUDIO_CUT_PLAN_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(STUDIO_CUT_PLAN_STATUS).join(", ")}`, 400);
+  }
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM studio_cut_plans
+    WHERE campaign_project_id = ?
+      AND (? = '' OR status = ?)
+      AND (? = 1 OR status != 'deleted')
+    ORDER BY updated_at DESC, id DESC
+    LIMIT ?
+  `).all(cleanId(projectId), status, status, includeDeleted ? 1 : 0, limit)
+    .map((row) => publicStudioCutPlan(row));
+}
+
+function getStudioCutPlan(cutPlanId, scope = null, options = {}) {
+  const row = getStudioCutPlanRow(cutPlanId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Studio cut plan");
+  return publicStudioCutPlan(row, options);
+}
+
+function validateStudioCutPlan(cutPlanId, input = {}, actor = {}) {
+  assertStudioA1InputBoundary(input);
+  const result = db.transaction(() => {
+    const row = getStudioCutPlanRow(cutPlanId);
+    if (!row) throw requestError("Studio cut plan not found", 404);
+    if (row.status === "deleted") throw requestError("Studio cut plan is deleted", 400);
+    const scope = normalizeCampaignProjectScopeQuery(input);
+    if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+      assertCampaignProjectInputScope(scope, row, "Studio cut plan");
+    }
+    const layoutTemplate = getStudioLayoutTemplate(row.layout_template_id);
+    const cutPlan = publicStudioCutPlan(row);
+    const validation = validateCutPlanContract(cutPlan, layoutTemplate);
+    const now = nowIso();
+    const nextStatus = validation.valid ? "validated" : "invalid";
+    const validationStatus = validation.valid ? "passed" : "failed";
+    db.prepare(`
+      UPDATE studio_cut_plans SET
+        status = ?,
+        validation_status = ?,
+        validation_errors_json = ?,
+        updated_at = ?
+      WHERE cut_plan_id = ?
+    `).run(
+      nextStatus,
+      validationStatus,
+      safeJsonStringify(validation.errors, 20000),
+      now,
+      row.cut_plan_id
+    );
+    recordCampaignProjectEvent(row.campaign_project_id, "", "cut_plan.validated", "admin", actor.actor_id || "admin", {
+      cut_plan_id: row.cut_plan_id,
+      valid: validation.valid,
+      error_count: validation.errors.length,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return {
+      valid: validation.valid,
+      validation_errors: validation.errors,
+      studio_cut_plan: getStudioCutPlan(row.cut_plan_id, null, { includeLayoutTemplate: true })
+    };
+  })();
+  return result;
+}
+
+function softDeleteStudioCutPlan(cutPlanId, actor = {}) {
+  const cutPlan = db.transaction(() => {
+    const row = getStudioCutPlanRow(cutPlanId);
+    if (!row) throw requestError("Studio cut plan not found", 404);
+    if (row.status === "deleted") return publicStudioCutPlan(row);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE studio_cut_plans SET
+        status = 'deleted',
+        validation_status = 'deleted',
+        deleted_at = ?,
+        updated_at = ?
+      WHERE cut_plan_id = ?
+    `).run(now, now, row.cut_plan_id);
+    recordCampaignProjectEvent(row.campaign_project_id, "", "cut_plan.deleted", "admin", actor.actor_id || "admin", {
+      cut_plan_id: row.cut_plan_id,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return getStudioCutPlan(row.cut_plan_id, null, { includeRenderManifests: true });
+  })();
+  return cutPlan;
+}
+
+function createStudioRenderManifest(cutPlanId, input = {}, actor = {}) {
+  assertStudioA1InputBoundary(input);
+  const created = db.transaction(() => {
+    const cutPlanRow = getStudioCutPlanRow(cutPlanId);
+    if (!cutPlanRow) throw requestError("Studio cut plan not found", 404);
+    if (cutPlanRow.status === "deleted") throw requestError("Studio cut plan is deleted", 400);
+    const scope = normalizeCampaignProjectScopeQuery(input);
+    if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+      assertCampaignProjectInputScope(scope, cutPlanRow, "Studio cut plan");
+    }
+    if (cutPlanRow.validation_status !== "passed" || cutPlanRow.status !== "validated") {
+      throw requestError("Studio cut plan must be validated before creating a render manifest", 409);
+    }
+    const layoutTemplate = getStudioLayoutTemplate(cutPlanRow.layout_template_id);
+    const cutPlan = publicStudioCutPlan(cutPlanRow);
+    const renderManifestId = cleanId(input.render_manifest_id || input.renderManifestId) ||
+      nextEntityId("srm", `${cutPlanRow.cut_plan_id}-html-preview`);
+    const manifest = buildRenderManifestContract(cutPlan, layoutTemplate, {
+      render_manifest_id: renderManifestId,
+      output_type: cleanString(input.output_type || input.outputType || "html_preview")
+    });
+    const qa = runRenderQaContract(cutPlan, layoutTemplate, manifest);
+    manifest.qa_status = qa.status;
+    manifest.qa_errors = qa.errors;
+    const now = nowIso();
+    db.prepare(`
+      INSERT INTO studio_render_manifests (
+        render_manifest_id, tenant_id, store_id, screen_group_id, campaign_project_id,
+        campaign_project_revision, cut_plan_id, cut_plan_version, layout_template_id,
+        template_version, renderer, renderer_version, scene_ids_json, source_asset_ids_json,
+        generated_asset_ids_json, provider_job_ids_json, output_type, output_ref, output_sha256,
+        resolution_width, resolution_height, fps, duration_seconds, screen_layout, qa_status,
+        qa_errors_json, render_state_json, status, deleted_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)
+    `).run(
+      renderManifestId,
+      manifest.tenant_id,
+      manifest.store_id,
+      manifest.screen_group_id,
+      manifest.campaign_project_id,
+      manifest.campaign_project_revision,
+      manifest.cut_plan_id,
+      manifest.cut_plan_version,
+      manifest.layout_template_id,
+      manifest.template_version,
+      manifest.renderer,
+      manifest.renderer_version,
+      safeJsonStringify(manifest.scene_ids, 30000),
+      safeJsonStringify(manifest.source_asset_ids, 20000),
+      safeJsonStringify(manifest.generated_asset_ids, 20000),
+      safeJsonStringify(manifest.provider_job_ids, 20000),
+      manifest.output_type,
+      manifest.output_ref,
+      manifest.output_sha256,
+      manifest.resolution_width,
+      manifest.resolution_height,
+      manifest.fps,
+      manifest.duration_seconds,
+      manifest.screen_layout,
+      manifest.qa_status,
+      safeJsonStringify(manifest.qa_errors, 30000),
+      safeJsonStringify(manifest.render_state, 50000),
+      now,
+      now
+    );
+    insertStudioRenderQaResult(renderManifestId, qa, now);
+    recordCampaignProjectEvent(cutPlanRow.campaign_project_id, "", "render_manifest.created", "admin", actor.actor_id || "admin", {
+      cut_plan_id: cutPlanRow.cut_plan_id,
+      render_manifest_id: renderManifestId,
+      output_type: manifest.output_type,
+      output_sha256: manifest.output_sha256,
+      qa_status: qa.status,
+      no_external_ai: true,
+      no_media_generation: true,
+      no_mp4_export: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return getStudioRenderManifest(renderManifestId, null, { includeQaResults: true });
+  })();
+  recordAuditLog("admin", actor.actor_id || "admin", "studio_render_manifest.create", "studio_render_manifest", created.render_manifest_id, null, created, {
+    tenant_id: created.tenant_id,
+    store_id: created.store_id,
+    screen_group_id: created.screen_group_id,
+    campaign_project_id: created.campaign_project_id,
+    cut_plan_id: created.cut_plan_id,
+    qa_status: created.qa_status,
+    no_external_ai: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  }, created.created_at || nowIso());
+  return created;
+}
+
+function listStudioRenderManifestsForCutPlan(cutPlanId, query = {}) {
+  const cutPlanRow = getStudioCutPlanRow(cutPlanId);
+  if (!cutPlanRow) throw requestError("Studio cut plan not found", 404);
+  assertCampaignProjectInputScope(query, cutPlanRow, "Studio cut plan");
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM studio_render_manifests
+    WHERE cut_plan_id = ?
+      AND (? = 1 OR status != 'deleted')
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).all(cleanId(cutPlanId), includeDeleted ? 1 : 0, limit).map(publicStudioRenderManifest);
+}
+
+function getStudioRenderManifest(renderManifestId, scope = null, options = {}) {
+  const row = getStudioRenderManifestRow(renderManifestId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Studio render manifest");
+  return publicStudioRenderManifest(row, options);
+}
+
+function rerunStudioRenderQa(renderManifestId, input = {}, actor = {}) {
+  assertStudioA1InputBoundary(input);
+  const result = db.transaction(() => {
+    const manifestRow = getStudioRenderManifestRow(renderManifestId);
+    if (!manifestRow) throw requestError("Studio render manifest not found", 404);
+    if (manifestRow.status === "deleted") throw requestError("Studio render manifest is deleted", 400);
+    const scope = normalizeCampaignProjectScopeQuery(input);
+    if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+      assertCampaignProjectInputScope(scope, manifestRow, "Studio render manifest");
+    }
+    const cutPlanRow = getStudioCutPlanRow(manifestRow.cut_plan_id);
+    if (!cutPlanRow) throw requestError("Studio cut plan not found", 404);
+    const layoutTemplate = getStudioLayoutTemplate(cutPlanRow.layout_template_id);
+    const cutPlan = publicStudioCutPlan(cutPlanRow);
+    const manifest = publicStudioRenderManifest(manifestRow);
+    const qa = runRenderQaContract(cutPlan, layoutTemplate, manifest);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE studio_render_manifests SET
+        qa_status = ?,
+        qa_errors_json = ?,
+        updated_at = ?
+      WHERE render_manifest_id = ?
+    `).run(
+      qa.status,
+      safeJsonStringify(qa.errors, 30000),
+      now,
+      manifestRow.render_manifest_id
+    );
+    insertStudioRenderQaResult(manifestRow.render_manifest_id, qa, now);
+    recordCampaignProjectEvent(manifestRow.campaign_project_id, "", "render_manifest.qa_rerun", "admin", actor.actor_id || "admin", {
+      cut_plan_id: manifestRow.cut_plan_id,
+      render_manifest_id: manifestRow.render_manifest_id,
+      qa_status: qa.status,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return {
+      qa_result: qa,
+      studio_render_manifest: getStudioRenderManifest(manifestRow.render_manifest_id, null, { includeQaResults: true })
+    };
+  })();
+  return result;
+}
+
+function softDeleteStudioRenderManifest(renderManifestId, actor = {}) {
+  const manifest = db.transaction(() => {
+    const row = getStudioRenderManifestRow(renderManifestId);
+    if (!row) throw requestError("Studio render manifest not found", 404);
+    if (row.status === "deleted") return publicStudioRenderManifest(row);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE studio_render_manifests SET
+        status = 'deleted',
+        qa_status = 'deleted',
+        deleted_at = ?,
+        updated_at = ?
+      WHERE render_manifest_id = ?
+    `).run(now, now, row.render_manifest_id);
+    recordCampaignProjectEvent(row.campaign_project_id, "", "render_manifest.deleted", "admin", actor.actor_id || "admin", {
+      cut_plan_id: row.cut_plan_id,
+      render_manifest_id: row.render_manifest_id,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return getStudioRenderManifest(row.render_manifest_id, null, { includeQaResults: true });
+  })();
+  return manifest;
+}
+
+function insertStudioRenderQaResult(renderManifestId, qa, createdAt = nowIso()) {
+  const manifestRow = getStudioRenderManifestRow(renderManifestId);
+  if (!manifestRow) throw requestError("Studio render manifest not found", 404);
+  const qaId = nextEntityId("srqa", `${renderManifestId}-${qa.status}`);
+  db.prepare(`
+    INSERT INTO studio_render_qa_results (
+      render_qa_result_id, render_manifest_id, tenant_id, store_id, screen_group_id,
+      campaign_project_id, cut_plan_id, qa_suite_version, status, checks_json,
+      blocked_reasons_json, errors_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    qaId,
+    manifestRow.render_manifest_id,
+    manifestRow.tenant_id,
+    manifestRow.store_id,
+    manifestRow.screen_group_id,
+    manifestRow.campaign_project_id,
+    manifestRow.cut_plan_id,
+    QA_SUITE_VERSION,
+    qa.status,
+    safeJsonStringify(qa.checks || [], 40000),
+    safeJsonStringify(qa.blocked_reasons || [], 20000),
+    safeJsonStringify(qa.errors || [], 40000),
+    createdAt
+  );
+  return qaId;
+}
+
+function getStudioLayoutTemplate(layoutTemplateId = "") {
+  const templateId = cleanId(layoutTemplateId) || defaultLayoutTemplate().layout_template_id;
+  const row = db.prepare("SELECT * FROM studio_layout_templates WHERE layout_template_id = ? AND status = 'active'").get(templateId);
+  if (!row) throw requestError("Studio layout template not found", 404);
+  return publicStudioLayoutTemplate(row);
+}
+
+function getStudioCutPlanRow(cutPlanId) {
+  return db.prepare("SELECT * FROM studio_cut_plans WHERE cut_plan_id = ?").get(cleanId(cutPlanId));
+}
+
+function getStudioRenderManifestRow(renderManifestId) {
+  return db.prepare("SELECT * FROM studio_render_manifests WHERE render_manifest_id = ?").get(cleanId(renderManifestId));
+}
+
 function getCampaignBrief(briefId) {
   const row = db.prepare("SELECT * FROM campaign_briefs WHERE campaign_brief_id = ?").get(cleanId(briefId));
   return row ? publicCampaignBrief(row) : null;
@@ -8510,6 +9170,46 @@ function assertCampaignGeneratorInput(input) {
   }
 }
 
+function assertStudioA1InputBoundary(input) {
+  const forbiddenKeys = new Set([
+    "ai_prompt",
+    "content_id",
+    "content_manifest_id",
+    "credit_ledger",
+    "external_ai_provider",
+    "generated_media",
+    "manifest",
+    "media_generation",
+    "mp4_export",
+    "provider_job_id",
+    "publish",
+    "published_at",
+    "render_job_id"
+  ]);
+  const walk = (value, pathLabel = "") => {
+    if (value === undefined || value === null) return;
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => walk(entry, `${pathLabel}[${index}]`));
+      return;
+    }
+    if (typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      const normalizedKey = cleanString(key).replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+      if (normalizedKey === "external_ai_used" && Boolean(child)) {
+        throw requestError("external AI is out of scope for Studio Execution A1", 400);
+      }
+      if (normalizedKey === "output_type" && cleanString(child) && cleanString(child) !== "html_preview") {
+        throw requestError("A1 render manifest only supports html_preview output_type", 400);
+      }
+      if (forbiddenKeys.has(normalizedKey)) {
+        throw requestError(`${pathLabel ? `${pathLabel}.` : ""}${key} is out of scope for Studio Execution A1`, 400);
+      }
+      walk(child, pathLabel ? `${pathLabel}.${key}` : key);
+    }
+  };
+  walk(input);
+}
+
 function publicCustomerContextItem(row) {
   return {
     customer_context_item_id: cleanId(row.customer_context_item_id),
@@ -8722,6 +9422,147 @@ function publicCampaignProjectEvent(row) {
     metadata: parseJson(row.metadata_json || "{}", {}),
     created_at: cleanString(row.created_at)
   };
+}
+
+function publicStudioLayoutTemplate(row) {
+  return {
+    layout_template_id: cleanId(row.layout_template_id),
+    template_version: cleanString(row.template_version),
+    screen_mode: cleanString(row.screen_mode),
+    canvas_width: asInteger(row.canvas_width) || 0,
+    canvas_height: asInteger(row.canvas_height) || 0,
+    fps: asInteger(row.fps) || 0,
+    safe_area_px: parseJson(row.safe_area_json || "{}", {}),
+    bezel_policy: cleanString(row.bezel_policy),
+    regions: parseJson(row.regions_json || "[]", []),
+    min_font_px: asInteger(row.min_font_px) || 0,
+    max_line_length_chars: asInteger(row.max_line_length_chars) || 0,
+    contrast_policy: cleanString(row.contrast_policy),
+    status: cleanString(row.status),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at)
+  };
+}
+
+function publicStudioCutPlan(row, options = {}) {
+  const cutPlan = {
+    schema_version: "studio-cut-plan/a1",
+    cut_plan_id: cleanId(row.cut_plan_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 0,
+    source_scene_ids: parseJson(row.source_scene_ids_json || "[]", []),
+    cut_plan_version: cleanString(row.cut_plan_version),
+    status: cleanString(row.status),
+    layout_template_id: cleanId(row.layout_template_id),
+    scene_order: parseJson(row.scene_order_json || "[]", []),
+    screen_bindings: parseJson(row.screen_bindings_json || "{}", {}),
+    copy_bindings: parseJson(row.copy_bindings_json || "{}", {}),
+    visual_direction: parseJson(row.visual_direction_json || "{}", {}),
+    asset_requirements: parseJson(row.asset_requirements_json || "[]", []),
+    brand_constraints: parseJson(row.brand_constraints_json || "{}", {}),
+    forbidden_elements: parseJson(row.forbidden_elements_json || "[]", []),
+    measurement_goal: cleanString(row.measurement_goal),
+    expected_action: cleanString(row.expected_action),
+    deterministic_identity: parseJson(row.deterministic_identity_json || "{}", {}),
+    validation_status: cleanString(row.validation_status),
+    validation_errors: parseJson(row.validation_errors_json || "[]", []),
+    created_by_actor_id: cleanString(row.created_by_actor_id),
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    no_external_ai: true,
+    no_provider_job: true,
+    no_media_generation: true,
+    no_mp4_export: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  };
+  if (options.includeLayoutTemplate) {
+    cutPlan.layout_template = getStudioLayoutTemplate(cutPlan.layout_template_id);
+  }
+  if (options.includeRenderManifests) {
+    cutPlan.render_manifests = listStudioRenderManifestsForCutPlan(cutPlan.cut_plan_id, { include_deleted: options.includeDeletedRenderManifests ? "1" : "" });
+  }
+  return cutPlan;
+}
+
+function publicStudioRenderManifest(row, options = {}) {
+  const manifest = {
+    schema_version: "studio-render-manifest/a1",
+    render_manifest_id: cleanId(row.render_manifest_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 0,
+    cut_plan_id: cleanId(row.cut_plan_id),
+    cut_plan_version: cleanString(row.cut_plan_version),
+    layout_template_id: cleanId(row.layout_template_id),
+    template_version: cleanString(row.template_version),
+    renderer: cleanString(row.renderer),
+    renderer_version: cleanString(row.renderer_version),
+    scene_ids: parseJson(row.scene_ids_json || "[]", []),
+    source_asset_ids: parseJson(row.source_asset_ids_json || "[]", []),
+    generated_asset_ids: parseJson(row.generated_asset_ids_json || "[]", []),
+    provider_job_ids: parseJson(row.provider_job_ids_json || "[]", []),
+    output_type: cleanString(row.output_type),
+    output_ref: cleanString(row.output_ref),
+    output_sha256: cleanString(row.output_sha256),
+    resolution_width: asInteger(row.resolution_width) || 0,
+    resolution_height: asInteger(row.resolution_height) || 0,
+    fps: asInteger(row.fps) || 0,
+    duration_seconds: asInteger(row.duration_seconds) || 0,
+    screen_layout: cleanString(row.screen_layout),
+    qa_status: cleanString(row.qa_status),
+    qa_errors: parseJson(row.qa_errors_json || "[]", []),
+    render_state: parseJson(row.render_state_json || "{}", {}),
+    status: cleanString(row.status),
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    source_of_truth: "html_preview_state",
+    mp4_is_export_artifact_only: true,
+    no_external_ai: true,
+    no_provider_job: true,
+    no_media_generation: true,
+    no_mp4_export: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  };
+  if (options.includeQaResults) {
+    manifest.qa_results = listStudioRenderQaResults(manifest.render_manifest_id);
+  }
+  return manifest;
+}
+
+function publicStudioRenderQaResult(row) {
+  return {
+    render_qa_result_id: cleanId(row.render_qa_result_id),
+    render_manifest_id: cleanId(row.render_manifest_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    cut_plan_id: cleanId(row.cut_plan_id),
+    qa_suite_version: cleanString(row.qa_suite_version),
+    status: cleanString(row.status),
+    checks: parseJson(row.checks_json || "[]", []),
+    blocked_reasons: parseJson(row.blocked_reasons_json || "[]", []),
+    errors: parseJson(row.errors_json || "[]", []),
+    created_at: cleanString(row.created_at)
+  };
+}
+
+function listStudioRenderQaResults(renderManifestId) {
+  return db.prepare(`
+    SELECT * FROM studio_render_qa_results
+    WHERE render_manifest_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 20
+  `).all(cleanId(renderManifestId)).map(publicStudioRenderQaResult);
 }
 
 function normalizeStructuredJson(value, fallback) {
