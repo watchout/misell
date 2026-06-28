@@ -154,13 +154,41 @@ async function main() {
       cta: "QRから当日のおすすめを見る",
       success_metrics: ["play_count", "qr_scan_count"],
       constraints: ["保証表現を避ける", "個人情報を入れない"],
-      scenes: validScenes("free")
+      auto_generate_scenes: true
     });
     assertProject(freeInputProject.data.campaign_project, "free_input", records);
+    assertGeneratedSceneSet(freeInputProject.data.campaign_project, {
+      expectedCount: 3,
+      expectedOrders: [1, 2, 3],
+      expectedHeadline: "夏休み前のファミリー訴求"
+    });
     const validateFree = await admin("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/validate`, {});
     if (!validateFree.data.valid || validateFree.data.campaign_project.status !== "validated") {
       throw new Error(`free input project did not validate: ${validateFree.text}`);
     }
+    const generatedCreateEvent = validateFree.data.campaign_project.events.find((event) => event.action === "project.created");
+    if (!generatedCreateEvent ||
+      generatedCreateEvent.metadata?.generator_type !== "deterministic_template" ||
+      generatedCreateEvent.metadata?.generator_version !== "campaign-demo-v1" ||
+      generatedCreateEvent.metadata?.scene_count !== 3 ||
+      generatedCreateEvent.metadata?.auto_generate_scenes !== true ||
+      generatedCreateEvent.metadata?.no_external_ai !== true ||
+      generatedCreateEvent.metadata?.no_content_manifest_creation !== true) {
+      throw new Error(`auto-generated create event missing guards: ${validateFree.text}`);
+    }
+    await expectAdminError("POST", "/api/admin/campaign-projects/free-input", {
+      tenant_id: records.tenantId,
+      store_id: records.storeId,
+      screen_group_id: records.screenGroupId,
+      title: "明示Sceneと自動生成の併用拒否",
+      objective: "生成由来の証跡を曖昧にしない",
+      target_audience: "運用担当者",
+      store_context: "管理画面で編集する",
+      offer_or_message: "手入力か自動生成のどちらかを選ぶ",
+      cta: "QRから確認",
+      scenes: validScenes(),
+      auto_generate_scenes: true
+    }, 400, "cannot be supplied together");
     const reorderSourceScene = validateFree.data.campaign_project.scenes.find((scene) => scene.scene_order === 2);
     const reorderSwapScene = validateFree.data.campaign_project.scenes.find((scene) => scene.scene_order === 1);
     const reorderUp = await admin("POST", `/api/admin/campaign-projects/${freeInputProject.data.campaign_project.campaign_project_id}/scenes/${reorderSourceScene.campaign_project_scene_id}/reorder`, {
@@ -230,6 +258,45 @@ async function main() {
     for (const code of ["invalid", "missing_cta", "guaranteed_outcome_claim", "direct_pii"]) {
       if (!invalidCodes.has(code)) throw new Error(`expected validation error ${code}, got ${JSON.stringify([...invalidCodes])}`);
     }
+
+    const emptyProject = await admin("POST", "/api/admin/campaign-projects/free-input", {
+      tenant_id: records.tenantId,
+      store_id: records.storeId,
+      screen_group_id: records.screenGroupId,
+      title: "既存プロジェクトへの初期Scene生成",
+      objective: "店内での次の行動を案内する",
+      target_audience: "受付後に待っているお客様",
+      store_context: "待合スペースに大きな画面がある",
+      offer_or_message: "受付後に確認してほしい案内を短く伝える",
+      cta: "QRから案内を見る",
+      auto_generate_scenes: false
+    });
+    if (emptyProject.data.campaign_project.scenes.length !== 0) {
+      throw new Error(`empty project should not auto-generate scenes: ${emptyProject.text}`);
+    }
+    const generatedScenes = await admin("POST", `/api/admin/campaign-projects/${emptyProject.data.campaign_project.campaign_project_id}/generate-scenes`, {
+      tenant_id: records.tenantId,
+      store_id: records.storeId,
+      screen_group_id: records.screenGroupId
+    });
+    if (generatedScenes.data.generator?.generator_type !== "deterministic_template" || generatedScenes.data.generator?.external_ai_used !== false) {
+      throw new Error(`generate-scenes response missing deterministic generator metadata: ${generatedScenes.text}`);
+    }
+    assertGeneratedSceneSet(generatedScenes.data.campaign_project, {
+      expectedCount: 3,
+      expectedOrders: [1, 2, 3],
+      expectedHeadline: "既存プロジェクトへの初期Scene生成"
+    });
+    const generateEvent = generatedScenes.data.campaign_project.events.find((event) => event.action === "project.scenes.generated");
+    if (!generateEvent || generateEvent.metadata?.generator_type !== "deterministic_template" || generateEvent.metadata?.no_external_ai !== true || generateEvent.metadata?.no_publish !== true) {
+      throw new Error(`project.scenes.generated event missing guards: ${generatedScenes.text}`);
+    }
+    const validateGeneratedScenes = await admin("POST", `/api/admin/campaign-projects/${emptyProject.data.campaign_project.campaign_project_id}/validate`, {});
+    if (!validateGeneratedScenes.data.valid) throw new Error(`generated scenes should validate: ${validateGeneratedScenes.text}`);
+    await expectAdminError("POST", `/api/admin/campaign-projects/${emptyProject.data.campaign_project.campaign_project_id}/generate-scenes`, {}, 409, "already has active scenes");
+    await expectAdminError("POST", `/api/admin/campaign-projects/${emptyProject.data.campaign_project.campaign_project_id}/generate-scenes`, {
+      tenant_id: records.otherTenantId
+    }, 403, "tenant scope");
 
     const proposedResponse = await admin("POST", "/api/admin/campaign-proposals", proposalInput(records, {
       campaign_proposal_id: `cpr-${runId}-proposed`,
@@ -409,6 +476,8 @@ async function main() {
       existing_brief_to_project: true,
       free_input_to_brief_to_project: true,
       scene_validation_pass_fail: true,
+      deterministic_scene_generation_on_create: true,
+      deterministic_scene_generation_for_existing_project: true,
       scope_mismatch_validation_fail: true,
       non_selected_proposal_validation_fail: true,
       tenant_store_screen_group_isolation: true,
@@ -561,6 +630,28 @@ function assertProject(project, sourceType, records) {
   }
   if (!project.no_external_ai || !project.no_content_manifest_creation || !project.no_media_generation || !project.no_publish) {
     throw new Error(`project response is missing out-of-scope guards: ${JSON.stringify(project)}`);
+  }
+}
+
+function assertGeneratedSceneSet(project, options) {
+  const scenes = project.scenes || [];
+  if (scenes.length !== options.expectedCount) {
+    throw new Error(`generated scene count mismatch: expected=${options.expectedCount} project=${JSON.stringify(project)}`);
+  }
+  const orders = scenes.map((scene) => scene.scene_order).sort((a, b) => a - b);
+  if (JSON.stringify(orders) !== JSON.stringify(options.expectedOrders)) {
+    throw new Error(`generated scene order mismatch: expected=${JSON.stringify(options.expectedOrders)} got=${JSON.stringify(orders)}`);
+  }
+  if (scenes[0]?.headline !== options.expectedHeadline) {
+    throw new Error(`generated first headline mismatch: expected=${options.expectedHeadline} scene=${JSON.stringify(scenes[0])}`);
+  }
+  for (const scene of scenes) {
+    if (!scene.headline || !scene.body_text || !scene.visual_direction || !scene.cta_text || scene.duration_seconds <= 0) {
+      throw new Error(`generated scene missing required fields: ${JSON.stringify(scene)}`);
+    }
+    if (scene.status !== "draft" || scene.validation_status !== "draft") {
+      throw new Error(`generated scene should start as draft: ${JSON.stringify(scene)}`);
+    }
   }
 }
 

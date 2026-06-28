@@ -925,6 +925,16 @@ td small {
   grid-column: 1 / -1;
 }
 
+.inline-option {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.inline-option input {
+  width: auto;
+}
+
 .campaign-project-create-grid {
   display: grid;
   gap: 12px;

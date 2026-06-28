@@ -1,0 +1,85 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-147-DEMO-SCENE-GENERATION
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-147-demo-scene-generation.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-147-DEMO-SCENE-GENERATION.yaml
+  cell_id: CELL-MISELL-147-DEMO-SCENE-GENERATION
+  pr: watchout/misell#TBD
+items:
+  - item_id: DSG-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: DSG-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden paths are touched, especially workflows, migrations, package files, Player, deploy, secrets, branch protection, or rulesets.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: DSG-AUDIT-003
+    source: api_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify generate-scenes is admin-only, scoped, and uses existing CampaignProject/Scene draft tables without DB migration.
+    expected_evidence:
+      - route_review
+      - code_review
+  - item_id: DSG-AUDIT-004
+    source: deterministic_generation
+    verification_method: semantic
+    required: true
+    prompt: Verify generated Scenes are deterministic templates from normalized CampaignBrief/project fields and do not call external AI or make LLM/prose final authority.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: DSG-AUDIT-005
+    source: side_effect_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify generation does not render media, create content_manifest rows, publish, schedule, mutate Player/device delivery, consume credits, or touch billing/ad ROI behavior.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: DSG-AUDIT-006
+    source: overwrite_guard
+    verification_method: semantic
+    required: true
+    prompt: Verify generate-scenes refuses projects with active scenes and does not silently overwrite or replace operator edits.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: DSG-AUDIT-007
+    source: admin_ui
+    verification_method: semantic
+    required: true
+    prompt: Verify Admin UI uses the server-side generator and does not duplicate template generation logic in browser JavaScript.
+    expected_evidence:
+      - code_review
+  - item_id: DSG-AUDIT-008
+    source: validation_pipeline
+    verification_method: semantic
+    required: true
+    prompt: Verify generated Scenes remain editable draft records and use the existing project validation pipeline.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: DSG-AUDIT-009
+    source: smoke
+    verification_method: executable
+    required: true
+    prompt: Verify smoke coverage proves create-time generation, existing-project generation, scope rejection, duplicate generation rejection, validation pass, and no forbidden side effects.
+    expected_evidence:
+      - smoke_result
+  - item_id: DSG-AUDIT-010
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

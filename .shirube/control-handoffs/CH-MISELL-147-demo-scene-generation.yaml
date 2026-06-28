@@ -1,0 +1,147 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-147-DEMO-SCENE-GENERATION
+parent_ssot: https://github.com/watchout/misell/issues/147
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/147
+premise_confirmation_ref: https://github.com/watchout/misell/issues/147
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/147
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational PR evidence for this Cell
+    - diff scope and handoff consistency checks
+    - checklist-driven audit request evidence
+  shirube_does_not_own:
+    - production deployment or runtime operations
+    - external AI/provider policy approval
+    - content publish or device delivery authorization
+
+cell:
+  CELL-ID: CELL-MISELL-147-DEMO-SCENE-GENERATION
+  cell_ref: .shirube/cells/CELL-MISELL-147-DEMO-SCENE-GENERATION.yaml
+  cell_type: runtime_foundation
+  risk_class: R2
+  goal: Add server-side deterministic initial Scene generation for CampaignProject demo readiness without external AI, media rendering, content_manifest creation, or publish.
+  non_scope:
+    - external AI, LLM provider call, or model-generated final authority
+    - image/video/media rendering, MP4 export, generated_media, or asset creation
+    - content_manifest creation, schedule activation, publish, or device/player mutation
+    - customer project editing or customer-facing generation controls
+    - billing, credits, quota, guarantee, ROI, advertiser surface, or ad delivery behavior
+    - DB migration, new persistent table, or schema change
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-147-DEMO-SCENE-GENERATION.yaml
+    - .shirube/control-handoffs/CH-MISELL-147-demo-scene-generation.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-SCENE-GENERATION.yaml
+    - apps/cloud/README.md
+    - apps/cloud/server.js
+    - apps/cloud/public/admin.js
+    - apps/cloud/public/style.css
+    - apps/cloud/scripts/smoke-campaign-generator-foundation.mjs
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/player/**
+    - apps/cloud/migrations/**
+    - package.json
+    - package-lock.json
+  protected_surfaces:
+    - runtime
+    - api
+    - admin_ui
+  escalation_route: "not_required: R2 admin-only deterministic draft generation; no auth model, DB migration, workflow, deploy, secret, external AI, media, publish, billing, ad delivery, or customer/external surface."
+  stop_conditions:
+    - DB migration or new persistent table is needed
+    - external AI/provider integration is needed
+    - generated media, rendering, content_manifest, publish, schedule activation, Player, or device mutation is needed
+    - customer-facing editing or external share surface is needed
+    - billing, credit, guarantee, ROI, advertiser, or ad-delivery behavior is needed
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - Project creation can opt into deterministic initial Scene generation with auto_generate_scenes/generate_scenes.
+    - Existing non-deleted empty CampaignProject can create initial Scenes through an admin-only generate-scenes API.
+    - Generated Scenes are editable draft records using the existing campaign_project_scenes table and validation pipeline.
+    - The generator is server-side, deterministic, reusable across proposal, brief, and free-input project sources, and records no-external-AI/no-media/no-manifest/no-publish evidence.
+    - Generation refuses to run when active scenes already exist, avoiding accidental overwrite.
+    - Admin UI exposes initial Scene generation without duplicating template logic in browser JavaScript.
+    - Smoke coverage proves create-time generation, existing-project generation, scope rejection, duplicate generation rejection, validation pass, and no content_manifest/publish/credit side effect.
+
+implementation_boundary:
+  summary: Add deterministic draft scene generation to existing CampaignProject API/Admin UI only.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - live AUN, Discord, DB, queue, LaunchAgent, external AI, media renderer, ad network, POS, camera, or production mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:campaign-generator-foundation
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+  audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-SCENE-GENERATION.yaml
+  acceptance_tests:
+    - smoke:campaign-generator-foundation validates create-time deterministic scene generation.
+    - smoke:campaign-generator-foundation validates existing empty project generate-scenes flow.
+    - smoke:campaign-generator-foundation validates scope mismatch and duplicate generation rejection.
+    - smoke:campaign-generator-foundation validates no external AI, no media, no content_manifest, no publish, and no credit mutation.
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
