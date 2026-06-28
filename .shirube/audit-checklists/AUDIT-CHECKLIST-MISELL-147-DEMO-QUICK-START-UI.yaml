@@ -1,0 +1,82 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-147-DEMO-QUICK-START-UI
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-147-demo-quick-start-ui.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-147-DEMO-QUICK-START-UI.yaml
+  cell_id: CELL-MISELL-147-DEMO-QUICK-START-UI
+  pr: watchout/misell#TBD
+items:
+  - item_id: DQS-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: DQS-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden paths are touched, especially server.js, migrations, workflows, package files, Player, deploy, secrets, branch protection, or rulesets.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: DQS-AUDIT-003
+    source: ui_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify the change is authenticated Admin UI only and does not add backend routes, API mutation, DB schema, auth/RBAC, customer/public, or external preview behavior.
+    expected_evidence:
+      - code_review
+  - item_id: DQS-AUDIT-004
+    source: quick_fill_behavior
+    verification_method: semantic
+    required: true
+    prompt: Verify quick-fill only populates the free-input form from existing tenant/store/screen_group choices and demo copy; it must not submit or create data by itself.
+    expected_evidence:
+      - code_review
+      - e2e_result
+  - item_id: DQS-AUDIT-005
+    source: generation_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify quick-fill keeps the existing auto_generate_scenes path and does not duplicate deterministic generation logic in browser code.
+    expected_evidence:
+      - code_review
+      - e2e_result
+  - item_id: DQS-AUDIT-006
+    source: preview_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify optional preview opening uses the existing authenticated CampaignProject preview route and does not create a public/customer/share route.
+    expected_evidence:
+      - code_review
+  - item_id: DQS-AUDIT-007
+    source: side_effect_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify there is no external AI, media generation, content_manifest creation, publish, billing, credit, ROI, Player, device, or ad behavior change.
+    expected_evidence:
+      - code_review
+  - item_id: DQS-AUDIT-008
+    source: e2e
+    verification_method: executable
+    required: true
+    prompt: Verify E2E covers quick-fill visibility/population and confirms existing CampaignProject creation still works.
+    expected_evidence:
+      - e2e_result
+  - item_id: DQS-AUDIT-009
+    source: docs
+    verification_method: semantic
+    required: true
+    prompt: Verify README describes the demo quick-start as UI-only and non-publishing.
+    expected_evidence:
+      - docs_review
+  - item_id: DQS-AUDIT-010
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

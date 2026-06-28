@@ -935,6 +935,14 @@ td small {
   width: auto;
 }
 
+.campaign-project-demo-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
 .campaign-project-create-grid {
   display: grid;
   gap: 12px;

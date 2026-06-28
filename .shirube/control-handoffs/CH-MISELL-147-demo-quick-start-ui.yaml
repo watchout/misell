@@ -1,0 +1,144 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-147-DEMO-QUICK-START-UI
+parent_ssot: https://github.com/watchout/misell/issues/147
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/issues/147#issuecomment-4823804211
+premise_confirmation_ref: https://github.com/watchout/misell/issues/147
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/issues/147
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational gate evidence for this PR
+    - structured audit exact-head admissibility
+    - owner exact-head decision admissibility
+    - diff scope and handoff consistency checks
+  shirube_does_not_own:
+    - branch protection or required-check configuration
+    - security/CEO approval labels and protected authorization decisions
+    - production deployment or runtime operations
+
+cell:
+  CELL-ID: CELL-MISELL-147-DEMO-QUICK-START-UI
+  cell_type: ui_lite
+  risk_class: R1
+  goal: Add authenticated admin UI quick-start controls that prefill a realistic CampaignBrief and optionally open the existing CampaignProject preview after create.
+  non_scope:
+    - backend route, API contract, DB migration, or schema change
+    - external AI/provider call, generated media, rendering, MP4 export, or asset creation
+    - content_manifest creation, schedule activation, publish, Player/device mutation, or customer/public route
+    - billing, credits, quota, guarantee, ROI, advertiser, or ad delivery behavior
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-147-DEMO-QUICK-START-UI.yaml
+    - .shirube/control-handoffs/CH-MISELL-147-demo-quick-start-ui.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-147-DEMO-QUICK-START-UI.yaml
+    - apps/cloud/README.md
+    - apps/cloud/public/admin.js
+    - apps/cloud/public/style.css
+    - tests/e2e/misell-ui.spec.js
+  protected_surfaces:
+    - admin_ui
+    - existing_authenticated_admin_route_only
+    - no_auth_or_permission_model_change
+    - no_backend_write_path_beyond_existing_create_api
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - .github/workflows/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - apps/player/**
+    - apps/cloud/server.js
+    - apps/cloud/migrations/**
+    - apps/cloud/package.json
+    - package.json
+    - package-lock.json
+  stop_conditions:
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - backend route, API mutation, DB migration, schema, auth/RBAC, or customer/public behavior needed
+    - external AI/provider/media/render/content_manifest/publish/billing/Player path introduced
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - CampaignProject free-input form has a demo quick-fill control.
+    - Quick-fill picks an existing tenant/store/screen_group option and fills all required brief fields.
+    - Quick-fill does not submit or create data by itself.
+    - Existing auto_generate_scenes remains enabled after quick-fill.
+    - Optional create-then-preview control opens the existing authenticated preview URL after successful create when enabled.
+    - E2E proves quick-fill visibility/population and existing generated project creation still works.
+
+implementation_boundary:
+  summary: UI-only improvement on the existing authenticated Cloud admin dashboard; use existing CampaignProject create and preview APIs only.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - external API/provider call
+    - live AUN, Discord, DB, queue, LaunchAgent, or external repository mutation
+
+validation:
+  pr_head_sha: supplied_by_github_pr_metadata_and_audit_request
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm run test:e2e
+    - npm run test:ci
+    - Shirube Full Operational Gates
+  required_evidence:
+    - PR_head_SHA
+    - changed_files
+    - validation_commands
+    - validation_results
+    - structured_audit_comment
+    - owner_decision
+  acceptance_tests:
+    - demo quick-fill button populates required fields
+    - auto_generate_scenes remains enabled
+    - generated project creation remains successful
+    - no backend/API/DB/external AI/media/content_manifest/publish changes
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
+
+legacy_source_boundary:
+  legacy_sources_may_inform: true
+  legacy_sources_are_truth: false
+  required_current_truth_ref: this_control_handoff
