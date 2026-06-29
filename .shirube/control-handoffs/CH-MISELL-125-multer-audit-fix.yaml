@@ -1,0 +1,137 @@
+schema_version: shirube-control-handoff/rapid-lite/v1
+mode: rapid-lite
+profile: hotel-lite
+control_handoff_id: CH-MISELL-125-MULTER-AUDIT-FIX
+parent_ssot: https://github.com/watchout/misell/pull/125
+matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
+framework_lock_ref: .shirube/shirube-framework-lock.yaml
+repo_spec_ref: .shirube/repo-spec.yaml
+premise_ref: .shirube/repo-spec.yaml
+owner_confirmation_ref: https://github.com/watchout/misell/pull/125#issuecomment-4784641217
+premise_confirmation_ref: https://github.com/watchout/misell/pull/125#issuecomment-4784641217
+spec_review_state: ready_for_implementation
+
+repo: watchout/misell
+repo_local_issue: https://github.com/watchout/misell/pull/125
+owner:
+  role: repo_owner
+  actor: watchout
+next_role: implementation
+
+rps_scope:
+  shirube_owns:
+    - full operational PR evidence for this dependency-security Cell
+    - diff scope and handoff consistency checks
+    - checklist-driven audit request evidence
+  shirube_does_not_own:
+    - production deployment or runtime operations
+    - branch protection or required-check configuration
+    - npm registry policy decisions
+
+cell:
+  CELL-ID: CELL-MISELL-125-MULTER-AUDIT-FIX
+  cell_ref: .shirube/cells/CELL-MISELL-125-MULTER-AUDIT-FIX.yaml
+  cell_type: dependency_security
+  risk_class: R1
+  goal: Refresh the existing multer security dependency update onto current main with Shirube evidence, keeping the change limited to package manifests and lockfiles.
+  non_scope:
+    - runtime route behavior changes
+    - upload policy changes
+    - DB migration
+    - public/admin UI changes
+    - Player behavior changes beyond dependency resolution
+    - workflow, branch protection, ruleset, deploy, secret, or environment changes
+  allowed_paths:
+    - .shirube/cells/CELL-MISELL-125-MULTER-AUDIT-FIX.yaml
+    - .shirube/control-handoffs/CH-MISELL-125-multer-audit-fix.yaml
+    - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-125-MULTER-AUDIT-FIX.yaml
+    - apps/cloud/package.json
+    - apps/cloud/package-lock.json
+    - apps/player/package.json
+    - apps/player/package-lock.json
+  forbidden_paths:
+    - .env
+    - .env.*
+    - secrets/**
+    - deploy/**
+    - '**/branch-protection/**'
+    - '**/ruleset/**'
+    - .github/workflows/**
+    - apps/cloud/server.js
+    - apps/cloud/public/**
+    - apps/player/server.js
+    - apps/player/public/**
+    - docs/**
+  protected_surfaces:
+    - dependency_security
+  escalation_route: "No CTO/CEO gate required for this R1 dependency-only refresh; scope is package manifests and lockfiles only."
+  stop_conditions:
+    - runtime code change is needed
+    - upload policy or API behavior change is needed
+    - package update pulls unrelated dependency churn
+    - changed file outside allowed_paths
+    - forbidden path touched
+    - missing exact head evidence
+    - missing validation evidence
+    - missing structured audit PASS/PASS_WITH_WARN for exact head
+    - owner decision missing before merge
+  acceptance_criteria:
+    - apps/cloud and apps/player package manifests require multer ^2.2.0.
+    - apps/cloud and apps/player lockfiles resolve multer 2.2.0.
+    - npm audit at root, apps/cloud, and apps/player reports no vulnerabilities at moderate level.
+    - Cloud and Player syntax checks pass.
+    - No runtime, DB, UI, workflow, deploy, or secret files are changed.
+
+implementation_boundary:
+  summary: Rebase the existing dependency update onto current main and add Shirube evidence only.
+  expected_pr_count: 1
+  forbidden_operations:
+    - merge
+    - approve
+    - branch protection mutation
+    - ruleset mutation
+    - required check activation
+    - production or deploy mutation
+    - secret read or write
+    - runtime route mutation
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud audit --audit-level=moderate
+    - npm --prefix apps/player audit --audit-level=moderate
+    - npm audit --audit-level=moderate
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/player run check
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+  audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-125-MULTER-AUDIT-FIX.yaml
+  acceptance_tests:
+    - npm audit reports no vulnerabilities at root, cloud, and player scopes.
+    - package-lock files resolve multer 2.2.0 in both apps.
+    - check:cloud, check:player, and test:ci pass.
+
+owner_decision:
+  required_before_merge: true
+  allowed_verdicts:
+    - APPROVED_EXACT_HEAD
+    - CHANGES_REQUIRED
+    - BLOCKED
+  exact_head_sha: null
+  decision_ref: null
+
+post_merge:
+  required_when_done_claimed: true
+  required_evidence:
+    - merge_commit
+    - merged_at
+    - post_merge_smoke_or_NA
+    - next_step
+    - no_unresolved_follow_up_blocker
