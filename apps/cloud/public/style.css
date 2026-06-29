@@ -42,6 +42,12 @@ a:hover {
   margin: 0;
 }
 
+.topbar-subtitle {
+  color: #697986;
+  font-size: 12px;
+  margin: 3px 0 0;
+}
+
 button {
   background: #135f8c;
   border: 0;
@@ -106,19 +112,144 @@ main {
   padding: 24px;
 }
 
+.admin-dashboard-page {
+  background: #eef2f5;
+}
+
+.admin-shell {
+  background: #eef2f5;
+}
+
+.admin-layout {
+  align-items: start;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.admin-sidebar {
+  align-self: start;
+  position: sticky;
+  top: 18px;
+}
+
+.admin-nav {
+  background: #ffffff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.admin-nav a {
+  border-radius: 6px;
+  color: #1f2933;
+  font-size: 13px;
+  font-weight: 650;
+  min-height: 36px;
+  padding: 9px 10px;
+}
+
+.admin-nav a:hover,
+.admin-nav a:focus {
+  background: #e8f3f8;
+  color: #135f8c;
+  outline: none;
+  text-decoration: none;
+}
+
+.admin-content {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.admin-workspace {
+  background: #f8fafb;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 16px;
+  scroll-margin-top: 18px;
+}
+
+.admin-workspace-head {
+  align-items: center;
+  border-bottom: 1px solid #d8dee4;
+  display: flex;
+  justify-content: space-between;
+  margin: -2px 0 14px;
+  padding-bottom: 12px;
+}
+
+.admin-workspace-head h2 {
+  font-size: 20px;
+  margin: 2px 0 0;
+}
+
+.admin-kicker {
+  color: #52616f;
+  display: block;
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.admin-section-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
 .section {
   margin-bottom: 24px;
 }
 
-.section h2 {
+.section h2,
+.section h3 {
   font-size: 15px;
   margin: 0 0 10px;
+}
+
+.admin-workspace > .section:last-child,
+.admin-section-grid > .section {
+  margin-bottom: 0;
 }
 
 .metrics {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+@media (max-width: 960px) {
+  .topbar {
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+
+  main {
+    padding: 16px;
+  }
+
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: static;
+  }
+
+  .admin-nav {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .admin-nav a {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
 }
 
 .metric {
