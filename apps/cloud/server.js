@@ -64,6 +64,15 @@ const {
   canAssetEnterPublishCandidate,
   normalizeJobTransition
 } = require("./lib/studio-provider-job-contract");
+const {
+  PUBLISH_PREFLIGHT_VERSION,
+  CONTENT_MANIFEST_DRAFT_TRANSFORM_VERSION,
+  PUBLISH_PREFLIGHT_STATUSES,
+  assertStudioC1InputBoundary,
+  buildPublishPreflightContract,
+  buildContentManifestDraftTransform,
+  validatePublishPreflightContract
+} = require("./lib/studio-publish-preflight-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -900,6 +909,34 @@ app.delete("/api/admin/studio-render-manifests/:render_manifest_id", requireAdmi
   try {
     const manifest = softDeleteStudioRenderManifest(cleanId(req.params.render_manifest_id), req.adminActor);
     res.json({ ok: true, studio_render_manifest: manifest });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-projects/:campaign_project_id/publish-preflights", requireAdminAuth, (req, res, next) => {
+  try {
+    const preflights = listStudioPublishPreflightsForProject(cleanId(req.params.campaign_project_id), req.query || {});
+    res.json({ ok: true, studio_publish_preflights: preflights });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/publish-preflights", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createStudioPublishPreflight(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-publish-preflights/:publish_preflight_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const preflight = getStudioPublishPreflight(cleanId(req.params.publish_preflight_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeDraftTransform: true });
+    if (!preflight) throw requestError("Studio publish preflight not found", 404);
+    res.json({ ok: true, studio_publish_preflight: preflight });
   } catch (error) {
     next(error);
   }
@@ -4472,6 +4509,84 @@ function schemaMigrations() {
             provider.updated_at
           );
         }
+      }
+    },
+    {
+      version: 15,
+      name: "studio_publish_preflight_dry_run",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS studio_publish_preflight_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            publish_preflight_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_revision INTEGER NOT NULL DEFAULT 1,
+            render_manifest_id TEXT NOT NULL,
+            render_manifest_output_sha256 TEXT NOT NULL DEFAULT '',
+            required_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            content_type TEXT NOT NULL,
+            publish_mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            checks_json TEXT NOT NULL DEFAULT '[]',
+            blocked_reasons_json TEXT NOT NULL DEFAULT '[]',
+            docs99_gate_ref TEXT NOT NULL DEFAULT '',
+            docs99_gate_verdict TEXT NOT NULL DEFAULT 'not_applicable',
+            approval_gate_ref TEXT NOT NULL DEFAULT '',
+            request_reason TEXT NOT NULL DEFAULT '',
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            no_active_content_manifest_mutation INTEGER NOT NULL DEFAULT 1,
+            no_content_manifest_activation INTEGER NOT NULL DEFAULT 1,
+            no_publish INTEGER NOT NULL DEFAULT 1,
+            no_player_device_mutation INTEGER NOT NULL DEFAULT 1,
+            no_schedule_activation INTEGER NOT NULL DEFAULT 1,
+            dry_run_only INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT,
+            FOREIGN KEY(render_manifest_id) REFERENCES studio_render_manifests(render_manifest_id) ON DELETE RESTRICT
+          );
+
+          CREATE TABLE IF NOT EXISTS content_manifest_draft_transforms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_transform_id TEXT NOT NULL UNIQUE,
+            publish_preflight_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_revision INTEGER NOT NULL DEFAULT 1,
+            render_manifest_id TEXT NOT NULL,
+            draft_content_manifest_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            transform_errors_json TEXT NOT NULL DEFAULT '[]',
+            playlist_item_draft_ids_json TEXT NOT NULL DEFAULT '[]',
+            schedule_draft_ids_json TEXT NOT NULL DEFAULT '[]',
+            qr_link_ids_json TEXT NOT NULL DEFAULT '[]',
+            content_manifest_draft_json TEXT NOT NULL DEFAULT '{}',
+            content_manifest_draft_sha256 TEXT NOT NULL DEFAULT '',
+            no_active_content_manifest_mutation INTEGER NOT NULL DEFAULT 1,
+            no_content_manifest_activation INTEGER NOT NULL DEFAULT 1,
+            no_publish INTEGER NOT NULL DEFAULT 1,
+            no_player_device_mutation INTEGER NOT NULL DEFAULT 1,
+            no_schedule_activation INTEGER NOT NULL DEFAULT 1,
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(publish_preflight_id) REFERENCES studio_publish_preflight_results(publish_preflight_id) ON DELETE RESTRICT,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT,
+            FOREIGN KEY(render_manifest_id) REFERENCES studio_render_manifests(render_manifest_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_studio_publish_preflights_project
+            ON studio_publish_preflight_results(campaign_project_id, status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_publish_preflights_scope
+            ON studio_publish_preflight_results(tenant_id, store_id, screen_group_id, content_type, status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_content_manifest_draft_transforms_preflight
+            ON content_manifest_draft_transforms(publish_preflight_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_content_manifest_draft_transforms_project
+            ON content_manifest_draft_transforms(campaign_project_id, status, created_at DESC);
+        `);
       }
     }
   ];
@@ -9072,6 +9187,220 @@ function insertStudioRenderQaResult(renderManifestId, qa, createdAt = nowIso()) 
   return qaId;
 }
 
+function createStudioPublishPreflight(projectId, input = {}, actor = {}) {
+  assertStudioC1RouteBoundary(input);
+  const result = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    const scope = normalizeCampaignProjectScopeQuery(input);
+    if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+      assertCampaignProjectInputScope(scope, projectRow, "Campaign project");
+    }
+    const renderManifestId = cleanId(input.render_manifest_id || input.renderManifestId);
+    if (!renderManifestId) throw requestError("render_manifest_id is required", 400);
+    const manifestRow = getStudioRenderManifestRow(renderManifestId);
+    if (!manifestRow || manifestRow.status === "deleted") throw requestError("Studio render manifest not found", 404);
+    collectScopeMismatchErrorsOrThrow(projectRow, manifestRow, "Studio render manifest");
+    if (cleanId(manifestRow.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+      throw requestError("Studio render manifest is outside campaign project scope", 403);
+    }
+    const publishPreflightId = cleanId(input.publish_preflight_id || input.publishPreflightId) ||
+      nextEntityId("sppf", `${projectRow.store_id}-${projectRow.screen_group_id}`);
+    const now = nowIso();
+    const scenes = listCampaignProjectScenes(projectRow.campaign_project_id);
+    const project = publicCampaignProject(projectRow);
+    const renderManifest = publicStudioRenderManifest(manifestRow);
+    const provenance = listAssetProvenance({
+      tenant_id: projectRow.tenant_id,
+      store_id: projectRow.store_id,
+      screen_group_id: projectRow.screen_group_id,
+      campaign_project_id: projectRow.campaign_project_id
+    });
+    const preflight = buildPublishPreflightContract({
+      project,
+      scenes,
+      renderManifest,
+      assetProvenance: provenance,
+      input: {
+        ...input,
+        publish_preflight_id: publishPreflightId,
+        created_by_actor_id: actor.actor_id || "admin"
+      }
+    });
+    assertValidPublishPreflightContract(preflight);
+    db.prepare(`
+      INSERT INTO studio_publish_preflight_results (
+        publish_preflight_id, tenant_id, store_id, screen_group_id, campaign_project_id,
+        campaign_project_revision, render_manifest_id, render_manifest_output_sha256,
+        required_asset_ids_json, content_type, publish_mode, status, checks_json, blocked_reasons_json,
+        docs99_gate_ref, docs99_gate_verdict, approval_gate_ref, request_reason,
+        created_by_actor_id, no_active_content_manifest_mutation,
+        no_content_manifest_activation, no_publish, no_player_device_mutation,
+        no_schedule_activation, dry_run_only, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 1, 1, ?)
+    `).run(
+      preflight.publish_preflight_id,
+      preflight.tenant_id,
+      preflight.store_id,
+      preflight.screen_group_id,
+      preflight.campaign_project_id,
+      preflight.campaign_project_revision,
+      preflight.render_manifest_id,
+      preflight.render_manifest_output_sha256,
+      safeJsonStringify(preflight.required_asset_ids || [], 20000),
+      preflight.content_type,
+      preflight.publish_mode,
+      preflight.status,
+      safeJsonStringify(preflight.checks, 50000),
+      safeJsonStringify(preflight.blocked_reasons, 20000),
+      preflight.docs99_gate_ref,
+      preflight.docs99_gate_verdict,
+      preflight.approval_gate_ref,
+      preflight.request_reason,
+      preflight.created_by_actor_id,
+      now
+    );
+    const transformId = nextEntityId("cmdt", preflight.publish_preflight_id);
+    const draftContentManifestId = nextEntityId("cmdraft", preflight.publish_preflight_id);
+    const transform = buildContentManifestDraftTransform(preflight, {
+      project,
+      scenes,
+      renderManifest,
+      draft_transform_id: transformId,
+      draft_content_manifest_id: draftContentManifestId
+    });
+    db.prepare(`
+      INSERT INTO content_manifest_draft_transforms (
+        draft_transform_id, publish_preflight_id, tenant_id, store_id, screen_group_id,
+        campaign_project_id, campaign_project_revision, render_manifest_id,
+        draft_content_manifest_id, status, transform_errors_json,
+        playlist_item_draft_ids_json, schedule_draft_ids_json, qr_link_ids_json,
+        content_manifest_draft_json, content_manifest_draft_sha256,
+        no_active_content_manifest_mutation, no_content_manifest_activation,
+        no_publish, no_player_device_mutation, no_schedule_activation,
+        created_by_actor_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 1, ?, ?)
+    `).run(
+      transform.draft_transform_id,
+      transform.publish_preflight_id,
+      transform.tenant_id,
+      transform.store_id,
+      transform.screen_group_id,
+      transform.campaign_project_id,
+      transform.campaign_project_revision,
+      transform.render_manifest_id,
+      transform.draft_content_manifest_id,
+      transform.status,
+      safeJsonStringify(transform.transform_errors, 20000),
+      safeJsonStringify(transform.playlist_item_draft_ids, 20000),
+      safeJsonStringify(transform.schedule_draft_ids, 10000),
+      safeJsonStringify(transform.qr_link_ids, 10000),
+      safeJsonStringify(transform.content_manifest_draft || {}, 80000),
+      transform.content_manifest_draft_sha256,
+      preflight.created_by_actor_id,
+      now
+    );
+    recordCampaignProjectEvent(projectRow.campaign_project_id, "", "publish_preflight.created", "admin", actor.actor_id || "admin", {
+      publish_preflight_id: preflight.publish_preflight_id,
+      draft_transform_id: transform.draft_transform_id,
+      render_manifest_id: preflight.render_manifest_id,
+      status: preflight.status,
+      blocked_reasons: preflight.blocked_reasons,
+      content_type: preflight.content_type,
+      publish_mode: preflight.publish_mode,
+      docs99_gate_verdict: preflight.docs99_gate_verdict,
+      no_active_content_manifest_mutation: true,
+      no_content_manifest_activation: true,
+      no_publish: true,
+      no_player_device_mutation: true,
+      no_schedule_activation: true
+    }, now);
+    return {
+      studio_publish_preflight: getStudioPublishPreflight(preflight.publish_preflight_id, null, { includeDraftTransform: true }),
+      content_manifest_draft_transform: getContentManifestDraftTransform(transform.draft_transform_id)
+    };
+  })();
+  recordAuditLog("admin", actor.actor_id || "admin", "studio_publish_preflight.create", "studio_publish_preflight", result.studio_publish_preflight.publish_preflight_id, null, result.studio_publish_preflight, {
+    tenant_id: result.studio_publish_preflight.tenant_id,
+    store_id: result.studio_publish_preflight.store_id,
+    screen_group_id: result.studio_publish_preflight.screen_group_id,
+    campaign_project_id: result.studio_publish_preflight.campaign_project_id,
+    render_manifest_id: result.studio_publish_preflight.render_manifest_id,
+    status: result.studio_publish_preflight.status,
+    no_active_content_manifest_mutation: true,
+    no_content_manifest_activation: true,
+    no_publish: true,
+    no_player_device_mutation: true,
+    no_schedule_activation: true
+  }, result.studio_publish_preflight.created_at || nowIso());
+  return result;
+}
+
+function listStudioPublishPreflightsForProject(projectId, query = {}) {
+  const projectRow = getCampaignProjectRow(projectId);
+  if (!projectRow) throw requestError("Campaign project not found", 404);
+  assertCampaignProjectInputScope(query, projectRow, "Campaign project");
+  const status = cleanString(query.status);
+  if (status && !PUBLISH_PREFLIGHT_STATUSES.includes(status)) {
+    throw requestError(`status must be one of: ${PUBLISH_PREFLIGHT_STATUSES.join(", ")}`, 400);
+  }
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 200));
+  return db.prepare(`
+    SELECT * FROM studio_publish_preflight_results
+    WHERE campaign_project_id = ?
+      AND (? = '' OR status = ?)
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).all(cleanId(projectId), status, status, limit).map(publicStudioPublishPreflight);
+}
+
+function getStudioPublishPreflight(preflightId, scope = null, options = {}) {
+  const row = getStudioPublishPreflightRow(preflightId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Studio publish preflight");
+  return publicStudioPublishPreflight(row, options);
+}
+
+function getContentManifestDraftTransform(transformId, scope = null) {
+  const row = getContentManifestDraftTransformRow(transformId);
+  if (!row) return null;
+  if (scope) assertCampaignProjectInputScope(scope, row, "Content manifest draft transform");
+  return publicContentManifestDraftTransform(row);
+}
+
+function assertStudioC1RouteBoundary(input = {}) {
+  try {
+    assertStudioC1InputBoundary(input);
+  } catch (error) {
+    throw requestError(error.message || "Studio Execution C1 input is out of scope", 400);
+  }
+}
+
+function assertValidPublishPreflightContract(preflight) {
+  const validation = validatePublishPreflightContract(preflight);
+  if (!validation.valid) {
+    throw requestError(`publish preflight contract is invalid: ${validation.errors.map((error) => `${error.field}:${error.code}`).join(", ")}`, 400);
+  }
+}
+
+function getStudioPublishPreflightRow(preflightId) {
+  return db.prepare("SELECT * FROM studio_publish_preflight_results WHERE publish_preflight_id = ?").get(cleanId(preflightId));
+}
+
+function getContentManifestDraftTransformRow(transformId) {
+  return db.prepare("SELECT * FROM content_manifest_draft_transforms WHERE draft_transform_id = ?").get(cleanId(transformId));
+}
+
+function getContentManifestDraftTransformRowForPreflight(preflightId) {
+  return db.prepare(`
+    SELECT * FROM content_manifest_draft_transforms
+    WHERE publish_preflight_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(cleanId(preflightId));
+}
+
 function listStudioGenerationProviders() {
   return db.prepare(`
     SELECT * FROM studio_generation_providers
@@ -10551,6 +10880,74 @@ function publicStudioRenderQaResult(row) {
     checks: parseJson(row.checks_json || "[]", []),
     blocked_reasons: parseJson(row.blocked_reasons_json || "[]", []),
     errors: parseJson(row.errors_json || "[]", []),
+    created_at: cleanString(row.created_at)
+  };
+}
+
+function publicStudioPublishPreflight(row, options = {}) {
+  const preflight = {
+    schema_version: "studio-publish-preflight/c1",
+    preflight_version: PUBLISH_PREFLIGHT_VERSION,
+    publish_preflight_id: cleanId(row.publish_preflight_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 1,
+    render_manifest_id: cleanId(row.render_manifest_id),
+    render_manifest_output_sha256: cleanString(row.render_manifest_output_sha256),
+    required_asset_ids: parseJson(row.required_asset_ids_json || "[]", []),
+    content_type: cleanString(row.content_type),
+    publish_mode: cleanString(row.publish_mode),
+    status: cleanString(row.status),
+    checks: parseJson(row.checks_json || "[]", []),
+    blocked_reasons: parseJson(row.blocked_reasons_json || "[]", []),
+    docs99_gate_ref: cleanString(row.docs99_gate_ref),
+    docs99_gate_verdict: cleanString(row.docs99_gate_verdict),
+    approval_gate_ref: cleanString(row.approval_gate_ref),
+    request_reason: cleanString(row.request_reason),
+    created_by_actor_id: cleanId(row.created_by_actor_id),
+    no_active_content_manifest_mutation: row.no_active_content_manifest_mutation === 1,
+    no_content_manifest_activation: row.no_content_manifest_activation === 1,
+    no_publish: row.no_publish === 1,
+    no_player_device_mutation: row.no_player_device_mutation === 1,
+    no_schedule_activation: row.no_schedule_activation === 1,
+    dry_run_only: row.dry_run_only === 1,
+    created_at: cleanString(row.created_at)
+  };
+  if (options.includeDraftTransform) {
+    const transformRow = getContentManifestDraftTransformRowForPreflight(preflight.publish_preflight_id);
+    preflight.content_manifest_draft_transform = transformRow ? publicContentManifestDraftTransform(transformRow) : null;
+  }
+  return preflight;
+}
+
+function publicContentManifestDraftTransform(row) {
+  return {
+    schema_version: "content-manifest-draft-transform/c1",
+    transform_version: CONTENT_MANIFEST_DRAFT_TRANSFORM_VERSION,
+    draft_transform_id: cleanId(row.draft_transform_id),
+    publish_preflight_id: cleanId(row.publish_preflight_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 1,
+    render_manifest_id: cleanId(row.render_manifest_id),
+    draft_content_manifest_id: cleanId(row.draft_content_manifest_id),
+    status: cleanString(row.status),
+    transform_errors: parseJson(row.transform_errors_json || "[]", []),
+    playlist_item_draft_ids: parseJson(row.playlist_item_draft_ids_json || "[]", []),
+    schedule_draft_ids: parseJson(row.schedule_draft_ids_json || "[]", []),
+    qr_link_ids: parseJson(row.qr_link_ids_json || "[]", []),
+    content_manifest_draft: parseJson(row.content_manifest_draft_json || "{}", {}),
+    content_manifest_draft_sha256: cleanString(row.content_manifest_draft_sha256),
+    no_active_content_manifest_mutation: row.no_active_content_manifest_mutation === 1,
+    no_content_manifest_activation: row.no_content_manifest_activation === 1,
+    no_publish: row.no_publish === 1,
+    no_player_device_mutation: row.no_player_device_mutation === 1,
+    no_schedule_activation: row.no_schedule_activation === 1,
+    created_by_actor_id: cleanId(row.created_by_actor_id),
     created_at: cleanString(row.created_at)
   };
 }

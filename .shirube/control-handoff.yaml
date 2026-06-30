@@ -10,14 +10,12 @@ premise_ref: .shirube/repo-spec.yaml
 owner_confirmation_ref: https://github.com/watchout/misell/issues/211#issuecomment-4841540995
 premise_confirmation_ref: https://github.com/watchout/misell/issues/211#issuecomment-4841540995
 spec_review_state: ready_for_implementation
-
 repo: watchout/misell
 repo_local_issue: https://github.com/watchout/misell/issues/211
 owner:
   role: repo_owner
   actor: watchout
 next_role: implementation
-
 cell:
   CELL-ID: CELL-MISELL-211-STUDIO-PROVIDER-STATUS-PANEL
   cell_ref: .shirube/cells/CELL-MISELL-211-STUDIO-PROVIDER-STATUS-PANEL.yaml
@@ -76,7 +74,6 @@ cell:
     - No create/start/complete/fail/delete/rights approval controls are added.
     - E2E confirms panel visibility, empty/non-empty state where feasible, and absence of mutation controls.
     - No backend/API/DB/auth/workflow/package/runtime publish behavior is changed.
-
 validation:
   required_commands:
     - git diff --check
@@ -93,7 +90,6 @@ validation:
     - structured_audit
     - owner_decision
   audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-211-STUDIO-PROVIDER-STATUS-PANEL.yaml
-
 owner_decision:
   required_before_merge: true
   allowed_verdicts:
@@ -102,7 +98,6 @@ owner_decision:
     - BLOCKED
   exact_head_sha: null
   decision_ref: null
-
 post_merge:
   required_when_done_claimed: true
   required_evidence:
