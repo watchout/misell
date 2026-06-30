@@ -3,40 +3,79 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>misell admin</title>
+    <title>Misell LAN Admin</title>
     <link rel="stylesheet" href="/style.css">
   </head>
-  <body class="admin-body">
-    <header class="admin-header">
-      <div>
+  <body class="admin-body" data-admin-tab="playlist">
+    <header class="admin-header lan-admin-header">
+      <div class="admin-brand">
         <p class="eyebrow">misell-player</p>
         <h1>LAN管理画面</h1>
       </div>
+
+      <dl id="device-summary" class="device-summary" aria-label="端末状態">
+        <div>
+          <dt>Device</dt>
+          <dd id="summary-device-id">loading</dd>
+        </div>
+        <div>
+          <dt>Store</dt>
+          <dd id="summary-store-id">loading</dd>
+        </div>
+        <div>
+          <dt>Playlist</dt>
+          <dd id="summary-playlist-version">loading</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd id="summary-health">確認中</dd>
+        </div>
+        <div>
+          <dt>Changes</dt>
+          <dd id="summary-dirty">未読込</dd>
+        </div>
+      </dl>
+
       <nav class="admin-actions" aria-label="管理操作">
-        <a class="button secondary" href="/player" target="_blank" rel="noreferrer">Player</a>
-        <a class="button secondary" href="#promo-builder">PR作成</a>
-        <a class="button secondary" href="#qr-builder">QR作成</a>
+        <a class="button secondary" href="/player" target="_blank" rel="noreferrer">Playerを開く</a>
         <button id="preview-playlist" class="button secondary" type="button">保存前プレビュー</button>
         <button id="backup-content" class="button secondary" type="button">バックアップ</button>
         <button id="reload-player" class="button secondary" type="button">プレイヤー再読み込み</button>
-        <button id="save-playlist" class="button primary" type="button">保存</button>
+        <button id="save-playlist" class="button primary" type="button" disabled>保存</button>
       </nav>
     </header>
 
-    <main class="admin-shell">
-      <section class="panel upload-panel">
+    <nav class="admin-mobile-tabs" aria-label="管理画面タブ">
+      <button class="admin-tab-button" type="button" data-admin-tab-target="assets">素材</button>
+      <button class="admin-tab-button" type="button" data-admin-tab-target="playlist">配信順</button>
+      <button class="admin-tab-button" type="button" data-admin-tab-target="detail">詳細</button>
+      <button class="admin-tab-button" type="button" data-admin-tab-target="json">JSON</button>
+    </nav>
+
+    <main class="admin-dashboard">
+      <section class="panel asset-panel" data-admin-section="assets" aria-labelledby="asset-panel-title">
         <div class="panel-title-row">
           <div>
             <p class="eyebrow">Assets</p>
-            <h2>素材</h2>
+            <h2 id="asset-panel-title">素材</h2>
           </div>
           <span id="asset-count" class="count-badge">0</span>
         </div>
 
         <form id="upload-form" class="upload-form">
+          <label class="file-input-label" for="asset-input">
+            <span>アップロード</span>
+            <small>jpg / jpeg / png / mp4 / webm</small>
+          </label>
           <input id="asset-input" name="asset" type="file" accept=".jpg,.jpeg,.png,.mp4,.webm,image/jpeg,image/png,video/mp4,video/webm">
           <button class="button primary" type="submit">アップロード</button>
         </form>
+
+        <div class="asset-toolbar" role="group" aria-label="素材フィルタ">
+          <button class="button tiny secondary" type="button" data-asset-filter="all">すべて</button>
+          <button class="button tiny secondary" type="button" data-asset-filter="image">画像</button>
+          <button class="button tiny secondary" type="button" data-asset-filter="video">動画</button>
+        </div>
 
         <div class="asset-list-wrap">
           <table class="asset-table">
@@ -45,6 +84,7 @@
                 <th>Preview</th>
                 <th>Path</th>
                 <th>Size</th>
+                <th>Used</th>
                 <th></th>
               </tr>
             </thead>
@@ -53,147 +93,11 @@
         </div>
       </section>
 
-      <section id="promo-builder" class="panel promo-panel">
-        <div class="panel-title-row">
-          <div>
-            <p class="eyebrow">Product PR</p>
-            <h2>PR作成</h2>
-          </div>
-          <span class="count-badge">3面</span>
-        </div>
-
-        <div class="promo-workflow" aria-label="動画作成手順">
-          <strong>動画作成手順</strong>
-          <ol>
-            <li>素材をアップロード</li>
-            <li>商品情報を入力</li>
-            <li>プレビューで確認</li>
-            <li>保存とバックアップ</li>
-          </ol>
-        </div>
-
-        <div class="promo-draft">
-          <label>
-            <span>自然文から下書き</span>
-            <textarea id="promo-draft-prompt" rows="3" maxlength="1000" placeholder="例: 新商品「ブラウザPR商品」を中央に大きく。価格は980円。特典は今だけ店頭限定。CTAは店頭で今すぐチェック。特徴は3画面訴求、中央商品、右CTA。"></textarea>
-          </label>
-          <div class="promo-draft-actions">
-            <button id="apply-promo-draft" class="button secondary" type="button">下書き反映</button>
-            <div id="promo-draft-result" class="promo-draft-result" hidden></div>
-          </div>
-        </div>
-
-        <form id="promo-form" class="promo-form">
-          <label>
-            <span>構成</span>
-            <select name="pattern">
-              <option value="center-hero">中央商品 + 左特徴 + 右CTA</option>
-              <option value="two-panel-info">2面商品 + 1面情報</option>
-              <option value="wide-first">ワイド導入 + 3面詳細</option>
-            </select>
-          </label>
-          <label>
-            <span>商品名</span>
-            <input id="promo-product-name" name="product_name" type="text" maxlength="80" required>
-          </label>
-          <label>
-            <span>商品素材</span>
-            <select id="promo-product-asset" name="product_asset"></select>
-          </label>
-          <label>
-            <span>価格</span>
-            <input id="promo-price" name="price" type="text" maxlength="48">
-          </label>
-          <label>
-            <span>特典</span>
-            <input id="promo-offer" name="offer" type="text" maxlength="80">
-          </label>
-          <label>
-            <span>CTA</span>
-            <input id="promo-cta" name="cta" type="text" maxlength="80" value="店頭で今すぐチェック">
-          </label>
-          <label>
-            <span>特徴1</span>
-            <input id="promo-feature-1" name="feature_1" type="text" maxlength="48">
-          </label>
-          <label>
-            <span>特徴2</span>
-            <input id="promo-feature-2" name="feature_2" type="text" maxlength="48">
-          </label>
-          <label>
-            <span>特徴3</span>
-            <input id="promo-feature-3" name="feature_3" type="text" maxlength="48">
-          </label>
-          <label>
-            <span>1カット秒数</span>
-            <input name="duration_per_cut" type="number" min="2" max="20" value="5">
-          </label>
-          <label>
-            <span>キャンペーンID</span>
-            <input name="campaign_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
-          </label>
-          <div class="promo-actions">
-            <button id="generate-promo" class="button primary" type="submit" name="action" value="append">カット追加</button>
-            <button id="replace-promo" class="button secondary" type="submit" name="action" value="replace" disabled>再生成して置換</button>
-          </div>
-        </form>
-
-        <div id="promo-storyboard" class="promo-storyboard" hidden></div>
-      </section>
-
-      <section id="qr-builder" class="panel qr-panel">
-        <div class="panel-title-row">
-          <div>
-            <p class="eyebrow">QR</p>
-            <h2>QR発行</h2>
-          </div>
-          <span id="qr-count" class="count-badge">0</span>
-        </div>
-
-        <form id="qr-form" class="qr-form">
-          <label>
-            <span>キャンペーンID</span>
-            <input id="qr-campaign-id" name="campaign_id" type="text" maxlength="80" required>
-          </label>
-          <label>
-            <span>QR ID</span>
-            <input id="qr-id" name="qr_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
-          </label>
-          <label>
-            <span>表示名</span>
-            <input id="qr-label" name="label" type="text" maxlength="80">
-          </label>
-          <label>
-            <span>LP URL</span>
-            <input id="qr-lp-url" name="lp_url" type="text" maxlength="500" required>
-          </label>
-          <div class="qr-actions">
-            <button id="generate-qr" class="button primary" type="submit">QR発行</button>
-          </div>
-        </form>
-
-        <div id="qr-result" class="qr-result" hidden></div>
-
-        <div class="qr-list-wrap">
-          <table class="asset-table qr-table">
-            <thead>
-              <tr>
-                <th>QR</th>
-                <th>Campaign</th>
-                <th>LP URL</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="qr-list"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel playlist-panel">
+      <section class="panel playlist-panel" data-admin-section="playlist" aria-labelledby="playlist-panel-title">
         <div class="panel-title-row">
           <div>
             <p class="eyebrow">Playlist</p>
-            <h2>配信順</h2>
+            <h2 id="playlist-panel-title">配信順</h2>
           </div>
           <div class="segmented-actions">
             <button id="add-three-zone" class="button secondary" type="button">3ゾーン追加</button>
@@ -202,20 +106,188 @@
         </div>
 
         <div id="validation-errors" class="validation-errors" hidden></div>
-        <div id="playlist-editor" class="playlist-editor"></div>
+        <div id="playlist-editor" class="playlist-editor" aria-live="polite"></div>
       </section>
 
-      <section class="panel json-panel">
+      <aside class="panel detail-panel" data-admin-section="detail" aria-labelledby="detail-panel-title">
         <div class="panel-title-row">
           <div>
-            <p class="eyebrow">Raw JSON</p>
-            <h2>playlist.json</h2>
+            <p class="eyebrow">Selected item</p>
+            <h2 id="detail-panel-title">詳細</h2>
           </div>
-          <button id="apply-json" class="button secondary" type="button">JSONを反映</button>
+          <span id="selected-item-status" class="count-badge">未選択</span>
         </div>
-        <textarea id="json-editor" spellcheck="false"></textarea>
-      </section>
+
+        <div id="item-detail" class="item-detail"></div>
+
+        <section class="operation-log" aria-labelledby="operation-log-title">
+          <h3 id="operation-log-title">操作ログ</h3>
+          <ol id="operation-log-list"></ol>
+        </section>
+      </aside>
+
+      <details class="panel json-panel" data-admin-section="json">
+        <summary>
+          <span>
+            <span class="eyebrow">Advanced</span>
+            <strong>高度な編集</strong>
+          </span>
+          <button id="apply-json" class="button secondary" type="button">JSONを反映</button>
+        </summary>
+        <textarea id="json-editor" spellcheck="false" aria-label="playlist JSON"></textarea>
+      </details>
+
+      <details class="panel tools-panel" open>
+        <summary>
+          <span>
+            <span class="eyebrow">Local tools</span>
+            <strong>ローカル作成ツール</strong>
+          </span>
+        </summary>
+
+        <section id="promo-builder" class="tool-section promo-panel">
+          <div class="panel-title-row">
+            <div>
+              <p class="eyebrow">Product PR</p>
+              <h2>PR作成</h2>
+            </div>
+            <span class="count-badge">3面</span>
+          </div>
+
+          <div class="promo-workflow" aria-label="動画作成手順">
+            <strong>動画作成手順</strong>
+            <ol>
+              <li>素材をアップロード</li>
+              <li>商品情報を入力</li>
+              <li>プレビューで確認</li>
+              <li>保存とバックアップ</li>
+            </ol>
+          </div>
+
+          <div class="promo-draft">
+            <label>
+              <span>自然文から下書き</span>
+              <textarea id="promo-draft-prompt" rows="3" maxlength="1000" placeholder="例: 新商品を中央に大きく。価格は980円。CTAは店頭で今すぐチェック。"></textarea>
+            </label>
+            <div class="promo-draft-actions">
+              <button id="apply-promo-draft" class="button secondary" type="button">下書き反映</button>
+              <div id="promo-draft-result" class="promo-draft-result" hidden></div>
+            </div>
+          </div>
+
+          <form id="promo-form" class="promo-form">
+            <label>
+              <span>構成</span>
+              <select name="pattern">
+                <option value="center-hero">中央商品 + 左特徴 + 右CTA</option>
+                <option value="two-panel-info">2面商品 + 1面情報</option>
+                <option value="wide-first">ワイド導入 + 3面詳細</option>
+              </select>
+            </label>
+            <label>
+              <span>商品名</span>
+              <input id="promo-product-name" name="product_name" type="text" maxlength="80" required>
+            </label>
+            <label>
+              <span>商品素材</span>
+              <select id="promo-product-asset" name="product_asset"></select>
+            </label>
+            <label>
+              <span>価格</span>
+              <input id="promo-price" name="price" type="text" maxlength="48">
+            </label>
+            <label>
+              <span>特典</span>
+              <input id="promo-offer" name="offer" type="text" maxlength="80">
+            </label>
+            <label>
+              <span>CTA</span>
+              <input id="promo-cta" name="cta" type="text" maxlength="80" value="店頭で今すぐチェック">
+            </label>
+            <label>
+              <span>特徴1</span>
+              <input id="promo-feature-1" name="feature_1" type="text" maxlength="48">
+            </label>
+            <label>
+              <span>特徴2</span>
+              <input id="promo-feature-2" name="feature_2" type="text" maxlength="48">
+            </label>
+            <label>
+              <span>特徴3</span>
+              <input id="promo-feature-3" name="feature_3" type="text" maxlength="48">
+            </label>
+            <label>
+              <span>1カット秒数</span>
+              <input name="duration_per_cut" type="number" min="2" max="20" value="5">
+            </label>
+            <label>
+              <span>キャンペーンID</span>
+              <input name="campaign_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
+            </label>
+            <div class="promo-actions">
+              <button id="generate-promo" class="button primary" type="submit" name="action" value="append">カット追加</button>
+              <button id="replace-promo" class="button secondary" type="submit" name="action" value="replace" disabled>再生成して置換</button>
+            </div>
+          </form>
+
+          <div id="promo-storyboard" class="promo-storyboard" hidden></div>
+        </section>
+
+        <section id="qr-builder" class="tool-section qr-panel">
+          <div class="panel-title-row">
+            <div>
+              <p class="eyebrow">QR</p>
+              <h2>QR発行</h2>
+            </div>
+            <span id="qr-count" class="count-badge">0</span>
+          </div>
+
+          <form id="qr-form" class="qr-form">
+            <label>
+              <span>キャンペーンID</span>
+              <input id="qr-campaign-id" name="campaign_id" type="text" maxlength="80" required>
+            </label>
+            <label>
+              <span>QR ID</span>
+              <input id="qr-id" name="qr_id" type="text" maxlength="80" placeholder="未入力なら自動生成">
+            </label>
+            <label>
+              <span>表示名</span>
+              <input id="qr-label" name="label" type="text" maxlength="80">
+            </label>
+            <label>
+              <span>LP URL</span>
+              <input id="qr-lp-url" name="lp_url" type="text" maxlength="500" required>
+            </label>
+            <div class="qr-actions">
+              <button id="generate-qr" class="button primary" type="submit">QR発行</button>
+            </div>
+          </form>
+
+          <div id="qr-result" class="qr-result" hidden></div>
+
+          <div class="qr-list-wrap">
+            <table class="asset-table qr-table">
+              <thead>
+                <tr>
+                  <th>QR</th>
+                  <th>Campaign</th>
+                  <th>LP URL</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="qr-list"></tbody>
+            </table>
+          </div>
+        </section>
+      </details>
     </main>
+
+    <div id="sticky-save-bar" class="sticky-save-bar" hidden>
+      <span>未保存の変更があります</span>
+      <button class="button secondary" type="button" data-sticky-preview>プレビュー</button>
+      <button class="button primary" type="button" data-sticky-save>保存</button>
+    </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/admin.js"></script>
