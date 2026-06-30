@@ -221,6 +221,37 @@ A1 refuses external AI/provider jobs, generated media, MP4 export,
 deterministic and include schema/layout/copy-safety/source-of-truth assertions.
 The smoke target is `npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract`.
 
+Studio Execution B1 adds the provider-job foundation only. It persists
+`studio_generation_providers`, `ai_generation_jobs`, and `asset_provenance` for
+manual uploads and fixture-backed mock provider jobs. The only B1 providers are
+`manual_upload` and `mock_provider`; real providers, MCP runtime dependencies,
+API keys, webhooks, paid calls, credit mutation, generated final copy, publish,
+schedule activation, Player/device mutation, and `content_manifest` creation are
+out of scope.
+
+B1 Admin-only endpoints:
+
+- `GET /api/admin/studio-generation-providers`
+- `GET /api/admin/ai-generation-jobs`
+- `POST /api/admin/ai-generation-jobs`
+- `GET /api/admin/ai-generation-jobs/:ai_generation_job_id`
+- `POST /api/admin/ai-generation-jobs/:ai_generation_job_id/start`
+- `POST /api/admin/ai-generation-jobs/:ai_generation_job_id/complete`
+- `POST /api/admin/ai-generation-jobs/:ai_generation_job_id/fail`
+- `DELETE /api/admin/ai-generation-jobs/:ai_generation_job_id`
+- `GET /api/admin/asset-provenance`
+- `POST /api/admin/asset-provenance`
+- `GET /api/admin/asset-provenance/:asset_provenance_id`
+- `PATCH /api/admin/asset-provenance/:asset_provenance_id`
+- `DELETE /api/admin/asset-provenance/:asset_provenance_id`
+
+Generation jobs require a tenant/store/screen-group scope, bounded provider
+status lifecycle, idempotency key, zero-cost guard fields, retry/error
+classification, and no external provider call evidence. Assets cannot become a
+publish candidate until provenance has approved rights review, a compatible
+license status, and `commercial_use_allowed=true`; B1 still does not publish.
+The smoke target is `npm --prefix apps/cloud run smoke:studio-provider-job-foundation`.
+
 Scene Editor partial regeneration requests are also event-only stubs. Operators
 can request `scene_regeneration`, `copy_regeneration`, or
 `qr_cta_regeneration` for a non-deleted scene, and Cloud records a

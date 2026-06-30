@@ -1,0 +1,112 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-211-STUDIO-PROVIDER-JOB-FOUNDATION
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-211-studio-provider-job-foundation.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-211-STUDIO-PROVIDER-JOB-FOUNDATION.yaml
+  cell_id: CELL-MISELL-211-STUDIO-PROVIDER-JOB-FOUNDATION
+  pr: watchout/misell#TBD
+items:
+  - item_id: SPJ-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: SPJ-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden paths are touched, especially workflows, deploy, secrets, branch protection/rulesets, Player, public UI, backup/restore scripts, or external surfaces.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: SPJ-AUDIT-003
+    source: schema
+    verification_method: semantic
+    required: true
+    prompt: Verify migration is additive and creates studio_generation_providers, ai_generation_jobs, and asset_provenance without destructive changes.
+    expected_evidence:
+      - code_review
+      - db_migration_dry_run
+  - item_id: SPJ-AUDIT-004
+    source: provider_catalog
+    verification_method: semantic
+    required: true
+    prompt: Verify provider catalog is limited to manual_upload and mock_provider, and both declare no external network, no secrets, no paid calls, and no MCP runtime dependency.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-005
+    source: job_contract
+    verification_method: semantic
+    required: true
+    prompt: Verify ai_generation_jobs require tenant/store/screen_group scope, idempotency_key, bounded statuses, retry_count/max_retries, error_class, provider evidence, actor fields, timestamps, and no-side-effect guard fields.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-006
+    source: idempotency
+    verification_method: semantic
+    required: true
+    prompt: Verify duplicate idempotency with identical input returns the existing job, and duplicate idempotency with different input is rejected.
+    expected_evidence:
+      - smoke_result
+  - item_id: SPJ-AUDIT-007
+    source: asset_provenance
+    verification_method: semantic
+    required: true
+    prompt: Verify asset_provenance records source_type/license_status/commercial_use_allowed/rights_review_status/provider evidence/reference evidence/reviewer evidence, and publish_candidate_allowed cannot be true unless provenance is eligible.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-008
+    source: api_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify Admin APIs enforce tenant/store/screen_group scope for generation job and asset provenance list/get/create/update/delete operations.
+    expected_evidence:
+      - route_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-009
+    source: side_effect_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify B1 rejects real provider IDs, secret-like inputs, external provider calls, paid calls, MCP runtime inputs, credit mutation, content_manifest creation, publish, schedule activation, Player/device mutation, and customer/public controls.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-010
+    source: lifecycle
+    verification_method: semantic
+    required: true
+    prompt: Verify job start/complete/fail lifecycle is bounded, records retry/error classification, and cannot create content_manifest or publish output.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-011
+    source: soft_delete
+    verification_method: semantic
+    required: true
+    prompt: Verify generation jobs and asset provenance use soft delete and default list APIs hide deleted rows.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: SPJ-AUDIT-012
+    source: ci_gate
+    verification_method: executable
+    required: true
+    prompt: Verify smoke:studio-provider-job-foundation is included in package scripts/root test:ci, and db-migration-dry-run asserts the B1 schema. Verify this PR does not mutate workflow files.
+    expected_evidence:
+      - package_script
+      - db_migration_dry_run
+      - workflow_non_mutation
+  - item_id: SPJ-AUDIT-013
+    source: shirube
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed, exact head is recorded, and CTO/owner approval refs match #211 B1 scope only.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
+      - approval_refs
