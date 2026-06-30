@@ -1515,6 +1515,58 @@ td small {
   resize: vertical;
 }
 
+.campaign-editor-publish-preflight form,
+.campaign-editor-preflight-result,
+.campaign-editor-preflight-history,
+.campaign-editor-preflight-guards {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-editor-publish-preflight form {
+  align-items: end;
+  grid-template-columns: minmax(160px, 1.2fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(160px, 1fr);
+}
+
+.campaign-editor-publish-preflight form label {
+  display: grid;
+  font-size: 12px;
+  font-weight: 650;
+  gap: 5px;
+}
+
+.campaign-editor-publish-preflight form textarea,
+.campaign-editor-publish-preflight form input,
+.campaign-editor-publish-preflight form select {
+  font-size: 14px;
+  font-weight: 400;
+  width: 100%;
+}
+
+.campaign-editor-preflight-reason {
+  grid-column: 1 / -2;
+}
+
+.campaign-editor-preflight-result {
+  background: #f6f8fa;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.campaign-editor-preflight-guards {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.campaign-editor-preflight-history small {
+  align-items: center;
+  border-top: 1px solid #d8dee4;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 90px minmax(160px, 1fr) 90px minmax(160px, 1fr);
+  padding-top: 8px;
+}
+
 .admin-context-panel {
   margin-bottom: 12px;
 }
@@ -1619,6 +1671,13 @@ pre {
   .campaign-editor-stage {
     aspect-ratio: auto;
     min-height: 0;
+  }
+
+  .campaign-editor-publish-preflight form,
+  .campaign-editor-preflight-reason,
+  .campaign-editor-preflight-history small {
+    grid-column: auto;
+    grid-template-columns: 1fr;
   }
 
   .campaign-preview-panel h2 {

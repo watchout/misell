@@ -283,6 +283,14 @@ C1 Admin-only endpoints:
 - `POST /api/admin/campaign-projects/:id/publish-preflights`
 - `GET /api/admin/studio-publish-preflights/:publish_preflight_id`
 
+The authenticated Campaign Project editor also exposes a C1 publish preflight
+panel. Operators can paste a QA-passed `render_manifest_id`, choose the
+content type and docs/99 verdict, run the dry-run, and inspect status, guard
+flags, recent history, and the draft transform status. This panel is only a UI
+over the C1 evidence APIs; it does not add live activation, publish, schedule
+activation, Player/device mutation, public/customer controls, provider calls,
+or credit consumption.
+
 C1 checks project validation, scene validation, render QA/output hash, tenant /
 store / screen-group scope, asset provenance publish-candidate eligibility, and
 docs/99 legal/privacy/ad gate linkage for ad, sponsor, and collaboration

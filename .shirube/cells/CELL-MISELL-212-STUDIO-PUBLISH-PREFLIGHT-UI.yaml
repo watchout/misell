@@ -1,0 +1,76 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-212-STUDIO-PUBLISH-PREFLIGHT-UI
+parent_ssot: https://github.com/watchout/misell/issues/212
+title: Studio publish preflight admin UI panel
+cell_type: admin_ui
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an authenticated Campaign Project editor panel for existing Studio Execution C1 publish preflight dry-runs, without backend/API/DB changes, live activation, publishing, schedule activation, Player/device mutation, provider calls, or customer/public controls.
+non_scope:
+  - backend route, API contract, DB migration, package, workflow, deploy, secret, or branch protection changes
+  - Studio Execution C2 approval workflow, approval decision mutation, legal signoff, external partner approval tokens, or publish authorization
+  - live activation, active content_manifest creation/mutation, schedule activation, publish_history mutation, rollback activation, Player/device mutation, or delivery policy mutation
+  - public/customer/external publish controls, provider calls, external AI, media rendering, MP4 export, billing, credits, QR creation, advertiser reports, camera/POS/ad-network integration
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-212-STUDIO-PUBLISH-PREFLIGHT-UI.yaml
+  - .shirube/control-handoffs/CH-MISELL-212-studio-publish-preflight-ui.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-212-STUDIO-PUBLISH-PREFLIGHT-UI.yaml
+  - apps/cloud/README.md
+  - apps/cloud/public/campaign-project-editor.js
+  - apps/cloud/public/style.css
+  - tests/e2e/misell-ui.spec.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/cloud/server.js
+  - apps/cloud/lib/**
+  - apps/cloud/scripts/**
+  - apps/cloud/package.json
+  - apps/cloud/package-lock.json
+  - apps/player/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - existing_authenticated_admin_route_only
+  - studio_publish_preflight_ui
+stop_conditions:
+  - backend/API/DB/schema/workflow/package/deploy/secret/auth behavior change is needed
+  - C2 approval workflow, legal signoff, publish authorization, live activation, schedule activation, Player/device mutation, provider call, billing/credit mutation, QR creation, or public/customer route is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing validation evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Authenticated Campaign Project editor fetches existing C1 preflight history for the project.
+  - Editor panel lets an operator enter a render_manifest_id, content_type, docs99 verdict/ref, and request reason, then calls the existing C1 preflight API.
+  - Panel displays latest preflight status, content_type/publish_mode, docs99 verdict, dry-run guard flags, failed checks, recent history, and draft transform status when available.
+  - UI clearly states that C1 is dry-run evidence only and does not publish, activate content_manifest, activate schedule, or mutate Player/devices.
+  - No publish/activate/schedule/device/customer/public controls are introduced.
+  - E2E creates a validated project and QA-passed render manifest, runs the preflight through the editor UI, and confirms passed status plus no publish control.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - node --check apps/cloud/public/campaign-project-editor.js
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-publish-preflight
+    - npm run test:e2e
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - preflight_ui_screenshot
+    - structured_audit
+    - owner_decision
