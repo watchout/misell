@@ -8,6 +8,9 @@
     project: null,
     handoffDraft: null,
     scheduleHandoffDraft: null,
+    providers: [],
+    generationJobs: [],
+    assetProvenance: [],
     selectedSceneId: "",
     message: ""
   };
@@ -19,14 +22,23 @@
   async function loadEditor(options = {}) {
     const projectId = projectIdFromPath();
     if (!projectId) throw new Error("project id is required");
-    const [response, handoffResponse, scheduleHandoffResponse] = await Promise.all([
+    const [response, handoffResponse, scheduleHandoffResponse, providerResponse] = await Promise.all([
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`),
-      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/schedule-handoff-draft`)
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/schedule-handoff-draft`),
+      fetchJson("/api/admin/studio-generation-providers")
     ]);
     state.project = response.campaign_project;
     state.handoffDraft = handoffResponse.playlist_handoff_draft;
     state.scheduleHandoffDraft = scheduleHandoffResponse.schedule_handoff_draft;
+    state.providers = providerResponse.studio_generation_providers || [];
+    const statusQuery = projectStatusQuery(state.project);
+    const [jobsResponse, provenanceResponse] = await Promise.all([
+      fetchJson(`/api/admin/ai-generation-jobs?${statusQuery}`),
+      fetchJson(`/api/admin/asset-provenance?${statusQuery}`)
+    ]);
+    state.generationJobs = jobsResponse.ai_generation_jobs || [];
+    state.assetProvenance = provenanceResponse.asset_provenance || [];
     const scenes = activeScenes(state.project);
     const previous = options.selectedSceneId || state.selectedSceneId;
     state.selectedSceneId = scenes.some((scene) => scene.campaign_project_scene_id === previous)
@@ -82,6 +94,7 @@
         <h2>履歴</h2>
         ${(project.events || []).slice(0, 8).map(renderEvent).join("") || `<p class="empty">履歴なし</p>`}
       </section>
+      ${renderProviderStatusPanel(project, state.providers, state.generationJobs, state.assetProvenance)}
       ${renderHandoffDraft(state.handoffDraft)}
       ${renderScheduleHandoffDraft(state.scheduleHandoffDraft)}
     `;
@@ -417,6 +430,113 @@
     `;
   }
 
+  function renderProviderStatusPanel(project, providers, jobs, provenance) {
+    const jobCount = jobs.length;
+    const provenanceCount = provenance.length;
+    return `
+      <section class="campaign-editor-provider-status" aria-label="Provider, job, and provenance status" data-provider-status-panel>
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>Provider / Job / Provenance</h2>
+            <small>既存のStudio B1 read APIだけを読む状態確認パネルです。job作成・権利承認・publishは行いません。</small>
+          </div>
+          <span class="update-status update-status-pending">読み取り専用</span>
+        </div>
+        <div class="campaign-editor-provider-guards" aria-label="Provider status guard flags">
+          ${renderGuardFlag("外部provider呼び出しなし", true)}
+          ${renderGuardFlag("secret表示なし", true)}
+          ${renderGuardFlag("credit消費なし", true)}
+          ${renderGuardFlag("content_manifest作成なし", true)}
+          ${renderGuardFlag("publishなし", true)}
+        </div>
+        <div class="campaign-editor-provider-grid">
+          <section class="campaign-editor-provider-card" data-provider-catalog>
+            <h3>Provider Catalog</h3>
+            ${providers.length ? providers.map(renderProvider).join("") : `<p class="empty">active providerはありません。</p>`}
+          </section>
+          <section class="campaign-editor-provider-card" data-generation-jobs>
+            <h3>Generation Jobs</h3>
+            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(jobCount))} jobs</small>
+            ${jobs.length ? jobs.map(renderGenerationJob).join("") : `<p class="empty">generation jobはまだありません。</p>`}
+          </section>
+          <section class="campaign-editor-provider-card" data-asset-provenance>
+            <h3>Asset Provenance</h3>
+            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(provenanceCount))} assets</small>
+            ${provenance.length ? provenance.map(renderAssetProvenance).join("") : `<p class="empty">asset provenanceはまだありません。</p>`}
+          </section>
+        </div>
+        <p class="campaign-editor-provider-note">このパネルにはmutation controlを置きません。jobのcreate/start/complete/fail/delete、asset provenanceのcreate/update/delete、rights approvalは別工程です。</p>
+      </section>
+    `;
+  }
+
+  function renderProvider(provider) {
+    const capabilities = Array.isArray(provider.capabilities) ? provider.capabilities : [];
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(provider.provider_id || "")}</strong>
+          <small>${escapeHtml(provider.display_name || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(provider.status))}">${escapeHtml(provider.status || "")}</span>
+        <small>${escapeHtml(provider.provider_type || "")}</small>
+        <div class="campaign-editor-provider-tags">
+          ${capabilities.map((capability) => `<span>${escapeHtml(capability)}</span>`).join("")}
+        </div>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("no external", provider.no_external_provider_call)}
+          ${renderGuardFlag("no secret", provider.no_secret_material)}
+          ${renderGuardFlag("no credit", provider.no_credit_consumption)}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderGenerationJob(job) {
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(job.ai_generation_job_id || "")}</strong>
+          <small>${escapeHtml(job.provider_id || "")} / ${escapeHtml(job.capability || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(job.status))}">${escapeHtml(job.status || "")}</span>
+        <small>${escapeHtml(job.requested_asset_role || "")} / ${escapeHtml(job.updated_at || "")}</small>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("no external", job.no_external_provider_call)}
+          ${renderGuardFlag("no secret", job.no_secret_material)}
+          ${renderGuardFlag("no credit", job.no_credit_consumption)}
+          ${renderGuardFlag("no manifest", job.no_content_manifest_creation)}
+          ${renderGuardFlag("no publish", job.no_publish)}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderAssetProvenance(asset) {
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(asset.asset_id || asset.asset_provenance_id || "")}</strong>
+          <small>${escapeHtml(asset.source_type || "")} / ${escapeHtml(asset.generated_by_provider || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(asset.rights_review_status))}">${escapeHtml(asset.rights_review_status || "")}</span>
+        <small>${escapeHtml(asset.license_status || "")} / commercial ${escapeHtml(String(Boolean(asset.commercial_use_allowed)))}</small>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("publish candidate", asset.can_enter_publish_candidate)}
+          ${renderGuardFlag("no external", asset.no_external_provider_call)}
+          ${renderGuardFlag("no secret", asset.no_secret_material)}
+          ${renderGuardFlag("no credit", asset.no_credit_consumption)}
+          ${renderGuardFlag("no manifest", asset.no_content_manifest_creation)}
+          ${renderGuardFlag("no publish", asset.no_publish)}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderGuardFlag(label, ok) {
+    return `<span class="campaign-editor-guard${ok ? " campaign-editor-guard-ok" : " campaign-editor-guard-warn"}">${escapeHtml(label)}</span>`;
+  }
+
   function scenePayloadFromForm(form) {
     return {
       scene_order: Number.parseInt(form.elements.scene_order.value, 10) || 0,
@@ -512,9 +632,19 @@
   }
 
   function statusClass(status) {
-    if (status === "valid" || status === "validated") return "success";
-    if (status === "invalid" || status === "deleted") return "failed";
+    if (["active", "valid", "validated", "approved", "completed", "asset_review_required"].includes(status)) return "success";
+    if (["invalid", "deleted", "failed", "failed_terminal", "rejected", "blocked"].includes(status)) return "failed";
     return "pending";
+  }
+
+  function projectStatusQuery(project) {
+    const params = new URLSearchParams();
+    for (const key of ["tenant_id", "store_id", "screen_group_id", "campaign_project_id"]) {
+      const value = project?.[key];
+      if (value) params.set(key, value);
+    }
+    params.set("limit", "50");
+    return params.toString();
   }
 
   function projectIdFromPath() {
