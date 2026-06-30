@@ -1,0 +1,68 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-212-STUDIO-PUBLISH-PREFLIGHT-DRY-RUN
+parent_ssot: https://github.com/watchout/misell/issues/212
+title: Studio publish preflight dry-run evidence
+cell_type: runtime_foundation
+risk_class: R3
+status: implementation
+summary: >
+  Add deterministic publish preflight and content_manifest-like draft transform
+  evidence for validated Studio campaign projects without live activation,
+  publishing, schedule activation, Player/device mutation, provider calls, or
+  credit consumption.
+
+scope:
+  - Additive Cloud schema for studio_publish_preflight_results.
+  - Additive Cloud schema for content_manifest_draft_transforms.
+  - Admin/operator create/list/get APIs for publish preflight evidence.
+  - Deterministic C1 contract helper for preflight checks and dry-run transform.
+  - Smoke coverage for pass/fail, docs99 fail-closed, QA requirement, scope, and no side effects.
+non_scope:
+  - live activation or active content_manifest mutation
+  - publish_history mutation or rollback activation
+  - schedule activation, Player/device mutation, device commands, or delivery policy mutation
+  - public/customer/external publish controls or external approval token flows
+  - media generation/rendering, provider calls, external AI, MCP runtime dependency, secrets, billing, credits, QR creation, advertiser reports, legal signoff decisions
+
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-212-STUDIO-PUBLISH-PREFLIGHT-DRY-RUN.yaml
+  - .shirube/control-handoffs/CH-MISELL-212-studio-publish-preflight-dry-run.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-212-STUDIO-PUBLISH-PREFLIGHT-DRY-RUN.yaml
+  - apps/cloud/README.md
+  - apps/cloud/lib/studio-publish-preflight-contract.js
+  - apps/cloud/package.json
+  - apps/cloud/scripts/smoke-studio-publish-preflight.mjs
+  - apps/cloud/server.js
+  - package.json
+  - scripts/ci/db-migration-dry-run.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - apps/player/**
+  - apps/cloud/public/**
+
+acceptance_criteria:
+  - C1 schema is additive and does not alter existing publish/content_manifest behavior.
+  - Preflight requires validated project, valid active scenes, QA-passed render manifest, output_sha256, scope match, safe asset provenance, content_type/publish_mode resolution, and docs99 linkage.
+  - docs99 block and human_review_required fail closed for ad/sponsor/collaboration.
+  - Passed preflight creates draft transform evidence only.
+  - Failed preflight creates failed_preflight transform evidence only.
+  - Inputs attempting activation/publish/schedule/device/player/content_manifest mutation are rejected.
+  - Smoke proves no active content_manifest creation, no publish_history, no device command, and no credit mutation.
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - node --check apps/cloud/lib/studio-publish-preflight-contract.js
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-publish-preflight
+    - npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract
+    - npm --prefix apps/cloud run smoke:studio-provider-job-foundation
+    - node scripts/ci/db-migration-dry-run.js
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci

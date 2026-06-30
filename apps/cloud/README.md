@@ -269,6 +269,28 @@ publish candidate until provenance has approved rights review, a compatible
 license status, and `commercial_use_allowed=true`; B1 still does not publish.
 The smoke target is `npm --prefix apps/cloud run smoke:studio-provider-job-foundation`.
 
+Studio Execution C1 adds publish preflight and dry-run
+`content_manifest` draft transform evidence only. A validated
+`CampaignProject`, valid Scenes, and a QA-passed `studio_render_manifest` can be
+checked against deterministic publish readiness rules. The preflight stores
+`studio_publish_preflight_results`; the dry-run transform stores
+`content_manifest_draft_transforms`. These rows are evidence records, not active
+delivery manifests.
+
+C1 Admin-only endpoints:
+
+- `GET /api/admin/campaign-projects/:id/publish-preflights`
+- `POST /api/admin/campaign-projects/:id/publish-preflights`
+- `GET /api/admin/studio-publish-preflights/:publish_preflight_id`
+
+C1 checks project validation, scene validation, render QA/output hash, tenant /
+store / screen-group scope, asset provenance publish-candidate eligibility, and
+docs/99 legal/privacy/ad gate linkage for ad, sponsor, and collaboration
+content. `block` and `human_review_required` gate verdicts fail closed. C1 does
+not create active `content_manifest` rows, activate content, mutate schedules,
+publish, mutate Player/device state, call providers, or consume credits. The
+smoke target is `npm --prefix apps/cloud run smoke:studio-publish-preflight`.
+
 Scene Editor partial regeneration requests are also event-only stubs. Operators
 can request `scene_regeneration`, `copy_regeneration`, or
 `qr_cta_regeneration` for a non-deleted scene, and Cloud records a
