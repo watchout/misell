@@ -124,6 +124,54 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "checks_json",
       "blocked_reasons_json"
     ]);
+    assertColumns(db, "studio_generation_providers", [
+      "provider_id",
+      "capabilities_json",
+      "external_network_allowed",
+      "secrets_required",
+      "mcp_runtime_dependency"
+    ]);
+    assertColumns(db, "ai_generation_jobs", [
+      "ai_generation_job_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "campaign_project_id",
+      "campaign_project_scene_id",
+      "provider_id",
+      "capability",
+      "input_sha256",
+      "idempotency_key",
+      "status",
+      "error_class",
+      "provider_job_id",
+      "output_asset_id",
+      "retry_count",
+      "no_external_provider_call",
+      "no_secret_material",
+      "no_credit_consumption",
+      "no_content_manifest_creation",
+      "no_publish"
+    ]);
+    assertColumns(db, "asset_provenance", [
+      "asset_provenance_id",
+      "asset_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "campaign_project_id",
+      "ai_generation_job_id",
+      "source_type",
+      "license_status",
+      "commercial_use_allowed",
+      "rights_review_status",
+      "publish_candidate_allowed",
+      "no_external_provider_call",
+      "no_secret_material",
+      "no_credit_consumption",
+      "no_content_manifest_creation",
+      "no_publish"
+    ]);
   } finally {
     db.close();
   }
