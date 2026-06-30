@@ -1,0 +1,78 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-220-PLAYER-LAN-ADMIN-UI
+parent_ssot: https://github.com/watchout/misell/issues/220
+title: Player LAN Admin UI/UX v1
+cell_type: admin_ui
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Improve the local Player LAN Admin screen so on-site operators can safely upload assets, edit playlist items, preview unsaved changes, save, and reload the player from a clearer three-pane workflow.
+non_scope:
+  - Cloud CMS, remote device command execution, or multi-store management
+  - backend route, auth, DB, package, workflow, deploy, or secret changes
+  - public LP copy, price, guarantee, legal claim, advertiser, billing, AI generation, or content_manifest publish behavior
+  - Player playback behavior changes outside existing local preview support
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-220-PLAYER-LAN-ADMIN-UI.yaml
+  - .shirube/control-handoffs/CH-MISELL-220-player-lan-admin-ui.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-220-PLAYER-LAN-ADMIN-UI.yaml
+  - apps/player/public/admin.html
+  - apps/player/public/admin.js
+  - apps/player/public/style.css
+  - tests/e2e/misell-ui.spec.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/cloud/**
+  - apps/player/server.js
+  - apps/player/package.json
+  - apps/player/package-lock.json
+  - apps/player/data/**
+protected_surfaces:
+  - local_player_admin_ui
+  - existing_basic_auth_admin_route_only
+stop_conditions:
+  - backend route, auth, DB, package, workflow, deploy, secret, or Player playback behavior change is needed
+  - public/customer/Cloud CMS/remote command/AI/billing/advertiser/content_manifest/publish behavior is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing validation evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - /admin remains Basic-auth protected through the existing route and loads with assets, playlist, status summary, and operation log.
+  - Desktop layout presents a clear three-pane workflow for assets, playlist order, and selected item detail.
+  - Narrow layout switches to tabs for assets, playlist, detail, and JSON without horizontal page scrolling for primary controls.
+  - Save is disabled when there are no unsaved changes and becomes primary when edits occur.
+  - Unsaved changes are visible, protected by beforeunload, and can be previewed through existing local_preview support.
+  - Asset upload guidance, upload rejection, asset filter, usage count, path copy, and delete confirmation are visible.
+  - 3-zone and wide items can be added, selected, edited, locally validated, previewed, saved, and reloaded.
+  - Raw JSON is collapsed by default and JSON apply validates parse errors without destroying current editable state.
+  - Broken /demo/industry-*.html paths are not introduced or selectable.
+  - No Cloud, backend, DB, auth, workflow, package, AI, billing, advertiser, content_manifest, or publish changes are introduced.
+  - Existing E2E uses the selected-item detail pane for source/name/duration edits after the row-inline fields are removed.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/player run check
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - desktop_admin_screenshot
+    - narrow_admin_screenshot
+    - validation_error_or_upload_reject_evidence
+    - manual_flow_note
+    - structured_audit
+    - owner_decision

@@ -1,0 +1,101 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-220-PLAYER-LAN-ADMIN-UI
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-220-player-lan-admin-ui.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-220-PLAYER-LAN-ADMIN-UI.yaml
+  cell_id: CELL-MISELL-220-PLAYER-LAN-ADMIN-UI
+  pr: watchout/misell#TBD
+items:
+  - item_id: LAN-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths.
+    expected_evidence:
+      - changed_files
+  - item_id: LAN-AUDIT-002
+    source: forbidden_paths
+    verification_method: executable
+    required: true
+    prompt: Verify no forbidden paths are touched, especially apps/player/server.js, apps/player/data, package files, Cloud, workflows, deploy, secrets, branch protection, or rulesets.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: LAN-AUDIT-003
+    source: auth_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify /admin remains on the existing Basic-auth protected route and no auth/RBAC/backend/API route behavior is changed.
+    expected_evidence:
+      - code_review
+  - item_id: LAN-AUDIT-004
+    source: information_architecture
+    verification_method: visual
+    required: true
+    prompt: Verify the desktop admin screen presents asset, playlist order, and selected item detail as a clear three-pane workflow with device summary and operation log.
+    expected_evidence:
+      - desktop_admin_screenshot
+      - code_review
+  - item_id: LAN-AUDIT-005
+    source: responsive_behavior
+    verification_method: visual
+    required: true
+    prompt: Verify narrow/mobile layout switches to Assets / Playlist / Detail / JSON tabs and primary controls do not require horizontal page scrolling.
+    expected_evidence:
+      - narrow_admin_screenshot
+  - item_id: LAN-AUDIT-006
+    source: playlist_editing
+    verification_method: manual
+    required: true
+    prompt: Verify 3-zone and wide items can be added, selected, edited through the selected-item detail pane, locally validated, previewed, saved, and reloaded using existing Player APIs.
+    expected_evidence:
+      - manual_flow_note
+      - validation_results
+  - item_id: LAN-AUDIT-007
+    source: dirty_state
+    verification_method: semantic
+    required: true
+    prompt: Verify save is disabled with no changes, unsaved changes are visible, beforeunload protection exists, and sticky save/preview appears only when dirty.
+    expected_evidence:
+      - code_review
+      - screenshot_or_manual_note
+  - item_id: LAN-AUDIT-008
+    source: asset_management
+    verification_method: semantic
+    required: true
+    prompt: Verify upload guidance/rejection feedback, asset type filter, usage count, copy path, and delete confirmation including usage warning are visible.
+    expected_evidence:
+      - code_review
+      - validation_error_or_upload_reject_evidence
+  - item_id: LAN-AUDIT-009
+    source: preview_and_demo_paths
+    verification_method: semantic
+    required: true
+    prompt: Verify preview uses existing local_preview support and no broken /demo/industry-*.html path is introduced or selectable.
+    expected_evidence:
+      - code_review
+      - manual_flow_note
+  - item_id: LAN-AUDIT-010
+    source: raw_json
+    verification_method: semantic
+    required: true
+    prompt: Verify Raw JSON is collapsed by default and parse failures do not destroy current editable state.
+    expected_evidence:
+      - code_review
+      - manual_flow_note
+  - item_id: LAN-AUDIT-011
+    source: side_effect_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify there are no Cloud, DB, backend, auth, workflow, package, AI, billing, advertiser, content_manifest, publish, or Player playback behavior changes. E2E changes, if present, must only follow the new selected-item detail UI.
+    expected_evidence:
+      - changed_files
+      - code_review
+  - item_id: LAN-AUDIT-012
+    source: shirube_validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

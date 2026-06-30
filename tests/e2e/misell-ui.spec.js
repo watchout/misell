@@ -498,7 +498,8 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   expect(uploadedAssetPath).toMatch(/^\/assets\/images\/.+valid-1x1\.png$/);
 
   action("Save playlist using uploaded asset and delete it with usage warning");
-  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='left']").fill(uploadedAssetPath);
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-select-item]").click();
+  await page.locator("#item-detail [data-detail-field='left']").fill(uploadedAssetPath);
   await page.locator("#save-playlist").click();
   await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
   let deleteDialogMessage = "";
@@ -510,7 +511,8 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   expect(deleteDialogMessage).toContain("この素材は 1 件のplaylist itemで使用中です");
   await expect(page.locator("#toast")).toContainText("素材を削除しました", { timeout: 5000 });
   await expect(page.locator("#asset-count")).toHaveText(String(initialAssetCount));
-  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='left']").fill("/demo/left.html");
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-select-item]").click();
+  await page.locator("#item-detail [data-detail-field='left']").fill("/demo/left.html");
   await page.locator("#save-playlist").click();
   await expect(page.locator("#toast")).toContainText("playlistを保存しました", { timeout: 5000 });
 
@@ -530,11 +532,19 @@ test("player UI renders preview mode, rotates layouts, and supports local admin 
   await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(4);
   await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-duplicate]").click();
   await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(5);
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("を削除しますか");
+    await dialog.accept();
+  });
   await page.locator("#playlist-editor .playlist-item").nth(4).locator("[data-delete]").click();
   await expect(page.locator("#playlist-editor .playlist-item")).toHaveCount(4);
   await page.locator("#playlist-editor .playlist-item").nth(1).locator("[data-move='up']").click();
-  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='name']").fill("Browser edited item");
-  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-field='duration']").fill("2");
+  await page.locator("#playlist-editor .playlist-item").nth(0).locator("[data-select-item]").click();
+  await page.locator("#item-detail [data-detail-field='name']").fill("Browser edited item");
+  await page.locator("#item-detail [data-detail-field='duration']").fill("2");
+  await page.locator(".json-panel").evaluate((element) => {
+    element.setAttribute("open", "");
+  });
   await page.locator("#json-editor").fill("{");
   await page.locator("#apply-json").click();
   await expect(page.locator("#toast")).toContainText("JSONエラー");
