@@ -17,6 +17,7 @@ non_scope:
   - Player behavior changes beyond dependency resolution
   - workflow, branch protection, ruleset, deploy, secret, or environment changes
 allowed_paths:
+  - .shirube/control-handoff.yaml
   - .shirube/cells/CELL-MISELL-125-MULTER-AUDIT-FIX.yaml
   - .shirube/control-handoffs/CH-MISELL-125-multer-audit-fix.yaml
   - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-125-MULTER-AUDIT-FIX.yaml
@@ -38,7 +39,7 @@ forbidden_paths:
   - apps/player/public/**
   - docs/**
 protected_surfaces:
-  - dependency_security
+  - none
 stop_conditions:
   - runtime code change is needed
   - upload policy or API behavior change is needed

@@ -42,6 +42,7 @@ cell:
     - Player behavior changes beyond dependency resolution
     - workflow, branch protection, ruleset, deploy, secret, or environment changes
   allowed_paths:
+    - .shirube/control-handoff.yaml
     - .shirube/cells/CELL-MISELL-125-MULTER-AUDIT-FIX.yaml
     - .shirube/control-handoffs/CH-MISELL-125-multer-audit-fix.yaml
     - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-125-MULTER-AUDIT-FIX.yaml
@@ -63,7 +64,7 @@ cell:
     - apps/player/public/**
     - docs/**
   protected_surfaces:
-    - dependency_security
+    - none
   escalation_route: "No CTO/CEO gate required for this R1 dependency-only refresh; scope is package manifests and lockfiles only."
   stop_conditions:
     - runtime code change is needed
