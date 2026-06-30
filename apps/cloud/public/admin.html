@@ -3,69 +3,139 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Misell 端末監視</title>
+    <title>Misell Admin</title>
     <link rel="stylesheet" href="/style.css">
   </head>
-  <body>
-    <div class="shell">
+  <body class="admin-dashboard-page">
+    <div class="shell admin-shell">
       <header class="topbar">
-        <h1>Misell 端末監視</h1>
+        <div>
+          <h1>Misell 端末監視</h1>
+          <p class="topbar-subtitle">端末、配信、キャンペーン、受付状況を1画面で確認します。</p>
+        </div>
         <button id="refresh" type="button">更新</button>
       </header>
-      <main>
-        <section class="section">
-          <h2>稼働状況</h2>
-          <div id="summary" class="metrics"></div>
-        </section>
-        <section class="section">
-          <h2>未対応アラート</h2>
-          <div id="alerts"></div>
-        </section>
-        <section class="section">
-          <h2>通知</h2>
-          <div id="notifications"></div>
-        </section>
-        <section class="section">
-          <h2>店舗受付</h2>
-          <div id="store-access-tokens"></div>
-        </section>
-        <section class="section">
-          <h2>顧客アクセス</h2>
-          <div id="customer-access-tokens"></div>
-        </section>
-        <section class="section">
-          <h2>AI販促提案</h2>
-          <div id="campaign-proposals"></div>
-        </section>
-        <section class="section">
-          <h2>キャンペーン生成</h2>
-          <div id="campaign-projects"></div>
-        </section>
-        <section class="section">
-          <h2>カウンター注文</h2>
-          <div id="counter-orders"></div>
-        </section>
-        <section class="section">
-          <h2>リリース配布</h2>
-          <div id="release-manifests"></div>
-        </section>
-        <section class="section">
-          <h2>コンテンツ配信</h2>
-          <div id="content-manifests"></div>
-        </section>
-        <section class="section">
-          <h2>素材ライブラリ</h2>
-          <div id="assets"></div>
-        </section>
-        <section class="section">
-          <h2>ログ収集</h2>
-          <div id="log-bundles"></div>
-        </section>
-        <section id="token-result" class="section token-result" hidden></section>
-        <section class="section">
-          <h2>端末一覧</h2>
-          <div id="devices"></div>
-        </section>
+      <main class="admin-layout">
+        <aside class="admin-sidebar">
+          <nav class="admin-nav" aria-label="管理メニュー">
+            <a href="#overview">概要</a>
+            <a href="#studio">Studio</a>
+            <a href="#commerce">受付・QR</a>
+            <a href="#delivery">配信</a>
+            <a href="#devices-section">端末</a>
+            <a href="#access">アクセス</a>
+          </nav>
+        </aside>
+        <div class="admin-content">
+          <section id="overview" class="admin-workspace">
+            <div class="admin-workspace-head">
+              <div>
+                <span class="admin-kicker">Overview</span>
+                <h2>運用状況</h2>
+              </div>
+            </div>
+            <section class="section">
+              <h3>稼働状況</h3>
+              <div id="summary" class="metrics"></div>
+            </section>
+            <div class="admin-section-grid">
+              <section class="section">
+                <h3>未対応アラート</h3>
+                <div id="alerts"></div>
+              </section>
+              <section class="section">
+                <h3>通知</h3>
+                <div id="notifications"></div>
+              </section>
+            </div>
+          </section>
+
+          <section id="studio" class="admin-workspace">
+            <div class="admin-workspace-head">
+              <div>
+                <span class="admin-kicker">Studio</span>
+                <h2>提案・キャンペーン生成</h2>
+              </div>
+            </div>
+            <section class="section">
+              <h3>AI販促提案</h3>
+              <div id="campaign-proposals"></div>
+            </section>
+            <section class="section">
+              <h3>キャンペーン生成</h3>
+              <div id="campaign-projects"></div>
+            </section>
+          </section>
+
+          <section id="commerce" class="admin-workspace">
+            <div class="admin-workspace-head">
+              <div>
+                <span class="admin-kicker">Commerce</span>
+                <h2>受付・注文</h2>
+              </div>
+            </div>
+            <section class="section">
+              <h3>カウンター注文</h3>
+              <div id="counter-orders"></div>
+            </section>
+          </section>
+
+          <section id="delivery" class="admin-workspace">
+            <div class="admin-workspace-head">
+              <div>
+                <span class="admin-kicker">Delivery</span>
+                <h2>配信・素材</h2>
+              </div>
+            </div>
+            <section class="section">
+              <h3>リリース配布</h3>
+              <div id="release-manifests"></div>
+            </section>
+            <section class="section">
+              <h3>コンテンツ配信</h3>
+              <div id="content-manifests"></div>
+            </section>
+            <section class="section">
+              <h3>素材ライブラリ</h3>
+              <div id="assets"></div>
+            </section>
+          </section>
+
+          <section id="devices-section" class="admin-workspace">
+            <div class="admin-workspace-head">
+              <div>
+                <span class="admin-kicker">Devices</span>
+                <h2>端末・ログ</h2>
+              </div>
+            </div>
+            <section class="section">
+              <h3>端末一覧</h3>
+              <div id="devices"></div>
+            </section>
+            <section class="section">
+              <h3>ログ収集</h3>
+              <div id="log-bundles"></div>
+            </section>
+          </section>
+
+          <section id="access" class="admin-workspace">
+            <div class="admin-workspace-head">
+              <div>
+                <span class="admin-kicker">Access</span>
+                <h2>店舗・顧客アクセス</h2>
+              </div>
+            </div>
+            <section id="token-result" class="section token-result" hidden></section>
+            <section class="section">
+              <h3>店舗受付</h3>
+              <div id="store-access-tokens"></div>
+            </section>
+            <section class="section">
+              <h3>顧客アクセス</h3>
+              <div id="customer-access-tokens"></div>
+            </section>
+          </section>
+        </div>
       </main>
     </div>
     <script src="/context-ui.js"></script>

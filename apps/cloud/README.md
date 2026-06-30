@@ -19,6 +19,23 @@ URLs:
 - Admin: http://localhost:3200/admin
 - Health: http://localhost:3200/api/health
 
+## Internal Admin IA
+
+The internal Cloud admin page groups the existing MVP operations into stable
+workspaces:
+
+- Overview: health metrics, open alerts, and notification status.
+- Studio: campaign proposals and CampaignProject generation/editing entry
+  points.
+- Commerce: counter-order monitoring.
+- Delivery: release manifests, content manifests, and Cloud asset storage.
+- Devices: device list, command controls, update status, and log bundles.
+- Access: store staff URLs and customer admin URLs.
+
+This IA shell is a static UI grouping layer. It does not change backend routes,
+auth/RBAC, customer scope, database schema, Player/device behavior, publish,
+content manifests, billing, or external AI/provider execution.
+
 Default admin auth:
 
 - User: `admin`

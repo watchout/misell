@@ -1,0 +1,23 @@
+schema_version: shirube-audit-checklist/v1
+checklist_id: AUDIT-CHECKLIST-MISELL-137-INTERNAL-ADMIN-IA-SHELL
+handoff_ref: .shirube/control-handoffs/CH-MISELL-137-internal-admin-ia-shell.yaml
+target_issue: https://github.com/watchout/misell/issues/137
+items:
+  - id: scope_paths
+    source: allowed_paths
+    prompt: Verify the PR changes only the declared Shirube evidence files, Cloud admin static HTML/CSS, README note, and E2E file. Verify forbidden paths are untouched.
+  - id: ui_ia
+    source: admin_shell
+    prompt: Verify the internal admin page has persistent navigation and groups existing sections under overview, Studio, commerce, delivery, devices, and access workspaces.
+  - id: dom_compatibility
+    source: existing_admin_js
+    prompt: Verify existing DOM ids used by admin.js remain present so current data loading and event handlers continue to work.
+  - id: responsive
+    source: css
+    prompt: Verify the admin IA shell is usable on desktop and mobile widths without text overlap or horizontal nav breakage.
+  - id: non_scope
+    source: protected_boundary
+    prompt: Verify no backend route, API contract, DB migration, auth/RBAC, customer/staff behavior, Player/device behavior, publish, billing, external AI/provider, or content_manifest path is introduced.
+  - id: validation
+    source: tests
+    prompt: Verify E2E covers the admin menu/workspace grouping and existing Cloud admin operational dashboard still loads. Verify required validation commands pass.
