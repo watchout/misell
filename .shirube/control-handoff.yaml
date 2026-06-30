@@ -68,11 +68,9 @@ cell:
     - apps/cloud/scripts/backup-*.mjs
     - apps/cloud/scripts/restore-*.mjs
   protected_surfaces:
-    - db_migration
+    - migrations
     - runtime
-    - admin_api
-    - publish_preflight_contract
-    - approval_gate_read_boundary
+    - api
   escalation_route: "approved: #212 CTO/security conditional GO and owner/CEO C1 implementation approval recorded; live activation/publish remains outside this Cell."
   stop_conditions:
     - live activation, active content_manifest mutation, publish, rollback activation, schedule activation, Player/device mutation, or delivery policy mutation is needed
