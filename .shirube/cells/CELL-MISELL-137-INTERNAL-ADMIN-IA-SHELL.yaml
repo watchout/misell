@@ -1,0 +1,71 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-137-INTERNAL-ADMIN-IA-SHELL
+parent_ssot: https://github.com/watchout/misell/issues/137
+title: Internal admin IA shell
+cell_type: ui_lite
+risk_class: R1
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Organize the existing internal Cloud admin dashboard into clear workspaces and navigation without changing backend APIs, auth, DB schema, customer access, device behavior, publish, billing, or Studio execution contracts.
+non_scope:
+  - backend route, API contract, DB migration, or schema change
+  - new auth, RBAC, customer login, customer scope, or staff scope behavior
+  - customer-facing admin implementation beyond existing links and routes
+  - content_manifest creation, publish, schedule activation, Player/device mutation, or device command behavior change
+  - external AI/provider call, generated media, render/export, billing, credit, quota, ROI guarantee, or ad delivery behavior
+allowed_paths:
+  - .shirube/cells/CELL-MISELL-137-INTERNAL-ADMIN-IA-SHELL.yaml
+  - .shirube/control-handoffs/CH-MISELL-137-internal-admin-ia-shell.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-137-INTERNAL-ADMIN-IA-SHELL.yaml
+  - apps/cloud/README.md
+  - apps/cloud/public/admin.html
+  - apps/cloud/public/style.css
+  - tests/e2e/misell-ui.spec.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - .github/workflows/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - apps/cloud/server.js
+  - apps/cloud/migrations/**
+  - apps/cloud/package.json
+  - apps/player/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - existing_authenticated_internal_admin_ui
+  - no_auth_or_permission_model_change
+  - no_backend_write_path_change
+stop_conditions:
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - backend route, API mutation, DB migration, or schema change is needed
+  - new auth/RBAC/customer/staff/partner behavior is needed
+  - external AI/provider/render/publish/billing/device behavior is introduced
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Internal admin page exposes a persistent management menu with workspaces for overview, Studio, commerce, delivery, devices, and access.
+  - Existing dashboard sections remain present and keep their existing DOM ids so current JavaScript behavior is preserved.
+  - The first viewport no longer presents an undifferentiated list of forms; sections are grouped under clear workspace headings.
+  - The IA shell is responsive and keeps navigation usable on desktop and mobile widths.
+  - No backend, DB, API, auth, customer, Player, device, publish, billing, or external AI behavior changes are introduced.
+  - E2E verifies the admin menu, workspace grouping, and existing operational dashboard loading.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm run test:e2e
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
