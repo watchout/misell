@@ -238,6 +238,13 @@ A1 refuses external AI/provider jobs, generated media, MP4 export,
 deterministic and include schema/layout/copy-safety/source-of-truth assertions.
 The smoke target is `npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract`.
 
+The authenticated Campaign Project Editor also exposes a Studio cut-plan / render
+QA panel for these existing A1 endpoints. Operators can create a cut-plan,
+validate it, create an `html_preview` render manifest, rerun QA, and soft-delete
+cut-plan/render-manifest rows from the editor. The panel is evidence/inspection
+only and does not add new routes, create `content_manifest` rows, publish,
+generate media, call providers, export MP4, or consume credits.
+
 Studio Execution B1 adds the provider-job foundation only. It persists
 `studio_generation_providers`, `ai_generation_jobs`, and `asset_provenance` for
 manual uploads and fixture-backed mock provider jobs. The only B1 providers are
