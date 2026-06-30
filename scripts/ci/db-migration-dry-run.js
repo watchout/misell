@@ -60,7 +60,9 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "studio_layout_templates",
       "studio_cut_plans",
       "studio_render_manifests",
-      "studio_render_qa_results"
+      "studio_render_qa_results",
+      "studio_publish_preflight_results",
+      "content_manifest_draft_transforms"
     ]) {
       const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
       if (!row) throw new Error(`Expected Studio Phase 1 table '${table}' to exist`);
@@ -123,6 +125,46 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "qa_suite_version",
       "checks_json",
       "blocked_reasons_json"
+    ]);
+    assertColumns(db, "studio_publish_preflight_results", [
+      "publish_preflight_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "campaign_project_id",
+      "render_manifest_id",
+      "required_asset_ids_json",
+      "content_type",
+      "publish_mode",
+      "status",
+      "checks_json",
+      "blocked_reasons_json",
+      "docs99_gate_ref",
+      "docs99_gate_verdict",
+      "approval_gate_ref",
+      "no_active_content_manifest_mutation",
+      "no_content_manifest_activation",
+      "no_publish",
+      "no_player_device_mutation",
+      "no_schedule_activation",
+      "dry_run_only"
+    ]);
+    assertColumns(db, "content_manifest_draft_transforms", [
+      "draft_transform_id",
+      "publish_preflight_id",
+      "campaign_project_id",
+      "render_manifest_id",
+      "draft_content_manifest_id",
+      "status",
+      "transform_errors_json",
+      "playlist_item_draft_ids_json",
+      "content_manifest_draft_json",
+      "content_manifest_draft_sha256",
+      "no_active_content_manifest_mutation",
+      "no_content_manifest_activation",
+      "no_publish",
+      "no_player_device_mutation",
+      "no_schedule_activation"
     ]);
     assertColumns(db, "studio_generation_providers", [
       "provider_id",
