@@ -10,24 +10,12 @@ premise_ref: .shirube/repo-spec.yaml
 owner_confirmation_ref: https://github.com/watchout/misell/issues/116
 premise_confirmation_ref: https://github.com/watchout/misell/issues/116
 spec_review_state: ready_for_implementation
-
 repo: watchout/misell
 repo_local_issue: https://github.com/watchout/misell/issues/116
 owner:
   role: repo_owner
   actor: watchout
 next_role: implementation
-
-rps_scope:
-  shirube_owns:
-    - full operational PR evidence for this POC sales materials Cell
-    - diff scope and handoff consistency checks
-    - checklist-driven audit request evidence
-  shirube_does_not_own:
-    - production publication or external distribution
-    - legal approval of contract language
-    - final owner approval of price, guarantee, CTA, or public claims
-
 cell:
   CELL-ID: CELL-MISELL-116-POC-SALES-MATERIALS
   cell_ref: .shirube/cells/CELL-MISELL-116-POC-SALES-MATERIALS.yaml
@@ -47,19 +35,7 @@ cell:
     - docs/README.md
     - docs/102_MISELL_POC_SALES_MATERIALS_BLUEPRINT.md
     - prompts/codex_create_misell_poc_sales_materials.md
-    - materials/poc_70_limited/README.md
-    - materials/poc_70_limited/01_lp_wireframe.md
-    - materials/poc_70_limited/02_one_page_sales_sheet.md
-    - materials/poc_70_limited/03_poc_partner_proposal_deck.md
-    - materials/poc_70_limited/04_industry_mockup_briefs.md
-    - materials/poc_70_limited/05_60sec_demo_video_script.md
-    - materials/poc_70_limited/06_discovery_sheet.md
-    - materials/poc_70_limited/07_poc_agreement_draft.md
-    - materials/poc_70_limited/08_media_kit.md
-    - materials/poc_70_limited/09_70_facility_pipeline_tracker.csv
-    - materials/poc_70_limited/10_outbound_scripts.md
-    - materials/poc_70_limited/11_partner_referral_sheet.md
-    - materials/poc_70_limited/12_faq_objection_handling.md
+    - materials/poc_70_limited/**
   forbidden_paths:
     - .env
     - .env.*
@@ -90,20 +66,6 @@ cell:
     - Materials distinguish measured Misell-rail signals from estimated/incremental claims and do not promise sales, ad revenue, ROAS, lift, impressions, viewer count, QR scans, or traffic.
     - Legal/contract/publication-sensitive fields are called out as owner/legal gated before customer distribution.
     - No runtime or application files are changed.
-
-implementation_boundary:
-  summary: Docs/materials-only reslice of POC sales assets from current main.
-  expected_pr_count: 1
-  forbidden_operations:
-    - merge
-    - approve
-    - publish
-    - deploy
-    - branch protection mutation
-    - ruleset mutation
-    - required check activation
-    - secret read or write
-
 validation:
   required_commands:
     - git diff --check
@@ -119,7 +81,6 @@ validation:
     - structured_audit
     - owner_decision
   audit_checklist_ref: .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-116-POC-SALES-MATERIALS.yaml
-
 owner_decision:
   required_before_merge: true
   allowed_verdicts:
@@ -128,7 +89,6 @@ owner_decision:
     - BLOCKED
   exact_head_sha: null
   decision_ref: null
-
 post_merge:
   required_when_done_claimed: true
   required_evidence:

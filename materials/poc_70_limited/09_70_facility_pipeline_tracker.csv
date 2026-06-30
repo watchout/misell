@@ -1,0 +1,8 @@
+category,slot_limit,facility_name,company,contact,status,next_action,case_study_permission,photo_video_permission,feedback_permission,notes
+hotel_lodging,20,,,,lead,,,,,
+karaoke_entertainment,10,,,,lead,,,,,
+gym_spa_sauna,10,,,,lead,,,,,
+meeting_event,10,,,,lead,,,,,
+food_retail,10,,,,lead,,,,,
+clinic_waiting,10,,,,lead,,,,,
+other,応相談,,,,lead,,,,,
