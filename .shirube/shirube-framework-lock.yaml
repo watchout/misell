@@ -1,7 +1,7 @@
 schema_version: shirube-framework-lock/v1
 framework: watchout/ai-dev-framework
-framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
-commit: 6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_ref: watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
+commit: 3b70d368bcbbcb1d200a941a8a0130aa54edf722
 version_label: Shirube v3 overlay evidence refresh with reusable report-only caller
 mode: rapid-lite
 profile: hotel-lite
