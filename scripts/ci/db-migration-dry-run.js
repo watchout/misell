@@ -64,7 +64,8 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "studio_publish_preflight_results",
       "content_manifest_draft_transforms",
       "studio_measurement_bindings",
-      "studio_qr_bindings"
+      "studio_qr_bindings",
+      "studio_proof_of_play_bindings"
     ]) {
       const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
       if (!row) throw new Error(`Expected Studio Phase 1 table '${table}' to exist`);
@@ -205,6 +206,42 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "status",
       "attribution_claim",
       "deleted_at"
+    ]);
+    assertColumns(db, "studio_proof_of_play_bindings", [
+      "proof_binding_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "measurement_binding_id",
+      "campaign_project_id",
+      "campaign_project_scene_id",
+      "campaign_id",
+      "media_campaign_id",
+      "creative_id",
+      "ad_slot_id",
+      "qr_link_id",
+      "source_system",
+      "source_event_id",
+      "source_row_id",
+      "source_event_at",
+      "evidence_label",
+      "measurement_label",
+      "data_source_class",
+      "source_data_class",
+      "attribution_claim",
+      "baseline_evidence_ref",
+      "holdout_evidence_ref",
+      "manifest_hash",
+      "playlist_item_id",
+      "play_result",
+      "planned_duration_seconds",
+      "played_duration_seconds",
+      "qr_scan_id",
+      "source_ref_json",
+      "rebuild_key",
+      "validation_status",
+      "validation_errors_json",
+      "validation_checks_json"
     ]);
     assertColumns(db, "qr_links", [
       "measurement_binding_id",

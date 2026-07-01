@@ -84,6 +84,12 @@ const {
   normalizeQrBindingInput,
   validateQrBindingContract
 } = require("./lib/studio-measurement-binding-contract");
+const {
+  PROOF_OF_PLAY_BINDING_VERSION,
+  assertStudioD3InputBoundary,
+  normalizeProofOfPlayBindingInput,
+  validateProofOfPlayBindingContract
+} = require("./lib/studio-proof-of-play-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -1012,6 +1018,34 @@ app.post("/api/admin/studio-measurement-bindings/:measurement_binding_id/qr-bind
   try {
     const result = createStudioQrBinding(cleanId(req.params.measurement_binding_id), req.body || {}, req.adminActor);
     res.status(201).json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-projects/:campaign_project_id/proof-of-play-bindings", requireAdminAuth, (req, res, next) => {
+  try {
+    const bindings = listStudioProofOfPlayForProject(cleanId(req.params.campaign_project_id), req.query || {});
+    res.json({ ok: true, studio_proof_of_play_bindings: bindings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/proof-of-play-bindings/rebuild", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = rebuildStudioProofOfPlayForProject(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-proof-of-play-bindings/:proof_binding_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const binding = getStudioProofOfPlayBinding(cleanId(req.params.proof_binding_id), normalizeCampaignProjectScopeQuery(req.query || {}));
+    if (!binding) throw requestError("Studio proof-of-play binding not found", 404);
+    res.json({ ok: true, studio_proof_of_play_binding: binding });
   } catch (error) {
     next(error);
   }
@@ -4778,6 +4812,65 @@ function schemaMigrations() {
             ON studio_qr_bindings(tenant_id, store_id, screen_group_id, campaign_project_id, status, updated_at DESC);
           CREATE INDEX IF NOT EXISTS idx_qr_scans_studio_measurement
             ON qr_scans(tenant_id, store_id, campaign_project_id, campaign_project_scene_id, creative_id, qr_link_id, scanned_at);
+        `);
+      }
+    },
+    {
+      version: 17,
+      name: "studio_proof_of_play_reporting_connection_d3",
+      up() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS studio_proof_of_play_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proof_binding_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            measurement_binding_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_scene_id TEXT NOT NULL DEFAULT '',
+            campaign_id TEXT NOT NULL DEFAULT '',
+            media_campaign_id TEXT NOT NULL DEFAULT '',
+            creative_id TEXT NOT NULL DEFAULT '',
+            ad_slot_id TEXT NOT NULL DEFAULT '',
+            qr_link_id TEXT NOT NULL DEFAULT '',
+            source_system TEXT NOT NULL,
+            source_event_id TEXT NOT NULL,
+            source_row_id INTEGER NOT NULL DEFAULT 0,
+            source_event_at TEXT NOT NULL,
+            evidence_label TEXT NOT NULL,
+            measurement_label TEXT NOT NULL,
+            data_source_class TEXT NOT NULL,
+            source_data_class TEXT NOT NULL,
+            attribution_claim TEXT NOT NULL DEFAULT '',
+            baseline_evidence_ref TEXT NOT NULL DEFAULT '',
+            holdout_evidence_ref TEXT NOT NULL DEFAULT '',
+            manifest_hash TEXT NOT NULL DEFAULT '',
+            playlist_item_id TEXT NOT NULL DEFAULT '',
+            play_result TEXT NOT NULL DEFAULT '',
+            planned_duration_seconds INTEGER NOT NULL DEFAULT 0,
+            played_duration_seconds INTEGER NOT NULL DEFAULT 0,
+            qr_scan_id TEXT NOT NULL DEFAULT '',
+            source_ref_json TEXT NOT NULL DEFAULT '{}',
+            rebuild_key TEXT NOT NULL,
+            validation_status TEXT NOT NULL DEFAULT 'invalid',
+            validation_errors_json TEXT NOT NULL DEFAULT '[]',
+            validation_checks_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(measurement_binding_id, source_system, source_event_id),
+            FOREIGN KEY(measurement_binding_id) REFERENCES studio_measurement_bindings(measurement_binding_id) ON DELETE RESTRICT,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_studio_proof_of_play_project
+            ON studio_proof_of_play_bindings(campaign_project_id, source_system, source_event_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_proof_of_play_scope
+            ON studio_proof_of_play_bindings(tenant_id, store_id, screen_group_id, evidence_label, source_event_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_proof_of_play_measurement
+            ON studio_proof_of_play_bindings(measurement_binding_id, evidence_label, source_event_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_proof_of_play_reverse_lookup
+            ON studio_proof_of_play_bindings(campaign_project_scene_id, creative_id, ad_slot_id, qr_link_id);
         `);
       }
     }
@@ -11826,6 +11919,460 @@ function assertStudioD1RowScope(input = {}, row = {}, label = "Record") {
   if (scope.tenant_id && scope.tenant_id !== cleanId(row.tenant_id)) throw requestError(`${label} is outside tenant scope`, 403);
   if (scope.store_id && scope.store_id !== cleanId(row.store_id)) throw requestError(`${label} is outside store scope`, 403);
   if (scope.screen_group_id && scope.screen_group_id !== cleanId(row.screen_group_id)) throw requestError(`${label} is outside screen group scope`, 403);
+}
+
+function listStudioProofOfPlayForProject(projectId, query = {}) {
+  assertStudioD3RouteBoundary(query);
+  const projectRow = getCampaignProjectRow(projectId);
+  if (!projectRow) throw requestError("Campaign project not found", 404);
+  if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+  const scope = normalizeCampaignProjectScopeQuery(query || {});
+  if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+    assertCampaignProjectInputScope(scope, projectRow, "Campaign project");
+  }
+  const sourceSystem = cleanString(query.source_system || query.sourceSystem);
+  const evidenceLabel = cleanString(query.evidence_label || query.evidenceLabel);
+  const includeInvalid = normalizeBooleanFlag(query.include_invalid || query.includeInvalid);
+  const conditions = ["campaign_project_id = ?"];
+  const params = [cleanId(projectId)];
+  if (sourceSystem) {
+    conditions.push("source_system = ?");
+    params.push(sourceSystem);
+  }
+  if (evidenceLabel) {
+    conditions.push("evidence_label = ?");
+    params.push(evidenceLabel);
+  }
+  if (!includeInvalid) {
+    conditions.push("validation_status = 'valid'");
+  }
+  const limit = Math.max(1, Math.min(asInteger(query.limit) || 100, 500));
+  const rows = db.prepare(`
+    SELECT * FROM studio_proof_of_play_bindings
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY source_event_at DESC, id DESC
+    LIMIT ?
+  `).all(...params, limit);
+  return rows.map(publicStudioProofOfPlayBinding);
+}
+
+function rebuildStudioProofOfPlayForProject(projectId, input = {}, actor = {}) {
+  assertStudioD3RouteBoundary(input);
+  return db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    assertCampaignProjectInputScope(input, projectRow, "Campaign project");
+    const now = nowIso();
+    const bindingRows = db.prepare(`
+      SELECT * FROM studio_measurement_bindings
+      WHERE campaign_project_id = ?
+        AND status != 'deleted'
+        AND validation_status = 'valid'
+      ORDER BY id ASC
+      LIMIT 500
+    `).all(projectRow.campaign_project_id);
+    let playlogCount = 0;
+    let qrScanCount = 0;
+    let skippedCount = 0;
+
+    for (const bindingRow of bindingRows) {
+      const playlogRows = listStudioProofPlaylogSourceRows(bindingRow);
+      const qrScanRows = listStudioProofQrScanSourceRows(bindingRow);
+      if (playlogRows.length === 0 && qrScanRows.length === 0) skippedCount += 1;
+      for (const sourceRow of playlogRows) {
+        upsertStudioProofOfPlayRow(buildStudioProofOfPlayFromPlaylog(bindingRow, sourceRow), projectRow, bindingRow, now);
+        playlogCount += 1;
+      }
+      for (const sourceRow of qrScanRows) {
+        upsertStudioProofOfPlayRow(buildStudioProofOfPlayFromQrScan(bindingRow, sourceRow), projectRow, bindingRow, now);
+        qrScanCount += 1;
+      }
+    }
+
+    const summary = summarizeStudioProofOfPlay(projectRow.campaign_project_id);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, "", "proof_of_play.rebuilt", "admin", actor.actor_id || "admin", {
+      binding_count: bindingRows.length,
+      playlog_count: playlogCount,
+      qr_scan_count: qrScanCount,
+      skipped_binding_count: skippedCount,
+      evidence_counts: summary.evidence_counts,
+      no_roi_fabrication: true,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_player_device_mutation: true
+    }, now);
+
+    return {
+      studio_proof_of_play_summary: summary,
+      rebuild_result: {
+        project_id: projectRow.campaign_project_id,
+        binding_count: bindingRows.length,
+        playlog_count: playlogCount,
+        qr_scan_count: qrScanCount,
+        skipped_binding_count: skippedCount,
+        no_roi_fabrication: true,
+        no_content_manifest_creation: true,
+        no_publish: true,
+        no_player_device_mutation: true
+      }
+    };
+  })();
+}
+
+function getStudioProofOfPlayBinding(proofBindingId, scope = null) {
+  const row = getStudioProofOfPlayBindingRow(proofBindingId);
+  if (!row) return null;
+  if (scope) assertStudioD1RowScope(scope, row, "Studio proof-of-play binding");
+  return publicStudioProofOfPlayBinding(row);
+}
+
+function getStudioProofOfPlayBindingRow(proofBindingId) {
+  return db.prepare("SELECT * FROM studio_proof_of_play_bindings WHERE proof_binding_id = ?").get(cleanId(proofBindingId));
+}
+
+function listStudioProofPlaylogSourceRows(bindingRow) {
+  const matchClauses = [];
+  const matchParams = [];
+  for (const [column, value] of [
+    ["qr_link_id", bindingRow.qr_link_id],
+    ["creative_id", bindingRow.creative_id],
+    ["ad_slot_id", bindingRow.ad_slot_id],
+    ["campaign_id", bindingRow.campaign_id]
+  ]) {
+    const cleanValue = cleanId(value);
+    if (!cleanValue) continue;
+    matchClauses.push(`${column} = ?`);
+    matchParams.push(cleanValue);
+  }
+  if (matchClauses.length === 0) return [];
+  return db.prepare(`
+    SELECT * FROM playlogs
+    WHERE tenant_id = ?
+      AND store_id = ?
+      AND COALESCE(screen_group_id, '') = ?
+      AND (${matchClauses.join(" OR ")})
+    ORDER BY occurred_at ASC, id ASC
+    LIMIT 1000
+  `).all(
+    cleanId(bindingRow.tenant_id),
+    cleanId(bindingRow.store_id),
+    cleanId(bindingRow.screen_group_id),
+    ...matchParams
+  );
+}
+
+function listStudioProofQrScanSourceRows(bindingRow) {
+  const matchClauses = ["measurement_binding_id = ?"];
+  const matchParams = [cleanId(bindingRow.measurement_binding_id)];
+  for (const [column, value] of [
+    ["qr_link_id", bindingRow.qr_link_id],
+    ["creative_id", bindingRow.creative_id],
+    ["ad_slot_id", bindingRow.ad_slot_id]
+  ]) {
+    const cleanValue = cleanId(value);
+    if (!cleanValue) continue;
+    matchClauses.push(`${column} = ?`);
+    matchParams.push(cleanValue);
+  }
+  return db.prepare(`
+    SELECT * FROM qr_scans
+    WHERE tenant_id = ?
+      AND store_id = ?
+      AND COALESCE(screen_group_id, '') = ?
+      AND (${matchClauses.join(" OR ")})
+    ORDER BY scanned_at ASC, id ASC
+    LIMIT 1000
+  `).all(
+    cleanId(bindingRow.tenant_id),
+    cleanId(bindingRow.store_id),
+    cleanId(bindingRow.screen_group_id),
+    ...matchParams
+  );
+}
+
+function buildStudioProofOfPlayFromPlaylog(bindingRow, sourceRow) {
+  const sourceEventId = cleanString(sourceRow.event_id) || `playlog:${asInteger(sourceRow.id)}`;
+  return {
+    proof_binding_id: nextEntityId("pop", `${bindingRow.measurement_binding_id}-playlog-${sourceEventId}`),
+    tenant_id: bindingRow.tenant_id,
+    store_id: bindingRow.store_id,
+    screen_group_id: bindingRow.screen_group_id,
+    measurement_binding_id: bindingRow.measurement_binding_id,
+    campaign_project_id: bindingRow.campaign_project_id,
+    campaign_project_scene_id: bindingRow.campaign_project_scene_id,
+    campaign_id: cleanId(sourceRow.campaign_id) || cleanId(bindingRow.campaign_id),
+    media_campaign_id: bindingRow.media_campaign_id,
+    creative_id: cleanId(sourceRow.creative_id) || cleanId(bindingRow.creative_id),
+    ad_slot_id: cleanId(sourceRow.ad_slot_id) || cleanId(bindingRow.ad_slot_id),
+    qr_link_id: cleanId(sourceRow.qr_link_id) || cleanId(bindingRow.qr_link_id),
+    source_system: "playlog",
+    source_event_id: sourceEventId,
+    source_row_id: asInteger(sourceRow.id),
+    source_event_at: cleanString(sourceRow.occurred_at || sourceRow.played_at || sourceRow.received_at),
+    evidence_label: "measured_play_evidence",
+    measurement_label: cleanString(bindingRow.measurement_label),
+    data_source_class: cleanString(bindingRow.data_source_class),
+    source_data_class: "misell_playlog",
+    attribution_claim: "",
+    baseline_evidence_ref: cleanString(bindingRow.baseline_evidence_ref),
+    holdout_evidence_ref: cleanString(bindingRow.holdout_evidence_ref),
+    manifest_hash: cleanString(sourceRow.manifest_hash),
+    playlist_item_id: cleanId(sourceRow.playlist_item_id),
+    play_result: cleanString(sourceRow.result),
+    planned_duration_seconds: asInteger(sourceRow.planned_duration_seconds),
+    played_duration_seconds: asInteger(sourceRow.played_duration_seconds),
+    qr_scan_id: "",
+    rebuild_key: `d3:${bindingRow.measurement_binding_id}`,
+    source_ref: {
+      table: "playlogs",
+      id: asInteger(sourceRow.id),
+      event_id: sourceEventId,
+      device_id: cleanId(sourceRow.device_id),
+      playback_id: cleanId(sourceRow.playback_id)
+    }
+  };
+}
+
+function buildStudioProofOfPlayFromQrScan(bindingRow, sourceRow) {
+  const qrScanId = cleanId(sourceRow.qr_scan_id) || `qr-scan-${asInteger(sourceRow.id)}`;
+  return {
+    proof_binding_id: nextEntityId("pop", `${bindingRow.measurement_binding_id}-qr-${qrScanId}`),
+    tenant_id: bindingRow.tenant_id,
+    store_id: bindingRow.store_id,
+    screen_group_id: bindingRow.screen_group_id,
+    measurement_binding_id: bindingRow.measurement_binding_id,
+    campaign_project_id: bindingRow.campaign_project_id,
+    campaign_project_scene_id: cleanId(sourceRow.campaign_project_scene_id) || cleanId(bindingRow.campaign_project_scene_id),
+    campaign_id: cleanId(sourceRow.campaign_id) || cleanId(bindingRow.campaign_id),
+    media_campaign_id: cleanId(sourceRow.media_campaign_id) || cleanId(bindingRow.media_campaign_id),
+    creative_id: cleanId(sourceRow.creative_id) || cleanId(bindingRow.creative_id),
+    ad_slot_id: cleanId(sourceRow.ad_slot_id) || cleanId(bindingRow.ad_slot_id),
+    qr_link_id: cleanId(sourceRow.qr_link_id) || cleanId(bindingRow.qr_link_id),
+    source_system: "qr_scan",
+    source_event_id: qrScanId,
+    source_row_id: asInteger(sourceRow.id),
+    source_event_at: cleanString(sourceRow.scanned_at),
+    evidence_label: "measured_response_only",
+    measurement_label: cleanString(sourceRow.measurement_label || bindingRow.measurement_label),
+    data_source_class: cleanString(sourceRow.data_source_class || bindingRow.data_source_class),
+    source_data_class: "misell_qr",
+    attribution_claim: "measured_response_only",
+    baseline_evidence_ref: cleanString(bindingRow.baseline_evidence_ref),
+    holdout_evidence_ref: cleanString(bindingRow.holdout_evidence_ref),
+    manifest_hash: "",
+    playlist_item_id: "",
+    play_result: "",
+    planned_duration_seconds: 0,
+    played_duration_seconds: 0,
+    qr_scan_id: qrScanId,
+    rebuild_key: `d3:${bindingRow.measurement_binding_id}`,
+    source_ref: {
+      table: "qr_scans",
+      id: asInteger(sourceRow.id),
+      qr_scan_id: qrScanId,
+      qr_link_id: cleanId(sourceRow.qr_link_id),
+      visit_id: cleanId(sourceRow.visit_id)
+    }
+  };
+}
+
+function upsertStudioProofOfPlayRow(input, projectRow, measurementBindingRow, now = nowIso()) {
+  const normalized = normalizeStudioD3ProofOfPlayBinding(input, {});
+  const validation = validateProofOfPlayBindingContract(normalized, {
+    project: projectRow,
+    measurement_binding: measurementBindingRow
+  });
+  assertNoStudioD3HardBlockers(validation);
+  const proofBindingId = normalized.proof_binding_id || nextEntityId("pop", `${normalized.measurement_binding_id}-${normalized.source_system}-${normalized.source_event_id}`);
+  db.prepare(`
+    INSERT INTO studio_proof_of_play_bindings (
+      proof_binding_id, tenant_id, store_id, screen_group_id, measurement_binding_id,
+      campaign_project_id, campaign_project_scene_id, campaign_id, media_campaign_id,
+      creative_id, ad_slot_id, qr_link_id, source_system, source_event_id,
+      source_row_id, source_event_at, evidence_label, measurement_label,
+      data_source_class, source_data_class, attribution_claim, baseline_evidence_ref,
+      holdout_evidence_ref, manifest_hash, playlist_item_id, play_result,
+      planned_duration_seconds, played_duration_seconds, qr_scan_id, source_ref_json,
+      rebuild_key, validation_status, validation_errors_json, validation_checks_json,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(measurement_binding_id, source_system, source_event_id) DO UPDATE SET
+      tenant_id = excluded.tenant_id,
+      store_id = excluded.store_id,
+      screen_group_id = excluded.screen_group_id,
+      campaign_project_id = excluded.campaign_project_id,
+      campaign_project_scene_id = excluded.campaign_project_scene_id,
+      campaign_id = excluded.campaign_id,
+      media_campaign_id = excluded.media_campaign_id,
+      creative_id = excluded.creative_id,
+      ad_slot_id = excluded.ad_slot_id,
+      qr_link_id = excluded.qr_link_id,
+      source_row_id = excluded.source_row_id,
+      source_event_at = excluded.source_event_at,
+      evidence_label = excluded.evidence_label,
+      measurement_label = excluded.measurement_label,
+      data_source_class = excluded.data_source_class,
+      source_data_class = excluded.source_data_class,
+      attribution_claim = excluded.attribution_claim,
+      baseline_evidence_ref = excluded.baseline_evidence_ref,
+      holdout_evidence_ref = excluded.holdout_evidence_ref,
+      manifest_hash = excluded.manifest_hash,
+      playlist_item_id = excluded.playlist_item_id,
+      play_result = excluded.play_result,
+      planned_duration_seconds = excluded.planned_duration_seconds,
+      played_duration_seconds = excluded.played_duration_seconds,
+      qr_scan_id = excluded.qr_scan_id,
+      source_ref_json = excluded.source_ref_json,
+      rebuild_key = excluded.rebuild_key,
+      validation_status = excluded.validation_status,
+      validation_errors_json = excluded.validation_errors_json,
+      validation_checks_json = excluded.validation_checks_json,
+      updated_at = excluded.updated_at
+  `).run(
+    proofBindingId,
+    normalized.tenant_id,
+    normalized.store_id,
+    normalized.screen_group_id,
+    normalized.measurement_binding_id,
+    normalized.campaign_project_id,
+    normalized.campaign_project_scene_id,
+    normalized.campaign_id,
+    normalized.media_campaign_id,
+    normalized.creative_id,
+    normalized.ad_slot_id,
+    normalized.qr_link_id,
+    normalized.source_system,
+    normalized.source_event_id,
+    normalized.source_row_id,
+    normalized.source_event_at,
+    normalized.evidence_label,
+    normalized.measurement_label,
+    normalized.data_source_class,
+    normalized.source_data_class,
+    normalized.attribution_claim,
+    normalized.baseline_evidence_ref,
+    normalized.holdout_evidence_ref,
+    normalized.manifest_hash,
+    normalized.playlist_item_id,
+    normalized.play_result,
+    normalized.planned_duration_seconds,
+    normalized.played_duration_seconds,
+    normalized.qr_scan_id,
+    safeJsonStringify(normalized.source_ref, 10000),
+    normalized.rebuild_key,
+    validation.valid ? "valid" : "invalid",
+    safeJsonStringify(validation.errors, 10000),
+    safeJsonStringify(validation.checks, 20000),
+    now,
+    now
+  );
+}
+
+function summarizeStudioProofOfPlay(projectId) {
+  const rows = db.prepare(`
+    SELECT source_system, evidence_label, COUNT(*) AS count
+    FROM studio_proof_of_play_bindings
+    WHERE campaign_project_id = ?
+      AND validation_status = 'valid'
+    GROUP BY source_system, evidence_label
+    ORDER BY source_system ASC, evidence_label ASC
+  `).all(cleanId(projectId));
+  const evidenceCounts = {
+    measured_play_evidence: 0,
+    measured_response_only: 0
+  };
+  for (const row of rows) {
+    evidenceCounts[cleanString(row.evidence_label)] = asInteger(row.count);
+  }
+  return {
+    schema_version: "studio-proof-of-play-summary/d3",
+    proof_binding_version: PROOF_OF_PLAY_BINDING_VERSION,
+    campaign_project_id: cleanId(projectId),
+    evidence_counts: evidenceCounts,
+    source_breakdown: rows.map((row) => ({
+      source_system: cleanString(row.source_system),
+      evidence_label: cleanString(row.evidence_label),
+      count: asInteger(row.count)
+    })),
+    qr_scan_is_measured_response_only: true,
+    playlog_is_measured_play_evidence_only: true,
+    no_roi_fabrication: true,
+    no_content_manifest_creation: true,
+    no_publish: true,
+    no_player_device_mutation: true
+  };
+}
+
+function publicStudioProofOfPlayBinding(row) {
+  return {
+    schema_version: "studio-proof-of-play-binding/d3",
+    binding_version: PROOF_OF_PLAY_BINDING_VERSION,
+    proof_binding_id: cleanId(row.proof_binding_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    measurement_binding_id: cleanId(row.measurement_binding_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    campaign_id: cleanId(row.campaign_id),
+    media_campaign_id: cleanId(row.media_campaign_id),
+    creative_id: cleanId(row.creative_id),
+    ad_slot_id: cleanId(row.ad_slot_id),
+    qr_link_id: cleanId(row.qr_link_id),
+    source_system: cleanString(row.source_system),
+    source_event_id: cleanString(row.source_event_id),
+    source_row_id: asInteger(row.source_row_id),
+    source_event_at: cleanString(row.source_event_at),
+    evidence_label: cleanString(row.evidence_label),
+    measurement_label: cleanString(row.measurement_label),
+    data_source_class: cleanString(row.data_source_class),
+    source_data_class: cleanString(row.source_data_class),
+    attribution_claim: cleanString(row.attribution_claim),
+    baseline_evidence_ref: cleanString(row.baseline_evidence_ref),
+    holdout_evidence_ref: cleanString(row.holdout_evidence_ref),
+    manifest_hash: cleanString(row.manifest_hash),
+    playlist_item_id: cleanId(row.playlist_item_id),
+    play_result: cleanString(row.play_result),
+    planned_duration_seconds: asInteger(row.planned_duration_seconds),
+    played_duration_seconds: asInteger(row.played_duration_seconds),
+    qr_scan_id: cleanId(row.qr_scan_id),
+    source_ref: parseJson(row.source_ref_json || "{}", {}),
+    rebuild_key: cleanString(row.rebuild_key),
+    validation_status: cleanString(row.validation_status),
+    validation_errors: parseJson(row.validation_errors_json || "[]", []),
+    validation_checks: parseJson(row.validation_checks_json || "[]", []),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    qr_scan_is_measured_response_only: row.evidence_label === "measured_response_only",
+    playlog_is_measured_play_evidence_only: row.evidence_label === "measured_play_evidence",
+    no_roi_fabrication: true,
+    no_content_manifest_creation: true,
+    no_publish: true,
+    no_player_device_mutation: true
+  };
+}
+
+function normalizeStudioD3ProofOfPlayBinding(input, defaults) {
+  try {
+    return normalizeProofOfPlayBindingInput(input, defaults);
+  } catch (error) {
+    throw requestError(error.message || "Studio proof-of-play binding input is invalid", 400);
+  }
+}
+
+function assertStudioD3RouteBoundary(input = {}) {
+  try {
+    assertStudioD3InputBoundary(input);
+  } catch (error) {
+    throw requestError(error.message || "Studio Execution D3 input is out of scope", 400);
+  }
+}
+
+function assertNoStudioD3HardBlockers(validation) {
+  if (!validation.valid) {
+    throw requestError(`Proof-of-play contract is invalid: ${validation.errors.map((error) => `${error.field}:${error.code}`).join(", ")}`, 400);
+  }
 }
 
 function listStudioRenderQaResults(renderManifestId) {

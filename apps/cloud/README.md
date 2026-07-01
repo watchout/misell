@@ -344,6 +344,25 @@ claims, external AI/provider calls, media generation, billing/credits,
 mutation. The smoke target is
 `npm --prefix apps/cloud run smoke:studio-measurement-binding`.
 
+Studio Execution D3 connects D1 measurement bindings to existing playlog and QR
+scan evidence through the `studio_proof_of_play_bindings` read model. Operators
+can rebuild or inspect this internal evidence layer, but D3 does not turn QR
+responses into purchases, visits, ROI, ROAS, lift, guarantees, or incremental
+claims. Playlog evidence is labeled `measured_play_evidence`; QR scan evidence
+is labeled `measured_response_only`.
+
+D3 Admin-only endpoints:
+
+- `GET /api/admin/campaign-projects/:id/proof-of-play-bindings`
+- `POST /api/admin/campaign-projects/:id/proof-of-play-bindings/rebuild`
+- `GET /api/admin/studio-proof-of-play-bindings/:proof_binding_id`
+
+D3 remains read-model/reporting connection only. It does not add external
+advertiser UI, customer/public controls, `content_manifest` creation, publish,
+schedule activation, Player/device mutation, provider calls, external AI,
+camera/POS ingestion, billing/credits, or legal/ad claim approval. The smoke
+target is `npm --prefix apps/cloud run smoke:studio-proof-of-play-reporting`.
+
 Scene Editor partial regeneration requests are also event-only stubs. Operators
 can request `scene_regeneration`, `copy_regeneration`, or
 `qr_cta_regeneration` for a non-deleted scene, and Cloud records a
