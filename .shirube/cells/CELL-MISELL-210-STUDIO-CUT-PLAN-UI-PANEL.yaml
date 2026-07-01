@@ -1,0 +1,74 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-210-STUDIO-CUT-PLAN-UI-PANEL
+parent_ssot: https://github.com/watchout/misell/issues/210#issuecomment-4841466761
+title: Studio cut-plan UI panel
+cell_type: admin_ui
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Add an authenticated Campaign Project Editor panel for existing Studio cut-plan, render manifest, and QA operations using already-merged #210 Admin APIs.
+non_scope:
+  - DB migration or schema change
+  - backend route/API contract change
+  - new auth/RBAC model
+  - content_manifest creation, publish, schedule activation, Player/device delivery update, or device policy mutation
+  - external AI/provider call, MCP runtime dependency, real render job, media generation, MP4 export, or asset creation
+  - billing, quota, credit ledger, pricing, guarantee, advertiser report, or ad delivery behavior
+  - customer/external preview route or share token
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-210-STUDIO-CUT-PLAN-UI-PANEL.yaml
+  - .shirube/control-handoffs/CH-MISELL-210-studio-cut-plan-ui-panel.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-210-STUDIO-CUT-PLAN-UI-PANEL.yaml
+  - apps/cloud/README.md
+  - apps/cloud/public/campaign-project-editor.js
+  - apps/cloud/public/style.css
+  - tests/e2e/misell-ui.spec.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/player/**
+  - apps/cloud/server.js
+  - apps/cloud/package.json
+  - apps/cloud/package-lock.json
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - none
+stop_conditions:
+  - new API, DB, auth/RBAC, publish, content_manifest, external AI, media generation, billing, customer route, workflow, or package change becomes necessary
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing validation evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+acceptance_criteria:
+  - Campaign Project Editor lists existing non-deleted cut plans for the project.
+  - Admin can create and validate cut plans through existing #210 endpoints.
+  - Admin can create html_preview render manifests and rerun QA through existing #210 endpoints.
+  - Admin can soft-delete render manifests and cut plans through existing #210 endpoints.
+  - UI visibly preserves no external AI, no media generation, no MP4 export, no content_manifest creation, and no publish.
+  - E2E verifies UI operations and campaign_project_events evidence.
+  - No backend/API/DB/auth/workflow/package/runtime publish behavior is changed.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-cut-plan-render-contract
+    - npm run test:e2e
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
