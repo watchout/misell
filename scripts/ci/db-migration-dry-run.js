@@ -62,7 +62,9 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "studio_render_manifests",
       "studio_render_qa_results",
       "studio_publish_preflight_results",
-      "content_manifest_draft_transforms"
+      "content_manifest_draft_transforms",
+      "studio_measurement_bindings",
+      "studio_qr_bindings"
     ]) {
       const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
       if (!row) throw new Error(`Expected Studio Phase 1 table '${table}' to exist`);
@@ -165,6 +167,64 @@ function assertStudioPhase1Schema(repoRoot, dbPath) {
       "no_publish",
       "no_player_device_mutation",
       "no_schedule_activation"
+    ]);
+    assertColumns(db, "studio_measurement_bindings", [
+      "measurement_binding_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "campaign_project_id",
+      "campaign_project_scene_id",
+      "render_manifest_id",
+      "content_layer",
+      "item_type",
+      "measurement_goal",
+      "expected_action",
+      "creative_id",
+      "qr_link_id",
+      "measurement_label",
+      "data_source_class",
+      "baseline_evidence_ref",
+      "holdout_evidence_ref",
+      "validation_status",
+      "validation_checks_json",
+      "deleted_at"
+    ]);
+    assertColumns(db, "studio_qr_bindings", [
+      "qr_binding_id",
+      "qr_link_id",
+      "qr_token",
+      "measurement_binding_id",
+      "tenant_id",
+      "store_id",
+      "screen_group_id",
+      "campaign_project_id",
+      "campaign_project_scene_id",
+      "creative_id",
+      "target_url",
+      "status",
+      "attribution_claim",
+      "deleted_at"
+    ]);
+    assertColumns(db, "qr_links", [
+      "measurement_binding_id",
+      "campaign_project_id",
+      "campaign_project_scene_id",
+      "creative_id",
+      "ad_slot_id",
+      "measurement_label",
+      "data_source_class",
+      "attribution_claim"
+    ]);
+    assertColumns(db, "qr_scans", [
+      "measurement_binding_id",
+      "campaign_project_id",
+      "campaign_project_scene_id",
+      "creative_id",
+      "ad_slot_id",
+      "measurement_label",
+      "data_source_class",
+      "attribution_claim"
     ]);
     assertColumns(db, "studio_generation_providers", [
       "provider_id",
