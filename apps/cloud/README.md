@@ -276,6 +276,13 @@ publish candidate until provenance has approved rights review, a compatible
 license status, and `commercial_use_allowed=true`; B1 still does not publish.
 The smoke target is `npm --prefix apps/cloud run smoke:studio-provider-job-foundation`.
 
+The authenticated Campaign Project Editor also includes a read-only B1 status
+panel for operators. It reads the existing provider catalog, generation job, and
+asset provenance APIs scoped to the current CampaignProject, and it shows the
+no-external-provider, no-secret, no-credit, no-`content_manifest`, and no-publish
+guard flags. The panel intentionally has no job mutation, asset provenance
+mutation, rights approval, provider call, credit, or publish controls.
+
 Studio Execution C1 adds publish preflight and dry-run
 `content_manifest` draft transform evidence only. A validated
 `CampaignProject`, valid Scenes, and a QA-passed `studio_render_manifest` can be

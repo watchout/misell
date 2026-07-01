@@ -10,6 +10,9 @@
     scheduleHandoffDraft: null,
     publishPreflights: [],
     publishPreflightDetail: null,
+    providers: [],
+    generationJobs: [],
+    assetProvenance: [],
     cutPlans: [],
     renderManifestsByCutPlanId: {},
     selectedSceneId: "",
@@ -23,18 +26,27 @@
   async function loadEditor(options = {}) {
     const projectId = projectIdFromPath();
     if (!projectId) throw new Error("project id is required");
-    const [response, handoffResponse, scheduleHandoffResponse, publishPreflightResponse, cutPlanResponse] = await Promise.all([
+    const [response, handoffResponse, scheduleHandoffResponse, publishPreflightResponse, providerResponse, cutPlanResponse] = await Promise.all([
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/schedule-handoff-draft`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/publish-preflights?limit=8`),
+      fetchJson("/api/admin/studio-generation-providers"),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/cut-plans`)
     ]);
     state.project = response.campaign_project;
     state.handoffDraft = handoffResponse.playlist_handoff_draft;
     state.scheduleHandoffDraft = scheduleHandoffResponse.schedule_handoff_draft;
     state.publishPreflights = publishPreflightResponse.studio_publish_preflights || [];
+    state.providers = providerResponse.studio_generation_providers || [];
     state.cutPlans = cutPlanResponse.studio_cut_plans || [];
+    const statusQuery = projectStatusQuery(state.project);
+    const [jobsResponse, provenanceResponse] = await Promise.all([
+      fetchJson(`/api/admin/ai-generation-jobs?${statusQuery}`),
+      fetchJson(`/api/admin/asset-provenance?${statusQuery}`)
+    ]);
+    state.generationJobs = jobsResponse.ai_generation_jobs || [];
+    state.assetProvenance = provenanceResponse.asset_provenance || [];
     const [publishPreflightDetail, renderManifestsByCutPlanId] = await Promise.all([
       loadLatestPublishPreflightDetail(state.publishPreflights),
       loadRenderManifests(state.cutPlans)
@@ -96,6 +108,7 @@
         <h2>履歴</h2>
         ${(project.events || []).slice(0, 8).map(renderEvent).join("") || `<p class="empty">履歴なし</p>`}
       </section>
+      ${renderProviderStatusPanel(project, state.providers, state.generationJobs, state.assetProvenance)}
       ${renderHandoffDraft(state.handoffDraft)}
       ${renderScheduleHandoffDraft(state.scheduleHandoffDraft)}
       ${renderCutPlanPanel(project, state.cutPlans, state.renderManifestsByCutPlanId)}
@@ -591,6 +604,47 @@
     `;
   }
 
+  function renderProviderStatusPanel(project, providers, jobs, provenance) {
+    const providerRows = Array.isArray(providers) ? providers : [];
+    const jobRows = Array.isArray(jobs) ? jobs : [];
+    const provenanceRows = Array.isArray(provenance) ? provenance : [];
+    return `
+      <section class="campaign-editor-provider-status" aria-label="Provider, job, and provenance status" data-provider-status-panel>
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>Provider / Job / Provenance</h2>
+            <small>既存のStudio B1 read APIだけを読む状態確認パネルです。job作成・権利承認・publishは行いません。</small>
+          </div>
+          <span class="update-status update-status-pending">読み取り専用</span>
+        </div>
+        <div class="campaign-editor-provider-guards" aria-label="Provider status guard flags">
+          ${renderGuardFlag("外部provider呼び出しなし", true)}
+          ${renderGuardFlag("secret表示なし", true)}
+          ${renderGuardFlag("credit消費なし", true)}
+          ${renderGuardFlag("content_manifest作成なし", true)}
+          ${renderGuardFlag("publishなし", true)}
+        </div>
+        <div class="campaign-editor-provider-grid">
+          <section class="campaign-editor-provider-card" data-provider-catalog>
+            <h3>Provider Catalog</h3>
+            ${providerRows.length ? providerRows.map(renderProvider).join("") : `<p class="empty">active providerはありません。</p>`}
+          </section>
+          <section class="campaign-editor-provider-card" data-generation-jobs>
+            <h3>Generation Jobs</h3>
+            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(jobRows.length))} jobs</small>
+            ${jobRows.length ? jobRows.map(renderGenerationJob).join("") : `<p class="empty">generation jobはまだありません。</p>`}
+          </section>
+          <section class="campaign-editor-provider-card" data-asset-provenance>
+            <h3>Asset Provenance</h3>
+            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(provenanceRows.length))} assets</small>
+            ${provenanceRows.length ? provenanceRows.map(renderAssetProvenance).join("") : `<p class="empty">asset provenanceはまだありません。</p>`}
+          </section>
+        </div>
+        <p class="campaign-editor-provider-note">このパネルにはmutation controlを置きません。jobのcreate/start/complete/fail/delete、asset provenanceのcreate/update/delete、rights approvalは別工程です。</p>
+      </section>
+    `;
+  }
+
   function renderPublishPreflightPanel(project, preflights, detail) {
     const rows = Array.isArray(preflights) ? preflights : [];
     const latest = detail || rows[0] || null;
@@ -691,6 +745,28 @@
     `;
   }
 
+  function renderProvider(provider) {
+    const capabilities = Array.isArray(provider.capabilities) ? provider.capabilities : [];
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(provider.provider_id || "")}</strong>
+          <small>${escapeHtml(provider.display_name || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(provider.status))}">${escapeHtml(provider.status || "")}</span>
+        <small>${escapeHtml(provider.provider_type || "")}</small>
+        <div class="campaign-editor-provider-tags">
+          ${capabilities.map((capability) => `<span>${escapeHtml(capability)}</span>`).join("")}
+        </div>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("no external", provider.no_external_provider_call)}
+          ${renderGuardFlag("no secret", provider.no_secret_material)}
+          ${renderGuardFlag("no credit", provider.no_credit_consumption)}
+        </div>
+      </article>
+    `;
+  }
+
   function renderCutPlanCard(cutPlan, renderManifests) {
     const isValidated = cutPlan.status === "validated" && cutPlan.validation_status === "passed";
     const sceneCount = Array.isArray(cutPlan.source_scene_ids) ? cutPlan.source_scene_ids.length : 0;
@@ -754,6 +830,44 @@
     `;
   }
 
+  function renderGenerationJob(job) {
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(job.ai_generation_job_id || "")}</strong>
+          <small>${escapeHtml(job.provider_id || "")} / ${escapeHtml(job.capability || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(job.status))}">${escapeHtml(job.status || "")}</span>
+        <small>${escapeHtml(job.requested_asset_role || "")} / ${escapeHtml(job.updated_at || "")}</small>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("no external", job.no_external_provider_call)}
+          ${renderGuardFlag("no secret", job.no_secret_material)}
+          ${renderGuardFlag("no credit", job.no_credit_consumption)}
+          ${renderGuardFlag("no manifest", job.no_content_manifest_creation)}
+          ${renderGuardFlag("no publish", job.no_publish)}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderAssetProvenance(asset) {
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(asset.asset_id || asset.asset_provenance_id || "")}</strong>
+          <small>${escapeHtml(asset.source_type || "")} / ${escapeHtml(asset.generated_by_provider || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(asset.rights_status))}">${escapeHtml(asset.rights_status || "")}</span>
+        <small>${escapeHtml(asset.asset_role || "")} / ${escapeHtml(asset.updated_at || "")}</small>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("hash", Boolean(asset.content_sha256))}
+          ${renderGuardFlag("no manifest", asset.no_content_manifest_creation)}
+          ${renderGuardFlag("no publish", asset.no_publish)}
+        </div>
+      </article>
+    `;
+  }
+
   function renderGuardFlags(entry) {
     const flags = [
       ["no_external_ai", "外部AIなし"],
@@ -768,6 +882,10 @@
         ${flags.map(([field, label]) => `<small class="${entry[field] === true ? "" : "is-missing"}">${escapeHtml(label)}</small>`).join("")}
       </div>
     `;
+  }
+
+  function renderGuardFlag(label, value) {
+    return `<small class="${value === true ? "" : "is-missing"}">${escapeHtml(label)}</small>`;
   }
 
   function renderPublishPreflightRow(preflight) {
@@ -923,10 +1041,20 @@
   }
 
   function statusClass(status) {
-    if (status === "valid" || status === "validated" || status === "passed" || status === "draft_created" || status === "active") return "success";
-    if (status === "invalid" || status === "deleted" || status === "failed" || status === "failed_preflight") return "failed";
+    if (["active", "valid", "validated", "passed", "draft_created", "approved", "completed", "asset_review_required"].includes(status)) return "success";
+    if (["invalid", "deleted", "failed", "failed_preflight", "failed_terminal", "rejected", "blocked"].includes(status)) return "failed";
     if (status === "human_review_required") return "pending";
     return "pending";
+  }
+
+  function projectStatusQuery(project) {
+    const params = new URLSearchParams();
+    for (const key of ["tenant_id", "store_id", "screen_group_id", "campaign_project_id"]) {
+      const value = project?.[key];
+      if (value) params.set(key, value);
+    }
+    params.set("limit", "50");
+    return params.toString();
   }
 
   function projectIdFromPath() {

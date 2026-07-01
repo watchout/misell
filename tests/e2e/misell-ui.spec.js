@@ -825,6 +825,18 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   expect(scheduleHandoffDraft.schedule_activation_ready).toBe(false);
   expect(scheduleHandoffDraft.schedule_created).toBe(false);
   expect(scheduleHandoffDraft.playlist_reference.draft_sha256).toBe(handoffDraft.draft_sha256);
+  const providerStatusPanel = campaignEditor.locator(".campaign-editor-provider-status");
+  await expect(providerStatusPanel).toContainText("Provider / Job / Provenance", { timeout: 5000 });
+  await expect(providerStatusPanel).toContainText("読み取り専用");
+  await expect(providerStatusPanel).toContainText("manual_upload");
+  await expect(providerStatusPanel).toContainText("mock_provider");
+  await expect(providerStatusPanel).toContainText("外部provider呼び出しなし");
+  await expect(providerStatusPanel).toContainText("content_manifest作成なし");
+  await expect(providerStatusPanel).toContainText("publishなし");
+  await expect(providerStatusPanel).toContainText("generation jobはまだありません");
+  await expect(providerStatusPanel).toContainText("asset provenanceはまだありません");
+  await expect(providerStatusPanel.locator("button")).toHaveCount(0);
+  await expect(providerStatusPanel.locator("[data-provider-mutation-control]")).toHaveCount(0);
   const preflightPanel = campaignEditor.locator(".campaign-editor-publish-preflight");
   await expect(preflightPanel).toContainText("公開前 dry-run", { timeout: 5000 });
   await expect(preflightPanel).toContainText("公開・schedule有効化・Player/端末更新は行いません");
