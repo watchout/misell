@@ -4,7 +4,7 @@ profile: hotel-lite
 control_handoff_id: CH-MISELL-185-POST-MERGE-COMMENT-TRUSTED-REF
 parent_ssot: https://github.com/watchout/misell/issues/184
 matrix_ref: .shirube/gate-contracts/shirube-v3-rapid-lite-gate-contract-matrix.yaml
-framework_ref: watchout/ai-dev-framework@c9367c91eeae9df8cfc23ffd8ddbadfdb0df005f
+framework_ref: watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
 framework_lock_ref: .shirube/shirube-framework-lock.yaml
 repo_spec_ref: .shirube/repo-spec.yaml
 premise_ref: .shirube/repo-spec.yaml
