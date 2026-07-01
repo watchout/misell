@@ -734,6 +734,33 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   expect(campaignProjectDetail.json.campaign_project.status).toBe("validated");
   expect(campaignProjectDetail.json.campaign_project.scenes.every((scene) => scene.status === "valid")).toBeTruthy();
   expect(campaignProjectDetail.json.campaign_project.events.some((event) => event.action === "project.validated")).toBeTruthy();
+  const cutPlanResponse = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}/cut-plans`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      screen_group_id: "SG-BROWSER"
+    })
+  });
+  expect(cutPlanResponse.status, cutPlanResponse.text).toBe(201);
+  const cutPlanId = cutPlanResponse.json.studio_cut_plan.cut_plan_id;
+  const cutPlanValidation = await authedRequest(cloudBase, `/api/admin/studio-cut-plans/${cutPlanId}/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({})
+  });
+  expect(cutPlanValidation.status, cutPlanValidation.text).toBe(200);
+  expect(cutPlanValidation.json.valid).toBe(true);
+  const renderManifestResponse = await authedRequest(cloudBase, `/api/admin/studio-cut-plans/${cutPlanId}/render-manifests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ output_type: "html_preview" })
+  });
+  expect(renderManifestResponse.status, renderManifestResponse.text).toBe(201);
+  const renderManifest = renderManifestResponse.json.studio_render_manifest;
+  expect(renderManifest.qa_status).toBe("passed");
+  expect(renderManifest.output_sha256).toBeTruthy();
   const campaignPreviewPromise = context.waitForEvent("page");
   await page.locator(`[data-campaign-project-preview="${campaignProjectId}"]`).click();
   const campaignPreview = await campaignPreviewPromise;
@@ -810,6 +837,22 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(providerStatusPanel).toContainText("asset provenanceはまだありません");
   await expect(providerStatusPanel.locator("button")).toHaveCount(0);
   await expect(providerStatusPanel.locator("[data-provider-mutation-control]")).toHaveCount(0);
+  const preflightPanel = campaignEditor.locator(".campaign-editor-publish-preflight");
+  await expect(preflightPanel).toContainText("公開前 dry-run", { timeout: 5000 });
+  await expect(preflightPanel).toContainText("公開・schedule有効化・Player/端末更新は行いません");
+  await preflightPanel.locator("input[name='render_manifest_id']").fill(renderManifest.render_manifest_id);
+  await preflightPanel.locator("select[name='content_type']").selectOption("normal");
+  await preflightPanel.locator("select[name='docs99_gate_verdict']").selectOption("not_applicable");
+  await preflightPanel.locator("textarea[name='request_reason']").fill("Browser publish preflight dry-run");
+  await preflightPanel.locator("button[type='submit']").click();
+  await expect(campaignEditor.locator(".campaign-editor-status")).toContainText("publish preflightを記録しました", { timeout: 5000 });
+  await expect(preflightPanel).toContainText("passed", { timeout: 5000 });
+  await expect(preflightPanel).toContainText("draft_created", { timeout: 5000 });
+  await expect(preflightPanel).toContainText("no_publish: true", { timeout: 5000 });
+  await expect(preflightPanel.locator("[data-editor-publish-now]")).toHaveCount(0);
+  const preflights = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}/publish-preflights`);
+  expect(preflights.status, preflights.text).toBe(200);
+  expect(preflights.json.studio_publish_preflights.some((preflight) => preflight.status === "passed" && preflight.render_manifest_id === renderManifest.render_manifest_id)).toBeTruthy();
   const cutPlanPanel = campaignEditor.locator(".campaign-editor-cut-plan-panel");
   await expect(cutPlanPanel).toContainText("レンダー設計 / QA", { timeout: 5000 });
   await expect(cutPlanPanel).toContainText("content_manifest作成");

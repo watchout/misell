@@ -8,6 +8,8 @@
     project: null,
     handoffDraft: null,
     scheduleHandoffDraft: null,
+    publishPreflights: [],
+    publishPreflightDetail: null,
     providers: [],
     generationJobs: [],
     assetProvenance: [],
@@ -24,17 +26,20 @@
   async function loadEditor(options = {}) {
     const projectId = projectIdFromPath();
     if (!projectId) throw new Error("project id is required");
-    const [response, handoffResponse, scheduleHandoffResponse, providerResponse, cutPlanResponse] = await Promise.all([
+    const [response, handoffResponse, scheduleHandoffResponse, publishPreflightResponse, providerResponse, cutPlanResponse] = await Promise.all([
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/schedule-handoff-draft`),
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/publish-preflights?limit=8`),
       fetchJson("/api/admin/studio-generation-providers"),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/cut-plans`)
     ]);
     state.project = response.campaign_project;
     state.handoffDraft = handoffResponse.playlist_handoff_draft;
     state.scheduleHandoffDraft = scheduleHandoffResponse.schedule_handoff_draft;
+    state.publishPreflights = publishPreflightResponse.studio_publish_preflights || [];
     state.providers = providerResponse.studio_generation_providers || [];
+    state.cutPlans = cutPlanResponse.studio_cut_plans || [];
     const statusQuery = projectStatusQuery(state.project);
     const [jobsResponse, provenanceResponse] = await Promise.all([
       fetchJson(`/api/admin/ai-generation-jobs?${statusQuery}`),
@@ -42,8 +47,12 @@
     ]);
     state.generationJobs = jobsResponse.ai_generation_jobs || [];
     state.assetProvenance = provenanceResponse.asset_provenance || [];
-    state.cutPlans = cutPlanResponse.studio_cut_plans || [];
-    state.renderManifestsByCutPlanId = await loadRenderManifests(state.cutPlans);
+    const [publishPreflightDetail, renderManifestsByCutPlanId] = await Promise.all([
+      loadLatestPublishPreflightDetail(state.publishPreflights),
+      loadRenderManifests(state.cutPlans)
+    ]);
+    state.publishPreflightDetail = publishPreflightDetail;
+    state.renderManifestsByCutPlanId = renderManifestsByCutPlanId;
     const scenes = activeScenes(state.project);
     const previous = options.selectedSceneId || state.selectedSceneId;
     state.selectedSceneId = scenes.some((scene) => scene.campaign_project_scene_id === previous)
@@ -103,6 +112,7 @@
       ${renderHandoffDraft(state.handoffDraft)}
       ${renderScheduleHandoffDraft(state.scheduleHandoffDraft)}
       ${renderCutPlanPanel(project, state.cutPlans, state.renderManifestsByCutPlanId)}
+      ${renderPublishPreflightPanel(project, state.publishPreflights, state.publishPreflightDetail)}
     `;
     root.querySelectorAll("[data-editor-scene-id]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -121,6 +131,7 @@
     });
     root.querySelector("[data-editor-copy-handoff]")?.addEventListener("click", handleCopyHandoff);
     root.querySelector("[data-editor-copy-schedule-handoff]")?.addEventListener("click", handleCopyScheduleHandoff);
+    root.querySelector("form.campaign-editor-publish-preflight-form")?.addEventListener("submit", handleCreatePublishPreflight);
     root.querySelector("[data-editor-create-cut-plan]")?.addEventListener("click", handleCreateCutPlan);
     root.querySelectorAll("[data-editor-validate-cut-plan]").forEach((button) => {
       button.addEventListener("click", handleValidateCutPlan);
@@ -138,6 +149,14 @@
       button.addEventListener("click", handleDeleteCutPlan);
     });
     root.querySelector("form.campaign-editor-form")?.addEventListener("submit", handleSaveScene);
+  }
+
+  async function loadLatestPublishPreflightDetail(preflights) {
+    const latest = Array.isArray(preflights) ? preflights[0] : null;
+    const preflightId = latest?.publish_preflight_id || "";
+    if (!preflightId) return null;
+    const detail = await fetchJson(`/api/admin/studio-publish-preflights/${encodeURIComponent(preflightId)}`);
+    return detail.studio_publish_preflight || null;
   }
 
   async function loadRenderManifests(cutPlans) {
@@ -382,6 +401,32 @@
     }
   }
 
+  async function handleCreatePublishPreflight(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type='submit']");
+    button.disabled = true;
+    button.textContent = "dry-run中";
+    try {
+      const result = await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(form.dataset.projectId || "")}/publish-preflights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(publishPreflightPayloadFromForm(form))
+      });
+      const preflight = result.studio_publish_preflight || {};
+      const statusText = preflight.status || "created";
+      state.message = `publish preflightを記録しました (${statusText})。`;
+      state.publishPreflightDetail = preflight;
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    } catch (error) {
+      state.message = error.message || "publish preflightに失敗しました。";
+      render();
+    } finally {
+      button.disabled = false;
+      button.textContent = "dry-runを実行";
+    }
+  }
+
   async function handleCopyHandoff() {
     const textarea = root.querySelector("[data-editor-handoff-json]");
     if (!textarea) return;
@@ -560,8 +605,9 @@
   }
 
   function renderProviderStatusPanel(project, providers, jobs, provenance) {
-    const jobCount = jobs.length;
-    const provenanceCount = provenance.length;
+    const providerRows = Array.isArray(providers) ? providers : [];
+    const jobRows = Array.isArray(jobs) ? jobs : [];
+    const provenanceRows = Array.isArray(provenance) ? provenance : [];
     return `
       <section class="campaign-editor-provider-status" aria-label="Provider, job, and provenance status" data-provider-status-panel>
         <div class="campaign-editor-handoff-head">
@@ -581,20 +627,69 @@
         <div class="campaign-editor-provider-grid">
           <section class="campaign-editor-provider-card" data-provider-catalog>
             <h3>Provider Catalog</h3>
-            ${providers.length ? providers.map(renderProvider).join("") : `<p class="empty">active providerはありません。</p>`}
+            ${providerRows.length ? providerRows.map(renderProvider).join("") : `<p class="empty">active providerはありません。</p>`}
           </section>
           <section class="campaign-editor-provider-card" data-generation-jobs>
             <h3>Generation Jobs</h3>
-            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(jobCount))} jobs</small>
-            ${jobs.length ? jobs.map(renderGenerationJob).join("") : `<p class="empty">generation jobはまだありません。</p>`}
+            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(jobRows.length))} jobs</small>
+            ${jobRows.length ? jobRows.map(renderGenerationJob).join("") : `<p class="empty">generation jobはまだありません。</p>`}
           </section>
           <section class="campaign-editor-provider-card" data-asset-provenance>
             <h3>Asset Provenance</h3>
-            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(provenanceCount))} assets</small>
-            ${provenance.length ? provenance.map(renderAssetProvenance).join("") : `<p class="empty">asset provenanceはまだありません。</p>`}
+            <small>${escapeHtml(project.campaign_project_id || "")} / ${escapeHtml(String(provenanceRows.length))} assets</small>
+            ${provenanceRows.length ? provenanceRows.map(renderAssetProvenance).join("") : `<p class="empty">asset provenanceはまだありません。</p>`}
           </section>
         </div>
         <p class="campaign-editor-provider-note">このパネルにはmutation controlを置きません。jobのcreate/start/complete/fail/delete、asset provenanceのcreate/update/delete、rights approvalは別工程です。</p>
+      </section>
+    `;
+  }
+
+  function renderPublishPreflightPanel(project, preflights, detail) {
+    const rows = Array.isArray(preflights) ? preflights : [];
+    const latest = detail || rows[0] || null;
+    const transform = latest?.content_manifest_draft_transform || null;
+    return `
+      <section class="campaign-editor-handoff campaign-editor-publish-preflight" aria-label="Studio publish preflight dry-run">
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>公開前 dry-run</h2>
+            <small>既存 C1 API で publish readiness と content_manifest draft transform を記録します。公開・schedule有効化・Player/端末更新は行いません。</small>
+          </div>
+          <span class="update-status update-status-${escapeAttr(statusClass(latest?.status || "pending"))}">${escapeHtml(latest?.status || "未実行")}</span>
+        </div>
+        <form class="campaign-editor-publish-preflight-form" data-project-id="${escapeAttr(project.campaign_project_id || "")}">
+          <label>
+            Render manifest ID
+            <input name="render_manifest_id" type="text" placeholder="srm-..." value="${escapeHtml(latest?.render_manifest_id || "")}" required>
+          </label>
+          <label>
+            Content type
+            <select name="content_type">
+              ${publishPreflightContentTypeOptions(latest?.content_type || "normal")}
+            </select>
+          </label>
+          <label>
+            docs/99 verdict
+            <select name="docs99_gate_verdict">
+              ${docs99GateVerdictOptions(latest?.docs99_gate_verdict || "not_applicable")}
+            </select>
+          </label>
+          <label>
+            docs/99 ref
+            <input name="docs99_gate_ref" type="text" placeholder="docs/99#..." value="${escapeHtml(latest?.docs99_gate_ref || "")}">
+          </label>
+          <label class="campaign-editor-preflight-reason">
+            実行理由
+            <textarea name="request_reason" rows="2" placeholder="operator dry-run note">${escapeHtml(latest?.request_reason || "Studio C1 publish preflight UI dry-run")}</textarea>
+          </label>
+          <button type="submit">dry-runを実行</button>
+        </form>
+        ${latest ? renderPublishPreflightResult(latest, transform) : `<p class="empty">まだ preflight はありません。validated project と QA-passed render manifest を指定して dry-run してください。</p>`}
+        <div class="campaign-editor-preflight-history">
+          <strong>最近の dry-run</strong>
+          ${rows.length ? rows.map(renderPublishPreflightRow).join("") : `<small>履歴なし</small>`}
+        </div>
       </section>
     `;
   }
@@ -623,6 +718,30 @@
           </div>
         ` : `<p class="empty">cut-planはまだありません。</p>`}
       </section>
+    `;
+  }
+
+  function renderPublishPreflightResult(preflight, transform) {
+    const checks = Array.isArray(preflight.checks) ? preflight.checks : [];
+    const failed = checks.filter((check) => check.result !== "passed");
+    return `
+      <div class="campaign-editor-preflight-result">
+        <div class="campaign-editor-handoff-meta">
+          <small>${escapeHtml(preflight.publish_preflight_id || "")}</small>
+          <small>${escapeHtml(preflight.content_type || "")} / ${escapeHtml(preflight.publish_mode || "")}</small>
+          <small>docs/99: ${escapeHtml(preflight.docs99_gate_verdict || "")}</small>
+          <small>draft: ${escapeHtml(transform?.status || "not_loaded")}</small>
+          <small>${escapeHtml(String(preflight.render_manifest_output_sha256 || "").slice(0, 16))}</small>
+        </div>
+        <div class="campaign-editor-preflight-guards">
+          ${guardFlags(preflight).map(([label, value]) => `<small>${escapeHtml(label)}: ${value ? "true" : "false"}</small>`).join("")}
+        </div>
+        ${failed.length ? `
+          <div class="campaign-project-validation">
+            ${failed.map((check) => `<small>${escapeHtml(check.check_id || "")}: ${escapeHtml(check.reason || "")}</small>`).join("")}
+          </div>
+        ` : `<small>すべての C1 checks が通過しました。これは dry-run evidence であり publish 承認ではありません。</small>`}
+      </div>
     `;
   }
 
@@ -683,26 +802,6 @@
     `;
   }
 
-  function renderGenerationJob(job) {
-    return `
-      <article class="campaign-editor-provider-item">
-        <div>
-          <strong>${escapeHtml(job.ai_generation_job_id || "")}</strong>
-          <small>${escapeHtml(job.provider_id || "")} / ${escapeHtml(job.capability || "")}</small>
-        </div>
-        <span class="update-status update-status-${escapeAttr(statusClass(job.status))}">${escapeHtml(job.status || "")}</span>
-        <small>${escapeHtml(job.requested_asset_role || "")} / ${escapeHtml(job.updated_at || "")}</small>
-        <div class="campaign-editor-provider-guards">
-          ${renderGuardFlag("no external", job.no_external_provider_call)}
-          ${renderGuardFlag("no secret", job.no_secret_material)}
-          ${renderGuardFlag("no credit", job.no_credit_consumption)}
-          ${renderGuardFlag("no manifest", job.no_content_manifest_creation)}
-          ${renderGuardFlag("no publish", job.no_publish)}
-        </div>
-      </article>
-    `;
-  }
-
   function renderRenderManifestCard(manifest) {
     return `
       <article class="campaign-editor-render-manifest" data-render-manifest-id="${escapeAttr(manifest.render_manifest_id)}">
@@ -731,6 +830,26 @@
     `;
   }
 
+  function renderGenerationJob(job) {
+    return `
+      <article class="campaign-editor-provider-item">
+        <div>
+          <strong>${escapeHtml(job.ai_generation_job_id || "")}</strong>
+          <small>${escapeHtml(job.provider_id || "")} / ${escapeHtml(job.capability || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(job.status))}">${escapeHtml(job.status || "")}</span>
+        <small>${escapeHtml(job.requested_asset_role || "")} / ${escapeHtml(job.updated_at || "")}</small>
+        <div class="campaign-editor-provider-guards">
+          ${renderGuardFlag("no external", job.no_external_provider_call)}
+          ${renderGuardFlag("no secret", job.no_secret_material)}
+          ${renderGuardFlag("no credit", job.no_credit_consumption)}
+          ${renderGuardFlag("no manifest", job.no_content_manifest_creation)}
+          ${renderGuardFlag("no publish", job.no_publish)}
+        </div>
+      </article>
+    `;
+  }
+
   function renderAssetProvenance(asset) {
     return `
       <article class="campaign-editor-provider-item">
@@ -738,22 +857,15 @@
           <strong>${escapeHtml(asset.asset_id || asset.asset_provenance_id || "")}</strong>
           <small>${escapeHtml(asset.source_type || "")} / ${escapeHtml(asset.generated_by_provider || "")}</small>
         </div>
-        <span class="update-status update-status-${escapeAttr(statusClass(asset.rights_review_status))}">${escapeHtml(asset.rights_review_status || "")}</span>
-        <small>${escapeHtml(asset.license_status || "")} / commercial ${escapeHtml(String(Boolean(asset.commercial_use_allowed)))}</small>
+        <span class="update-status update-status-${escapeAttr(statusClass(asset.rights_status))}">${escapeHtml(asset.rights_status || "")}</span>
+        <small>${escapeHtml(asset.asset_role || "")} / ${escapeHtml(asset.updated_at || "")}</small>
         <div class="campaign-editor-provider-guards">
-          ${renderGuardFlag("publish candidate", asset.can_enter_publish_candidate)}
-          ${renderGuardFlag("no external", asset.no_external_provider_call)}
-          ${renderGuardFlag("no secret", asset.no_secret_material)}
-          ${renderGuardFlag("no credit", asset.no_credit_consumption)}
+          ${renderGuardFlag("hash", Boolean(asset.content_sha256))}
           ${renderGuardFlag("no manifest", asset.no_content_manifest_creation)}
           ${renderGuardFlag("no publish", asset.no_publish)}
         </div>
       </article>
     `;
-  }
-
-  function renderGuardFlag(label, ok) {
-    return `<span class="campaign-editor-guard${ok ? " campaign-editor-guard-ok" : " campaign-editor-guard-warn"}">${escapeHtml(label)}</span>`;
   }
 
   function renderGuardFlags(entry) {
@@ -770,6 +882,31 @@
         ${flags.map(([field, label]) => `<small class="${entry[field] === true ? "" : "is-missing"}">${escapeHtml(label)}</small>`).join("")}
       </div>
     `;
+  }
+
+  function renderGuardFlag(label, value) {
+    return `<small class="${value === true ? "" : "is-missing"}">${escapeHtml(label)}</small>`;
+  }
+
+  function renderPublishPreflightRow(preflight) {
+    return `
+      <small>
+        <span>${escapeHtml(preflight.status || "")}</span>
+        <span>${escapeHtml(preflight.render_manifest_id || "")}</span>
+        <span>${escapeHtml(preflight.content_type || "")}</span>
+        <span>${escapeHtml(preflight.created_at || "")}</span>
+      </small>
+    `;
+  }
+
+  function publishPreflightPayloadFromForm(form) {
+    return {
+      render_manifest_id: form.elements.render_manifest_id.value,
+      content_type: form.elements.content_type.value,
+      docs99_gate_verdict: form.elements.docs99_gate_verdict.value,
+      docs99_gate_ref: form.elements.docs99_gate_ref.value,
+      request_reason: form.elements.request_reason.value
+    };
   }
 
   function scenePayloadFromForm(form) {
@@ -790,6 +927,40 @@
     return options.map(([value, label]) => (
       `<option value="${escapeAttr(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`
     )).join("");
+  }
+
+  function publishPreflightContentTypeOptions(selected) {
+    return [
+      ["normal", "通常"],
+      ["ad", "広告"],
+      ["sponsor", "協賛"],
+      ["collaboration", "コラボ"]
+    ].map(([value, label]) => (
+      `<option value="${escapeAttr(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`
+    )).join("");
+  }
+
+  function docs99GateVerdictOptions(selected) {
+    return [
+      ["not_applicable", "対象外"],
+      ["allow", "許可"],
+      ["allow_with_conditions", "条件付き許可"],
+      ["human_review_required", "人間レビュー必要"],
+      ["block", "ブロック"]
+    ].map(([value, label]) => (
+      `<option value="${escapeAttr(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`
+    )).join("");
+  }
+
+  function guardFlags(preflight) {
+    return [
+      ["dry_run_only", preflight.dry_run_only === true],
+      ["no_active_content_manifest_mutation", preflight.no_active_content_manifest_mutation === true],
+      ["no_content_manifest_activation", preflight.no_content_manifest_activation === true],
+      ["no_publish", preflight.no_publish === true],
+      ["no_schedule_activation", preflight.no_schedule_activation === true],
+      ["no_player_device_mutation", preflight.no_player_device_mutation === true]
+    ];
   }
 
   function selectedScene(scenes) {
@@ -870,8 +1041,9 @@
   }
 
   function statusClass(status) {
-    if (["active", "valid", "validated", "passed", "approved", "completed", "asset_review_required"].includes(status)) return "success";
-    if (["invalid", "deleted", "failed", "failed_terminal", "rejected", "blocked"].includes(status)) return "failed";
+    if (["active", "valid", "validated", "passed", "draft_created", "approved", "completed", "asset_review_required"].includes(status)) return "success";
+    if (["invalid", "deleted", "failed", "failed_preflight", "failed_terminal", "rejected", "blocked"].includes(status)) return "failed";
+    if (status === "human_review_required") return "pending";
     return "pending";
   }
 
