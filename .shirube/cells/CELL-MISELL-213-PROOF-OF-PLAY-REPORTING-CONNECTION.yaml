@@ -1,0 +1,77 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-213-PROOF-OF-PLAY-REPORTING-CONNECTION
+parent_ssot: https://github.com/watchout/misell/issues/213
+title: Studio proof-of-play reporting connection D3
+cell_type: runtime_foundation
+risk_class: R3
+status: implementation
+summary: >
+  Add the approved Studio Execution D3 foundation that rebuilds an internal
+  proof-of-play reporting read model from existing playlogs, QR scans, and D1
+  Studio measurement/QR bindings. This cell preserves measured evidence labels
+  and reverse lookup fields without ROI, ROAS, lift, guarantee, publish,
+  content_manifest, Player/device, provider, billing, camera/POS, or external
+  advertiser UI behavior.
+
+scope:
+  - Additive Cloud schema for studio_proof_of_play_bindings or equivalent proof-of-play read model.
+  - Deterministic rebuild/backfill from existing playlog events, QR scans, CampaignProject/Scene measurement binding, studio_measurement_bindings, and studio_qr_bindings.
+  - Preserve tenant/store/screen_group/project/scene/creative/campaign/ad_slot/qr reverse lookup.
+  - Preserve D1 measurement_label and data_source_class while adding fixed proof evidence labels.
+  - Label playlog evidence as measured_play_evidence only.
+  - Label QR scan evidence as measured_response_only only.
+  - Admin/operator APIs for rebuild/list/get proof evidence only.
+  - Smoke coverage for idempotent rebuild, duplicate protection, scope isolation, label preservation, and no side effects.
+non_scope:
+  - external advertiser UI, customer/public controls, or advertiser self-service
+  - ROI, ROAS, lift, guarantee, purchase, visit, incremental, or conversion-value claims
+  - baseline/holdout attribution model or legal/ad claim approval UI
+  - content_manifest creation, activation, schedule activation, publish, rollback, or Player/device mutation
+  - provider integration, external AI, MCP runtime, media generation, camera/POS/external data ingestion, or ad network delivery
+  - billing, quota, credit ledger, pricing, or revenue settlement
+
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-213-PROOF-OF-PLAY-REPORTING-CONNECTION.yaml
+  - .shirube/control-handoffs/CH-MISELL-213-proof-of-play-reporting-connection.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-213-PROOF-OF-PLAY-REPORTING-CONNECTION.yaml
+  - apps/cloud/README.md
+  - apps/cloud/lib/studio-proof-of-play-contract.js
+  - apps/cloud/package.json
+  - apps/cloud/scripts/smoke-studio-proof-of-play-reporting.mjs
+  - apps/cloud/server.js
+  - package.json
+  - scripts/ci/db-migration-dry-run.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/player/**
+  - apps/cloud/public/**
+
+acceptance_criteria:
+  - Additive schema exists for studio_proof_of_play_bindings.
+  - Rebuild is deterministic and idempotent for the same playlog/QR source rows.
+  - Unique keys prevent duplicate proof rows for the same measurement binding/source event.
+  - Scope isolation is enforced for tenant/store/screen_group on rebuild/list/detail APIs.
+  - Proof rows preserve D1 measurement_label and data_source_class.
+  - Playlog proof rows use evidence_label=measured_play_evidence and source_data_class=misell_playlog.
+  - QR proof rows use evidence_label=measured_response_only and source_data_class=misell_qr.
+  - QR scan evidence remains measured_response_only and does not imply sale, visit, ROI, ROAS, lift, guarantee, or incremental effect.
+  - Smoke proves no content_manifest creation, publish_history, device command, Player/device mutation, provider call, or credit ledger mutation.
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - node --check apps/cloud/lib/studio-proof-of-play-contract.js
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-proof-of-play-reporting
+    - npm --prefix apps/cloud run smoke:studio-measurement-binding
+    - node scripts/ci/db-migration-dry-run.js
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci

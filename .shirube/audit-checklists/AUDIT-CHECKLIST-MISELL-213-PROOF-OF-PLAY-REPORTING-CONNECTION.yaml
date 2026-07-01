@@ -1,0 +1,86 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-213-PROOF-OF-PLAY-REPORTING-CONNECTION
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-213-proof-of-play-reporting-connection.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-213-PROOF-OF-PLAY-REPORTING-CONNECTION.yaml
+  cell_id: CELL-MISELL-213-PROOF-OF-PLAY-REPORTING-CONNECTION
+  pr: watchout/misell#TBD
+items:
+  - item_id: D3-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden path is touched.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: D3-AUDIT-002
+    source: schema
+    verification_method: executable
+    required: true
+    prompt: Verify schema changes are additive and include studio_proof_of_play_bindings with source, scope, reverse lookup, label, validation, and source_ref fields.
+    expected_evidence:
+      - db_migration_dry_run
+      - schema_review
+  - item_id: D3-AUDIT-003
+    source: contract
+    verification_method: semantic
+    required: true
+    prompt: Verify deterministic D3 contract helpers reject out-of-scope ROI/ROAS/lift/guarantee/purchase/visit/incremental/publish/provider/billing/device inputs.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: D3-AUDIT-004
+    source: api
+    verification_method: semantic
+    required: true
+    prompt: Verify Admin/operator APIs are authenticated and limited to rebuild/list/get proof evidence.
+    expected_evidence:
+      - code_review
+  - item_id: D3-AUDIT-005
+    source: rebuild_idempotency
+    verification_method: executable
+    required: true
+    prompt: Verify rebuild is deterministic/idempotent and duplicate source events do not create duplicate proof rows.
+    expected_evidence:
+      - smoke_result
+      - unique_constraint_review
+  - item_id: D3-AUDIT-006
+    source: scope_isolation
+    verification_method: executable
+    required: true
+    prompt: Verify tenant/store/screen_group scope mismatches are rejected for rebuild/list/detail APIs.
+    expected_evidence:
+      - smoke_result
+  - item_id: D3-AUDIT-007
+    source: label_preservation
+    verification_method: executable
+    required: true
+    prompt: Verify proof rows preserve D1 measurement_label and data_source_class while adding separate source_data_class.
+    expected_evidence:
+      - smoke_result
+      - code_review
+  - item_id: D3-AUDIT-008
+    source: proof_label_boundary
+    verification_method: executable
+    required: true
+    prompt: Verify playlog proof rows are measured_play_evidence only and QR scan proof rows are measured_response_only only.
+    expected_evidence:
+      - smoke_result
+      - code_review
+  - item_id: D3-AUDIT-009
+    source: non_scope
+    verification_method: executable
+    required: true
+    prompt: Verify D3 creates no content_manifest, publish_history, device command, Player/device mutation, provider call, external AI call, or credit ledger mutation.
+    expected_evidence:
+      - smoke_result
+      - code_review
+  - item_id: D3-AUDIT-010
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
