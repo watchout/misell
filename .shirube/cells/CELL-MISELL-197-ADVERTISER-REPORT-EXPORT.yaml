@@ -1,0 +1,79 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-ADVERTISER-REPORT-EXPORT
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Advertiser report internal export
+cell_type: reporting_foundation
+risk_class: R3
+status: implementation
+summary: >
+  Add internal admin JSON/CSV export for saved advertiser_campaign_preview
+  snapshots so operators can preserve and share evidence manually without
+  public links, advertiser self-service, billing, ROI/ROAS/lift claims,
+  guarantees, publishing, or new storage schema.
+
+scope:
+  - Add admin-only export for existing advertiser_campaign_preview report_snapshots.
+  - Support json and csv formats only.
+  - Include snapshot metadata, metrics_sha256, measurement policy, measured proof-of-play, QR response, counter-order rail evidence, decision prompts, and ad measurement rows.
+  - Preserve claim boundaries and not_reported fields for ROI/ROAS/lift/guarantee/incremental attribution.
+  - Reject export for non-advertiser report snapshots.
+  - Extend reporting smoke coverage for JSON export, CSV export, unsupported format, missing snapshot, and non-advertiser snapshot rejection.
+non_scope:
+  - advertiser or agency login, role, self-service, public link, share URL, or external report portal
+  - PDF generation, email delivery, scheduled exports, signed URLs, or file storage
+  - ROI, ROAS, lift, guarantee, purchase, visit, incremental, conversion-value, or POS-settled sales claims
+  - baseline/holdout attribution model
+  - billing, pricing, credit, settlement, or ad contract revenue
+  - DB migration, new persistent table, or new package dependency
+  - content_manifest creation, schedule activation, publish, rollback, or Player/device mutation
+  - provider integration, external AI, MCP runtime, media generation, camera/POS/external data ingestion, or ad network delivery
+
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-EXPORT.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-advertiser-report-export.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-EXPORT.yaml
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+  - apps/cloud/README.md
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/public/**
+  - tests/e2e/**
+
+acceptance_criteria:
+  - GET /api/admin/reports/monthly-snapshots/:snapshot_id/export exports advertiser_campaign_preview snapshots only.
+  - Export route requires admin auth and adds no public/customer/advertiser route.
+  - format=json returns an export envelope with snapshot metadata, metrics_sha256, measurement_policy, proof_of_play, response, conversion, breakdowns, daily rows, and decision prompts.
+  - format=csv returns deterministic rows for snapshot, measurement_policy, proof_of_play, response, conversion, decision prompts, and ad measurement counts.
+  - Unsupported format returns 400.
+  - Missing snapshot returns 404.
+  - Non-advertiser snapshot export returns 400.
+  - Export keeps ROI/ROAS/lift/guarantee/incremental/POS-settled sales claims not_reported or absent.
+  - Reporting smoke proves no content_manifest creation or publish side effect.
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

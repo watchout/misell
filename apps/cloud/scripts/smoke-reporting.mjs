@@ -121,6 +121,7 @@ async function main() {
     if (detail.data.report_snapshot.metrics_sha256 !== replaced.data.report_snapshot.metrics_sha256) {
       throw new Error("snapshot detail hash mismatch");
     }
+    await expectAdminError("GET", `/api/admin/reports/monthly-snapshots/${reportSnapshot.snapshot_id}/export?format=json`, null, 400, "advertiser_campaign_preview");
 
     const list = await admin("GET", `/api/admin/reports/monthly-snapshots?${new URLSearchParams(criteria)}`);
     if (!list.data.report_snapshots.some((item) => item.snapshot_id === reportSnapshot.snapshot_id)) {
@@ -148,6 +149,7 @@ async function main() {
       content_freshness: true,
       advertiser_report_preview: true,
       advertiser_report_snapshot: advertiserSnapshot.snapshot_id,
+      advertiser_report_export: true,
       ad_inventory_read_model: true,
       host_roi_preview: true,
       no_content_manifest_creation: true,
@@ -429,7 +431,7 @@ async function request(method, requestPath, body, headers = {}) {
   if (!response.ok) {
     throw new Error(`${method} ${requestPath} -> ${response.status}: ${text}`);
   }
-  return { status: response.status, data, text };
+  return { status: response.status, data, text, headers: response.headers };
 }
 
 async function admin(method, requestPath, body) {
@@ -773,6 +775,7 @@ async function assertAdvertiserReportSnapshot(criteria, records) {
 
   const detail = await admin("GET", `/api/admin/reports/monthly-snapshots/${reportSnapshot.snapshot_id}`);
   assertAdvertiserSnapshotSummary(detail.data.report_snapshot.summary, records, "advertiser snapshot detail");
+  await assertAdvertiserSnapshotExport(reportSnapshot, records);
 
   const list = await admin("GET", `/api/admin/reports/monthly-snapshots?${new URLSearchParams({
     month: criteria.month,
@@ -822,6 +825,57 @@ async function assertAdvertiserReportSnapshot(criteria, records) {
   }, 400, "full month");
 
   return reportSnapshot;
+}
+
+async function assertAdvertiserSnapshotExport(reportSnapshot, records) {
+  const jsonExport = await admin("GET", `/api/admin/reports/monthly-snapshots/${reportSnapshot.snapshot_id}/export?format=json`);
+  if (!jsonExport.headers.get("content-type")?.includes("application/json")) {
+    throw new Error(`advertiser JSON export content-type mismatch: ${jsonExport.headers.get("content-type")}`);
+  }
+  if (!jsonExport.headers.get("content-disposition")?.includes(reportSnapshot.snapshot_id)) {
+    throw new Error(`advertiser JSON export filename mismatch: ${jsonExport.headers.get("content-disposition")}`);
+  }
+  const payload = jsonExport.data;
+  if (payload.export_type !== "advertiser_campaign_snapshot" || payload.schema_version !== "misell-advertiser-report-export/v1") {
+    throw new Error(`advertiser JSON export identity mismatch: ${JSON.stringify(payload)}`);
+  }
+  if (payload.report_snapshot.snapshot_id !== reportSnapshot.snapshot_id || payload.report_snapshot.metrics_sha256 !== reportSnapshot.metrics_sha256) {
+    throw new Error(`advertiser JSON export snapshot metadata mismatch: ${JSON.stringify(payload.report_snapshot)}`);
+  }
+  assertAdvertiserSnapshotSummary({
+    report_type: "advertiser_campaign_preview",
+    surface: "admin_internal_preview",
+    measurement_policy: payload.measurement_policy,
+    proof_of_play: payload.proof_of_play,
+    response: payload.response,
+    conversion: payload.conversion,
+    breakdowns: payload.breakdowns
+  }, records, "advertiser JSON export");
+
+  const csvExport = await admin("GET", `/api/admin/reports/monthly-snapshots/${reportSnapshot.snapshot_id}/export?format=csv`);
+  if (!csvExport.headers.get("content-type")?.includes("text/csv")) {
+    throw new Error(`advertiser CSV export content-type mismatch: ${csvExport.headers.get("content-type")}`);
+  }
+  for (const expected of [
+    "section,key,value,measurement_label,claim_boundary",
+    "measurement_policy,roi_attribution,not_reported",
+    "proof_of_play,play_started_count,1,measured",
+    "response,qr_scan_count,1,measured",
+    "conversion,counter_orders_issued_count,1,measured",
+    records.adSlotId,
+    records.creativeId
+  ]) {
+    if (!csvExport.text.includes(expected)) {
+      throw new Error(`advertiser CSV export missing ${expected}: ${csvExport.text}`);
+    }
+  }
+  for (const forbidden of ["incremental_roi", "guaranteed_outcome", "roas_value", "attributed_sales"]) {
+    if (jsonExport.text.includes(forbidden) || csvExport.text.includes(forbidden)) {
+      throw new Error(`advertiser export must not expose ${forbidden}`);
+    }
+  }
+  await expectAdminError("GET", `/api/admin/reports/monthly-snapshots/${reportSnapshot.snapshot_id}/export?format=pdf`, null, 400, "format must be json or csv");
+  await expectAdminError("GET", "/api/admin/reports/monthly-snapshots/rpts-missing/export?format=json", null, 404, "not found");
 }
 
 function assertAdvertiserSnapshotSummary(report, records, label) {

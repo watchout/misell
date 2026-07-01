@@ -1,0 +1,72 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-EXPORT
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-advertiser-report-export.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-EXPORT.yaml
+  cell_id: CELL-MISELL-197-ADVERTISER-REPORT-EXPORT
+  pr: watchout/misell#TBD
+items:
+  - item_id: AREXP-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden path is touched.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: AREXP-AUDIT-002
+    source: api_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify the export API is admin-only internal and adds no external advertiser/customer/public route, public link, signed URL, email, scheduled export, billing, publish, device, provider, POS, camera, or ad-network behavior.
+    expected_evidence:
+      - code_review
+      - route_review
+  - item_id: AREXP-AUDIT-003
+    source: export_format
+    verification_method: executable
+    required: true
+    prompt: Verify only json and csv formats are supported, unsupported formats are rejected, and no PDF/file-storage/new dependency was added.
+    expected_evidence:
+      - smoke_reporting_result
+      - dependency_scan
+  - item_id: AREXP-AUDIT-004
+    source: advertiser_snapshot_only
+    verification_method: executable
+    required: true
+    prompt: Verify export is limited to advertiser_campaign_preview snapshots and non-advertiser snapshots return 400.
+    expected_evidence:
+      - smoke_reporting_result
+      - code_review
+  - item_id: AREXP-AUDIT-005
+    source: evidence_content
+    verification_method: semantic
+    required: true
+    prompt: Verify export includes snapshot metadata, metrics_sha256, measurement_policy, measured proof/response/conversion, decision prompts, and ad measurement rows.
+    expected_evidence:
+      - code_review
+      - smoke_reporting_result
+  - item_id: AREXP-AUDIT-006
+    source: measurement_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify exports preserve measured Misell rail evidence only, QR is response evidence, and ROI/ROAS/lift/guarantee/incremental/POS-settled sales claims remain not_reported or absent.
+    expected_evidence:
+      - code_review
+      - smoke_reporting_result
+  - item_id: AREXP-AUDIT-007
+    source: no_publish_side_effect
+    verification_method: executable
+    required: true
+    prompt: Verify export does not create content_manifest, publish content, mutate Player/device state, or call provider/external AI.
+    expected_evidence:
+      - smoke_reporting_result
+      - changed_files
+  - item_id: AREXP-AUDIT-008
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
