@@ -10,6 +10,8 @@
     scheduleHandoffDraft: null,
     publishPreflights: [],
     publishPreflightDetail: null,
+    cutPlans: [],
+    renderManifestsByCutPlanId: {},
     selectedSceneId: "",
     message: ""
   };
@@ -21,17 +23,24 @@
   async function loadEditor(options = {}) {
     const projectId = projectIdFromPath();
     if (!projectId) throw new Error("project id is required");
-    const [response, handoffResponse, scheduleHandoffResponse, publishPreflightResponse] = await Promise.all([
+    const [response, handoffResponse, scheduleHandoffResponse, publishPreflightResponse, cutPlanResponse] = await Promise.all([
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/playlist-handoff-draft`),
       fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/schedule-handoff-draft`),
-      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/publish-preflights?limit=8`)
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/publish-preflights?limit=8`),
+      fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/cut-plans`)
     ]);
     state.project = response.campaign_project;
     state.handoffDraft = handoffResponse.playlist_handoff_draft;
     state.scheduleHandoffDraft = scheduleHandoffResponse.schedule_handoff_draft;
     state.publishPreflights = publishPreflightResponse.studio_publish_preflights || [];
-    state.publishPreflightDetail = await loadLatestPublishPreflightDetail(state.publishPreflights);
+    state.cutPlans = cutPlanResponse.studio_cut_plans || [];
+    const [publishPreflightDetail, renderManifestsByCutPlanId] = await Promise.all([
+      loadLatestPublishPreflightDetail(state.publishPreflights),
+      loadRenderManifests(state.cutPlans)
+    ]);
+    state.publishPreflightDetail = publishPreflightDetail;
+    state.renderManifestsByCutPlanId = renderManifestsByCutPlanId;
     const scenes = activeScenes(state.project);
     const previous = options.selectedSceneId || state.selectedSceneId;
     state.selectedSceneId = scenes.some((scene) => scene.campaign_project_scene_id === previous)
@@ -89,6 +98,7 @@
       </section>
       ${renderHandoffDraft(state.handoffDraft)}
       ${renderScheduleHandoffDraft(state.scheduleHandoffDraft)}
+      ${renderCutPlanPanel(project, state.cutPlans, state.renderManifestsByCutPlanId)}
       ${renderPublishPreflightPanel(project, state.publishPreflights, state.publishPreflightDetail)}
     `;
     root.querySelectorAll("[data-editor-scene-id]").forEach((button) => {
@@ -109,6 +119,22 @@
     root.querySelector("[data-editor-copy-handoff]")?.addEventListener("click", handleCopyHandoff);
     root.querySelector("[data-editor-copy-schedule-handoff]")?.addEventListener("click", handleCopyScheduleHandoff);
     root.querySelector("form.campaign-editor-publish-preflight-form")?.addEventListener("submit", handleCreatePublishPreflight);
+    root.querySelector("[data-editor-create-cut-plan]")?.addEventListener("click", handleCreateCutPlan);
+    root.querySelectorAll("[data-editor-validate-cut-plan]").forEach((button) => {
+      button.addEventListener("click", handleValidateCutPlan);
+    });
+    root.querySelectorAll("[data-editor-create-render-manifest]").forEach((button) => {
+      button.addEventListener("click", handleCreateRenderManifest);
+    });
+    root.querySelectorAll("[data-editor-rerun-render-qa]").forEach((button) => {
+      button.addEventListener("click", handleRerunRenderQa);
+    });
+    root.querySelectorAll("[data-editor-delete-render-manifest]").forEach((button) => {
+      button.addEventListener("click", handleDeleteRenderManifest);
+    });
+    root.querySelectorAll("[data-editor-delete-cut-plan]").forEach((button) => {
+      button.addEventListener("click", handleDeleteCutPlan);
+    });
     root.querySelector("form.campaign-editor-form")?.addEventListener("submit", handleSaveScene);
   }
 
@@ -118,6 +144,16 @@
     if (!preflightId) return null;
     const detail = await fetchJson(`/api/admin/studio-publish-preflights/${encodeURIComponent(preflightId)}`);
     return detail.studio_publish_preflight || null;
+  }
+
+  async function loadRenderManifests(cutPlans) {
+    const entries = await Promise.all((cutPlans || []).map(async (cutPlan) => {
+      const cutPlanId = cutPlan.cut_plan_id || "";
+      if (!cutPlanId) return ["", []];
+      const response = await fetchJson(`/api/admin/studio-cut-plans/${encodeURIComponent(cutPlanId)}/render-manifests`);
+      return [cutPlanId, response.studio_render_manifests || []];
+    }));
+    return Object.fromEntries(entries.filter(([cutPlanId]) => cutPlanId));
   }
 
   function renderSceneButton(scene, selected) {
@@ -408,6 +444,103 @@
     render();
   }
 
+  async function handleCreateCutPlan(event) {
+    const button = event.currentTarget;
+    const projectId = button.dataset.editorCreateCutPlan || "";
+    await withButtonState(button, "作成中", async () => {
+      await fetchJson(`/api/admin/campaign-projects/${encodeURIComponent(projectId)}/cut-plans`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      state.message = "cut-planを作成しました。";
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    }, "cut-plan作成に失敗しました。");
+  }
+
+  async function handleValidateCutPlan(event) {
+    const button = event.currentTarget;
+    const cutPlanId = button.dataset.editorValidateCutPlan || "";
+    await withButtonState(button, "検証中", async () => {
+      const result = await fetchJson(`/api/admin/studio-cut-plans/${encodeURIComponent(cutPlanId)}/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      state.message = result.valid ? "cut-plan検証に通りました。" : `cut-plan検証エラー: ${result.validation_errors?.length || 0}件`;
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    }, "cut-plan検証に失敗しました。");
+  }
+
+  async function handleCreateRenderManifest(event) {
+    const button = event.currentTarget;
+    const cutPlanId = button.dataset.editorCreateRenderManifest || "";
+    await withButtonState(button, "作成中", async () => {
+      await fetchJson(`/api/admin/studio-cut-plans/${encodeURIComponent(cutPlanId)}/render-manifests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ output_type: "html_preview" })
+      });
+      state.message = "html_preview render manifestを作成しました。";
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    }, "render manifest作成に失敗しました。");
+  }
+
+  async function handleRerunRenderQa(event) {
+    const button = event.currentTarget;
+    const renderManifestId = button.dataset.editorRerunRenderQa || "";
+    await withButtonState(button, "QA中", async () => {
+      await fetchJson(`/api/admin/studio-render-manifests/${encodeURIComponent(renderManifestId)}/qa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      state.message = "render QAを再実行しました。";
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    }, "render QA再実行に失敗しました。");
+  }
+
+  async function handleDeleteRenderManifest(event) {
+    const button = event.currentTarget;
+    const renderManifestId = button.dataset.editorDeleteRenderManifest || "";
+    if (!window.confirm("render manifestを削除しますか？")) return;
+    await withButtonState(button, "削除中", async () => {
+      await fetchJson(`/api/admin/studio-render-manifests/${encodeURIComponent(renderManifestId)}`, {
+        method: "DELETE"
+      });
+      state.message = "render manifestを削除しました。";
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    }, "render manifest削除に失敗しました。");
+  }
+
+  async function handleDeleteCutPlan(event) {
+    const button = event.currentTarget;
+    const cutPlanId = button.dataset.editorDeleteCutPlan || "";
+    if (!window.confirm("cut-planを削除しますか？")) return;
+    await withButtonState(button, "削除中", async () => {
+      await fetchJson(`/api/admin/studio-cut-plans/${encodeURIComponent(cutPlanId)}`, {
+        method: "DELETE"
+      });
+      state.message = "cut-planを削除しました。";
+      await loadEditor({ selectedSceneId: state.selectedSceneId });
+    }, "cut-plan削除に失敗しました。");
+  }
+
+  async function withButtonState(button, pendingText, callback, fallbackMessage) {
+    const previousText = button.textContent;
+    button.disabled = true;
+    button.textContent = pendingText;
+    try {
+      await callback();
+    } catch (error) {
+      state.message = error.message || fallbackMessage;
+      render();
+    } finally {
+      button.disabled = false;
+      button.textContent = previousText;
+    }
+  }
+
   function renderHandoffDraft(draft) {
     if (!draft) return "";
     const draftJson = JSON.stringify(draft, null, 2);
@@ -507,6 +640,33 @@
     `;
   }
 
+  function renderCutPlanPanel(project, cutPlans = [], renderManifestsByCutPlanId = {}) {
+    const scenes = activeScenes(project);
+    return `
+      <section class="campaign-editor-handoff campaign-editor-cut-plan-panel" aria-label="Studio cut plan and render QA">
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>レンダー設計 / QA</h2>
+            <small>#210の既存Admin APIを使う事前確認です。content_manifest作成、publish、外部AI、MP4生成は行いません。</small>
+          </div>
+          <button type="button" data-editor-create-cut-plan="${escapeAttr(project.campaign_project_id || "")}"${scenes.length ? "" : " disabled"}>cut-plan作成</button>
+        </div>
+        <div class="campaign-editor-guard-flags" aria-label="Cut plan guard flags">
+          <small>no_external_ai</small>
+          <small>no_media_generation</small>
+          <small>no_mp4_export</small>
+          <small>no_content_manifest_creation</small>
+          <small>no_publish</small>
+        </div>
+        ${cutPlans.length ? `
+          <div class="campaign-editor-cut-plan-list">
+            ${cutPlans.map((cutPlan) => renderCutPlanCard(cutPlan, renderManifestsByCutPlanId[cutPlan.cut_plan_id] || [])).join("")}
+          </div>
+        ` : `<p class="empty">cut-planはまだありません。</p>`}
+      </section>
+    `;
+  }
+
   function renderPublishPreflightResult(preflight, transform) {
     const checks = Array.isArray(preflight.checks) ? preflight.checks : [];
     const failed = checks.filter((check) => check.result !== "passed");
@@ -527,6 +687,85 @@
             ${failed.map((check) => `<small>${escapeHtml(check.check_id || "")}: ${escapeHtml(check.reason || "")}</small>`).join("")}
           </div>
         ` : `<small>すべての C1 checks が通過しました。これは dry-run evidence であり publish 承認ではありません。</small>`}
+      </div>
+    `;
+  }
+
+  function renderCutPlanCard(cutPlan, renderManifests) {
+    const isValidated = cutPlan.status === "validated" && cutPlan.validation_status === "passed";
+    const sceneCount = Array.isArray(cutPlan.source_scene_ids) ? cutPlan.source_scene_ids.length : 0;
+    return `
+      <article class="campaign-editor-cut-plan" data-cut-plan-id="${escapeAttr(cutPlan.cut_plan_id)}">
+        <div class="campaign-editor-cut-plan-head">
+          <div>
+            <strong>${escapeHtml(cutPlan.cut_plan_id || "")}</strong>
+            <small>${escapeHtml(cutPlan.cut_plan_version || "")}</small>
+          </div>
+          <div>
+            <span class="update-status update-status-${escapeAttr(statusClass(cutPlan.status))}">${escapeHtml(cutPlan.status || "")}</span>
+            <span class="update-status update-status-${escapeAttr(statusClass(cutPlan.validation_status))}">${escapeHtml(cutPlan.validation_status || "")}</span>
+          </div>
+        </div>
+        <div class="campaign-editor-handoff-meta">
+          <small>${escapeHtml(cutPlan.layout_template_id || "")}</small>
+          <small>${escapeHtml(String(sceneCount))} scenes</small>
+          <small>${escapeHtml(cutPlan.measurement_goal || "")}</small>
+          <small>${escapeHtml(cutPlan.expected_action || "")}</small>
+        </div>
+        ${renderGuardFlags(cutPlan)}
+        ${cutPlan.validation_errors?.length ? `<div class="campaign-project-validation">${cutPlan.validation_errors.map(renderValidationError).join("")}</div>` : ""}
+        <div class="campaign-editor-cut-plan-actions">
+          <button class="secondary" type="button" data-editor-validate-cut-plan="${escapeAttr(cutPlan.cut_plan_id)}">cut-plan検証</button>
+          <button class="secondary" type="button" data-editor-create-render-manifest="${escapeAttr(cutPlan.cut_plan_id)}"${isValidated ? "" : " disabled"}>render manifest作成</button>
+          <button class="danger" type="button" data-editor-delete-cut-plan="${escapeAttr(cutPlan.cut_plan_id)}">cut-plan削除</button>
+        </div>
+        <div class="campaign-editor-render-manifest-list">
+          ${renderManifests.length ? renderManifests.map(renderRenderManifestCard).join("") : `<p class="empty">render manifestはまだありません。</p>`}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderRenderManifestCard(manifest) {
+    return `
+      <article class="campaign-editor-render-manifest" data-render-manifest-id="${escapeAttr(manifest.render_manifest_id)}">
+        <div class="campaign-editor-cut-plan-head">
+          <div>
+            <strong>${escapeHtml(manifest.render_manifest_id || "")}</strong>
+            <small>${escapeHtml(manifest.output_type || "")} / ${escapeHtml(manifest.source_of_truth || "")}</small>
+          </div>
+          <div>
+            <span class="update-status update-status-${escapeAttr(statusClass(manifest.status))}">${escapeHtml(manifest.status || "")}</span>
+            <span class="update-status update-status-${escapeAttr(statusClass(manifest.qa_status))}">${escapeHtml(manifest.qa_status || "")}</span>
+          </div>
+        </div>
+        <div class="campaign-editor-handoff-meta">
+          <small>${escapeHtml(manifest.renderer || "")} ${escapeHtml(manifest.renderer_version || "")}</small>
+          <small>${escapeHtml(String(manifest.duration_seconds || 0))}秒</small>
+          <small>${escapeHtml(String(manifest.output_sha256 || "").slice(0, 16))}</small>
+        </div>
+        ${renderGuardFlags(manifest)}
+        ${manifest.qa_errors?.length ? `<div class="campaign-project-validation">${manifest.qa_errors.map(renderValidationError).join("")}</div>` : ""}
+        <div class="campaign-editor-cut-plan-actions">
+          <button class="secondary" type="button" data-editor-rerun-render-qa="${escapeAttr(manifest.render_manifest_id)}">QA再実行</button>
+          <button class="danger" type="button" data-editor-delete-render-manifest="${escapeAttr(manifest.render_manifest_id)}">manifest削除</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderGuardFlags(entry) {
+    const flags = [
+      ["no_external_ai", "外部AIなし"],
+      ["no_provider_job", "provider jobなし"],
+      ["no_media_generation", "メディア生成なし"],
+      ["no_mp4_export", "MP4出力なし"],
+      ["no_content_manifest_creation", "content_manifestなし"],
+      ["no_publish", "publishなし"]
+    ];
+    return `
+      <div class="campaign-editor-guard-flags">
+        ${flags.map(([field, label]) => `<small class="${entry[field] === true ? "" : "is-missing"}">${escapeHtml(label)}</small>`).join("")}
       </div>
     `;
   }
@@ -637,6 +876,9 @@
   }
 
   function renderValidationError(error) {
+    if (!error || typeof error !== "object") {
+      return `<small>${escapeHtml(error || "検証エラーがあります。")}</small>`;
+    }
     return `<small>${escapeHtml(error.field || "")} ${escapeHtml(error.code || "")}: ${escapeHtml(error.message || "")}</small>`;
   }
 
@@ -681,7 +923,7 @@
   }
 
   function statusClass(status) {
-    if (status === "valid" || status === "validated" || status === "passed" || status === "draft_created") return "success";
+    if (status === "valid" || status === "validated" || status === "passed" || status === "draft_created" || status === "active") return "success";
     if (status === "invalid" || status === "deleted" || status === "failed" || status === "failed_preflight") return "failed";
     if (status === "human_review_required") return "pending";
     return "pending";

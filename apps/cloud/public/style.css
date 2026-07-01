@@ -1508,6 +1508,63 @@ td small {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
 }
 
+.campaign-editor-cut-plan-list,
+.campaign-editor-render-manifest-list {
+  display: grid;
+  gap: 10px;
+}
+
+.campaign-editor-cut-plan,
+.campaign-editor-render-manifest {
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.campaign-editor-render-manifest {
+  background: #f8fafc;
+}
+
+.campaign-editor-cut-plan-head,
+.campaign-editor-cut-plan-actions,
+.campaign-editor-guard-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.campaign-editor-cut-plan-head {
+  align-items: start;
+  justify-content: space-between;
+}
+
+.campaign-editor-cut-plan-head > div {
+  align-content: start;
+  display: grid;
+  gap: 4px;
+}
+
+.campaign-editor-cut-plan-actions {
+  align-items: center;
+}
+
+.campaign-editor-guard-flags small {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  color: #065f46;
+  font-weight: 650;
+  padding: 4px 8px;
+}
+
+.campaign-editor-guard-flags small.is-missing {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
 .campaign-editor-handoff textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 12px;

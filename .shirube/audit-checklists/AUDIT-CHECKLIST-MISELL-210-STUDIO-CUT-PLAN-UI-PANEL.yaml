@@ -1,0 +1,43 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-210-STUDIO-CUT-PLAN-UI-PANEL
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-210-studio-cut-plan-ui-panel.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-210-STUDIO-CUT-PLAN-UI-PANEL.yaml
+  cell_id: CELL-MISELL-210-STUDIO-CUT-PLAN-UI-PANEL
+  pr: watchout/misell#TBD
+items:
+  - item_id: SCP-UI-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden app/server/package/workflow/player/deploy/secret paths are touched.
+  - item_id: SCP-UI-AUDIT-002
+    source: api_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify this PR uses only existing #210 Admin APIs and does not change server routes, API contracts, DB schema, auth/RBAC, package scripts, or workflows.
+  - item_id: SCP-UI-AUDIT-003
+    source: ui_operations
+    verification_method: semantic
+    required: true
+    prompt: Verify the Campaign Project Editor can create/list/validate/soft-delete cut plans and create/list/QA/soft-delete html_preview render manifests through authenticated admin UI controls.
+  - item_id: SCP-UI-AUDIT-004
+    source: side_effect_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify UI copy and behavior preserve no external AI, no provider job, no media generation, no MP4 export, no content_manifest creation, no publish, no device policy mutation, and no credit consumption.
+  - item_id: SCP-UI-AUDIT-005
+    source: event_evidence
+    verification_method: semantic
+    required: true
+    prompt: Verify UI operations produce existing campaign_project_events evidence for cut_plan and render_manifest actions without adding a new audit surface.
+  - item_id: SCP-UI-AUDIT-006
+    source: e2e
+    verification_method: executable
+    required: true
+    prompt: Verify E2E covers cut-plan creation, validation, render manifest creation, QA rerun, render manifest delete, cut-plan delete, and no forbidden side effects.
+  - item_id: SCP-UI-AUDIT-007
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
