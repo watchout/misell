@@ -1365,7 +1365,8 @@ td small {
 .campaign-editor-summary,
 .campaign-editor-workspace,
 .campaign-editor-events,
-.campaign-editor-handoff {
+.campaign-editor-handoff,
+.campaign-editor-provider-status {
   background: #ffffff;
   border: 1px solid #d8dee4;
   border-radius: 8px;
@@ -1382,7 +1383,10 @@ td small {
 .campaign-editor-summary div,
 .campaign-editor-events,
 .campaign-editor-events small,
-.campaign-editor-handoff {
+.campaign-editor-handoff,
+.campaign-editor-provider-status,
+.campaign-editor-provider-card,
+.campaign-editor-provider-item {
   display: grid;
   gap: 6px;
 }
@@ -1492,6 +1496,11 @@ td small {
   padding: 14px;
 }
 
+.campaign-editor-provider-status {
+  gap: 12px;
+  padding: 14px;
+}
+
 .campaign-editor-handoff-head {
   align-items: start;
   display: flex;
@@ -1500,12 +1509,75 @@ td small {
 }
 
 .campaign-editor-handoff-head h2,
-.campaign-editor-events h2 {
+.campaign-editor-events h2,
+.campaign-editor-provider-card h3 {
   margin: 0;
 }
 
-.campaign-editor-handoff-meta {
+.campaign-editor-handoff-meta,
+.campaign-editor-provider-grid,
+.campaign-editor-provider-guards,
+.campaign-editor-provider-tags {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-editor-handoff-meta,
+.campaign-editor-provider-grid {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.campaign-editor-provider-grid {
+  align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.campaign-editor-provider-card,
+.campaign-editor-provider-item {
+  align-content: start;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.campaign-editor-provider-item {
+  background: #f6f8fa;
+}
+
+.campaign-editor-provider-item > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.campaign-editor-provider-guards,
+.campaign-editor-provider-tags {
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+}
+
+.campaign-editor-guard,
+.campaign-editor-provider-tags span {
+  background: #eef2f5;
+  border: 1px solid #d8dee4;
+  border-radius: 999px;
+  color: #344054;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 5px 8px;
+}
+
+.campaign-editor-guard-ok {
+  background: #e9f7ef;
+  border-color: #b7dfc5;
+}
+
+.campaign-editor-guard-warn {
+  background: #fff4e5;
+  border-color: #e7c78c;
+}
+
+.campaign-editor-provider-note {
+  color: #52606d;
+  margin: 0;
 }
 
 .campaign-editor-cut-plan-list,
