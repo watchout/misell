@@ -49,6 +49,7 @@ async function main() {
     await assertFilterIsolation(criteria);
     await assertAdMeasurementFilters(criteria, records);
     await assertAdvertiserReportPreview({ ...criteria, campaign_id: records.campaignId }, records);
+    const advertiserSnapshot = await assertAdvertiserReportSnapshot({ ...criteria, campaign_id: records.campaignId }, records);
 
     const rebuilt = await admin("POST", "/api/admin/reports/read-model/rebuild", criteria);
     if (rebuilt.data.rebuilt !== 30) throw new Error(`expected 30 rebuilt rows, got ${rebuilt.data.rebuilt}`);
@@ -146,6 +147,7 @@ async function main() {
       ad_measurement: true,
       content_freshness: true,
       advertiser_report_preview: true,
+      advertiser_report_snapshot: advertiserSnapshot.snapshot_id,
       ad_inventory_read_model: true,
       host_roi_preview: true,
       no_content_manifest_creation: true,
@@ -182,6 +184,7 @@ async function seedReportData() {
     device_name: "Report Player",
     release_channel: "stable"
   });
+  await insertCampaignFixture({ campaignId, tenantId, storeId });
   await admin("PUT", `/api/admin/stores/${storeId}/settings`, {
     timezone: "Asia/Tokyo",
     business_day_start_time: "05:00",
@@ -319,6 +322,29 @@ async function seedReportData() {
     qrLinkId: qr.data.qr_link.qr_link_id,
     manifestHash
   };
+}
+
+async function insertCampaignFixture({ campaignId, tenantId, storeId }) {
+  const now = new Date().toISOString();
+  const db = new Database(dbPath);
+  try {
+    db.prepare(`
+      INSERT INTO campaigns (
+        campaign_id, campaign_name, status, start_date, end_date,
+        target_store_ids_json, tenant_id, store_id, created_at, updated_at
+      ) VALUES (?, ?, 'active', '2026-06-01', '2026-06-30', ?, ?, ?, ?, ?)
+    `).run(
+      campaignId,
+      "Report smoke campaign",
+      JSON.stringify([storeId]),
+      tenantId,
+      storeId,
+      now,
+      now
+    );
+  } finally {
+    db.close();
+  }
 }
 
 async function availablePort() {
@@ -709,6 +735,132 @@ async function assertAdvertiserReportPreview(criteria, records) {
     ...criteria,
     campaign_id: ""
   })}`, null, 400, "campaign_id is required");
+}
+
+async function assertAdvertiserReportSnapshot(criteria, records) {
+  const snapshot = await admin("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    status: "published",
+    title: "Smoke advertiser campaign report",
+    created_by: "smoke"
+  });
+  const reportSnapshot = snapshot.data.report_snapshot;
+  if (!reportSnapshot.snapshot_id || reportSnapshot.status !== "published") {
+    throw new Error(`advertiser snapshot create failed: ${JSON.stringify(reportSnapshot)}`);
+  }
+  if (reportSnapshot.report_type !== "advertiser_campaign_preview" || reportSnapshot.snapshot_type !== "advertiser_campaign_preview") {
+    throw new Error(`advertiser snapshot type mismatch: ${JSON.stringify(reportSnapshot)}`);
+  }
+  if (!reportSnapshot.metrics_sha256 || reportSnapshot.metrics_sha256.length !== 64) {
+    throw new Error(`advertiser snapshot hash missing: ${JSON.stringify(reportSnapshot)}`);
+  }
+  assertAdvertiserSnapshotSummary(reportSnapshot.summary, records, "advertiser snapshot summary");
+
+  await expectAdminError("POST", "/api/admin/reports/advertiser-preview/snapshots", criteria, 409, "already exists");
+  const replaced = await admin("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    status: "published",
+    title: "Smoke advertiser campaign report",
+    created_by: "smoke",
+    replace: true
+  });
+  if (replaced.data.report_snapshot.snapshot_id !== reportSnapshot.snapshot_id) {
+    throw new Error("advertiser snapshot replace changed snapshot_id");
+  }
+  if (replaced.data.report_snapshot.metrics_sha256 !== reportSnapshot.metrics_sha256) {
+    throw new Error("advertiser snapshot metrics_sha256 changed for identical data replace");
+  }
+
+  const detail = await admin("GET", `/api/admin/reports/monthly-snapshots/${reportSnapshot.snapshot_id}`);
+  assertAdvertiserSnapshotSummary(detail.data.report_snapshot.summary, records, "advertiser snapshot detail");
+
+  const list = await admin("GET", `/api/admin/reports/monthly-snapshots?${new URLSearchParams({
+    month: criteria.month,
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    campaign_id: criteria.campaign_id,
+    report_type: "advertiser_campaign_preview"
+  })}`);
+  if (!list.data.report_snapshots.some((item) => item.snapshot_id === reportSnapshot.snapshot_id)) {
+    throw new Error("advertiser snapshot list did not include created snapshot");
+  }
+
+  const granular = await admin("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    ad_slot_id: records.adSlotId,
+    creative_id: records.creativeId,
+    qr_link_id: records.qrLinkId,
+    status: "published",
+    title: "Smoke advertiser granular report",
+    created_by: "smoke"
+  });
+  if (granular.data.report_snapshot.snapshot_id === reportSnapshot.snapshot_id) {
+    throw new Error("advertiser granular snapshot collided with campaign-level snapshot");
+  }
+  assertAdvertiserSnapshotSummary(granular.data.report_snapshot.summary, records, "advertiser granular snapshot");
+  if (granular.data.report_snapshot.summary.filters.ad_slot_id !== records.adSlotId) {
+    throw new Error(`advertiser granular snapshot filter missing: ${JSON.stringify(granular.data.report_snapshot.summary.filters)}`);
+  }
+
+  await expectAdminError("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    tenant_id: ""
+  }, 400, "tenant_id is required");
+  await expectAdminError("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    campaign_id: ""
+  }, 400, "campaign_id is required");
+  await expectAdminError("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    campaign_id: `CAMPAIGN-MISSING-${runId}`
+  }, 400, "campaign_id must reference");
+  await expectAdminError("POST", "/api/admin/reports/advertiser-preview/snapshots", {
+    ...criteria,
+    month: "",
+    from: "2026-06-01",
+    to: "2026-06-10"
+  }, 400, "full month");
+
+  return reportSnapshot;
+}
+
+function assertAdvertiserSnapshotSummary(report, records, label) {
+  if (report.report_type !== "advertiser_campaign_preview" || report.surface !== "admin_internal_preview") {
+    throw new Error(`${label} identity mismatch: ${JSON.stringify({ report_type: report.report_type, surface: report.surface })}`);
+  }
+  if (report.measurement_policy.proof_of_play !== "measured" ||
+    report.measurement_policy.qr_response !== "measured" ||
+    report.measurement_policy.roas_guarantee !== "not_reported" ||
+    report.measurement_policy.incremental_lift !== "not_reported" ||
+    report.measurement_policy.roi_attribution !== "not_reported") {
+    throw new Error(`${label} measurement policy mismatch: ${JSON.stringify(report.measurement_policy)}`);
+  }
+  assertTotals(report.proof_of_play, {
+    play_started_count: 1,
+    play_completed_count: 1,
+    play_failed_count: 0,
+    play_duration_seconds: 30
+  }, `${label} proof of play`);
+  assertTotals(report.response, { qr_scan_count: 1 }, `${label} response`);
+  assertTotals(report.conversion, {
+    counter_orders_issued_count: 1,
+    counter_orders_redeemed_count: 1,
+    counter_order_total_amount: 500,
+    counter_order_redeemed_amount: 500
+  }, `${label} conversion`);
+  const adGroup = report.breakdowns.ad_measurement.find((item) =>
+    item.campaign_id === records.campaignId &&
+    item.ad_slot_id === records.adSlotId &&
+    item.creative_id === records.creativeId &&
+    item.qr_link_id === records.qrLinkId
+  );
+  if (!adGroup || adGroup.measurement_label !== "measured" || adGroup.play_started_count !== 1 || adGroup.qr_scan_count !== 1) {
+    throw new Error(`${label} ad breakdown mismatch: ${JSON.stringify(report.breakdowns.ad_measurement)}`);
+  }
+  const serialized = JSON.stringify(report);
+  for (const forbidden of ["incremental_roi", "guaranteed_outcome", "roas_value", "attributed_sales"]) {
+    if (serialized.includes(forbidden)) throw new Error(`${label} must not expose ${forbidden}`);
+  }
 }
 
 async function assertAdInventoryReadModel(records) {

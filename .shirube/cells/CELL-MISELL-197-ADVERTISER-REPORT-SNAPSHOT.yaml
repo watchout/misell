@@ -1,0 +1,80 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-ADVERTISER-REPORT-SNAPSHOT
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Advertiser report internal snapshot
+cell_type: reporting_foundation
+risk_class: R3
+status: implementation
+summary: >
+  Persist the existing internal advertiser preview report as a full-month
+  report_snapshots row so operators can preserve campaign-period evidence
+  without adding external advertiser access, exports, billing, ROI/ROAS/lift
+  claims, guarantees, publishing, or new storage schema.
+
+scope:
+  - Add an internal admin-only snapshot creation endpoint for advertiser preview reports.
+  - Store full-month campaign snapshots in existing report_snapshots with report_type=advertiser_campaign_preview.
+  - Preserve stable metrics_sha256 semantics with generated_at excluded from the hash.
+  - Keep duplicate guard and explicit replace behavior for identical campaign-period scope.
+  - Include ad_slot_id, creative_id, qr_link_id, item_type, and manifest_hash in the snapshot key when supplied.
+  - Retrieve snapshots through existing report snapshot list/detail APIs.
+  - Extend reporting smoke coverage for create, duplicate reject, replace, detail, list, granular key isolation, and claim boundaries.
+non_scope:
+  - advertiser or agency login, role, self-service, public link, or external report access
+  - CSV/PDF export, download links, email delivery, or share links
+  - ROI, ROAS, lift, guarantee, purchase, visit, incremental, conversion-value, or POS-settled sales claims
+  - baseline/holdout attribution model
+  - billing, pricing, credit, settlement, or ad contract revenue
+  - DB migration, new persistent table, or new package dependency
+  - content_manifest creation, schedule activation, publish, rollback, or Player/device mutation
+  - provider integration, external AI, MCP runtime, media generation, camera/POS/external data ingestion, or ad network delivery
+
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-SNAPSHOT.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-advertiser-report-snapshot.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-SNAPSHOT.yaml
+  - apps/cloud/server.js
+  - apps/cloud/scripts/smoke-reporting.mjs
+  - apps/cloud/README.md
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/public/**
+  - tests/e2e/**
+
+acceptance_criteria:
+  - POST /api/admin/reports/advertiser-preview/snapshots creates an admin-only full-month advertiser_campaign_preview snapshot.
+  - Snapshot creation requires tenant_id, an existing campaign_id, and month.
+  - Duplicate campaign-period snapshot creation returns 409 unless replace/overwrite is explicitly true.
+  - Replacing identical data keeps the same snapshot_id and metrics_sha256.
+  - Snapshot detail includes the existing advertiser preview summary and measurement_policy.
+  - Snapshot hash excludes generated_at and does not add ROI/ROAS/lift/guarantee/incremental claims.
+  - Granular ad_slot/creative/QR filtered snapshots do not collide with campaign-level snapshots.
+  - Reporting smoke proves no content_manifest creation or publish side effect.
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:reporting
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT
+  - CELL-MISELL-197-ADVERTISER-REPORT-EXPORT
