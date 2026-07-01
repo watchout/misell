@@ -1740,6 +1740,15 @@ app.get("/api/admin/reports/advertiser-preview", requireAdminAuth, (req, res, ne
   }
 });
 
+app.post("/api/admin/reports/advertiser-preview/snapshots", requireAdminAuth, (req, res, next) => {
+  try {
+    const snapshot = createAdvertiserReportPreviewSnapshot(req.body || {});
+    res.status(201).json({ ok: true, report_snapshot: snapshot });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/reports/ad-inventory", requireAdminAuth, (req, res, next) => {
   try {
     const criteria = normalizeAdInventoryReportCriteria(req.query || {});
@@ -12549,6 +12558,16 @@ function normalizeAdvertiserReportPreviewCriteria(input = {}) {
   return criteria;
 }
 
+function normalizeAdvertiserReportSnapshotCriteria(input = {}) {
+  const criteria = normalizeAdvertiserReportPreviewCriteria(input);
+  assertOptionalCampaignExists(criteria.campaign_id);
+  const bounds = criteria.month ? monthBounds(criteria.month) : null;
+  if (!bounds || criteria.from !== bounds.from || criteria.to !== bounds.to) {
+    throw requestError("advertiser report snapshot requires a full month; pass month as YYYY-MM", 400);
+  }
+  return criteria;
+}
+
 function normalizeAdInventoryReportCriteria(input = {}) {
   const criteria = normalizeReportCriteria(input);
   if (!criteria.tenant_id) throw requestError("tenant_id is required for ad inventory report", 400);
@@ -14350,6 +14369,112 @@ function createMonthlyReportSnapshot(input = {}) {
   return getReportSnapshot(saveSnapshot());
 }
 
+function createAdvertiserReportPreviewSnapshot(input = {}) {
+  const criteria = normalizeAdvertiserReportSnapshotCriteria(input);
+  const status = cleanString(input.status || "draft");
+  if (!REPORT_SNAPSHOT_STATUS.has(status)) {
+    throw requestError(`status must be one of: ${Array.from(REPORT_SNAPSHOT_STATUS).join(", ")}`, 400);
+  }
+
+  const snapshotKey = advertiserReportSnapshotKey(criteria);
+  const existing = db.prepare("SELECT * FROM report_snapshots WHERE snapshot_key = ?").get(snapshotKey);
+  if (existing && !normalizeBooleanFlag(input.replace || input.overwrite)) {
+    throw requestError("Advertiser report snapshot already exists for this scope", 409);
+  }
+
+  const report = buildAdvertiserReportPreview(criteria);
+  const summaryJson = JSON.stringify(report);
+  const metricsSha256 = reportMetricsSha256(report);
+  const now = nowIso();
+  const title = cleanString(input.title || `Misell advertiser report ${criteria.month} ${criteria.campaign_id}`).slice(0, 160);
+  const notes = cleanString(input.notes).slice(0, 1000);
+  const createdBy = cleanString(input.created_by || input.createdBy || "admin").slice(0, 120);
+  const reportType = "advertiser_campaign_preview";
+
+  const saveSnapshot = db.transaction(() => {
+    if (existing) {
+      db.prepare(`
+        UPDATE report_snapshots SET
+          campaign_id = ?,
+          content_id = ?,
+          period_start = ?,
+          period_end = ?,
+          snapshot_type = ?,
+          metrics_json = ?,
+          notes = ?,
+          created_by = ?,
+          tenant_id = ?,
+          store_id = ?,
+          screen_group_id = '',
+          report_type = ?,
+          status = ?,
+          title = ?,
+          summary_json = ?,
+          generated_at = ?,
+          published_at = ?,
+          metrics_sha256 = ?
+        WHERE snapshot_id = ?
+      `).run(
+        criteria.campaign_id || null,
+        criteria.content_id || null,
+        criteria.from,
+        criteria.to,
+        reportType,
+        summaryJson,
+        notes,
+        createdBy,
+        criteria.tenant_id || null,
+        criteria.store_id || null,
+        reportType,
+        status,
+        title,
+        summaryJson,
+        report.generated_at,
+        status === "published" ? now : null,
+        metricsSha256,
+        existing.snapshot_id
+      );
+      recordAuditLog("admin", createdBy, "report_snapshot.replace", "report_snapshot", existing.snapshot_id, existing, getReportSnapshot(existing.snapshot_id), { snapshot_key: snapshotKey }, now);
+      return existing.snapshot_id;
+    }
+
+    const snapshotId = nextEntityId("rpts", `${criteria.month}-${criteria.campaign_id}`);
+    db.prepare(`
+      INSERT INTO report_snapshots (
+        snapshot_id, campaign_id, advertiser_id, period_start, period_end,
+        snapshot_type, metrics_json, notes, created_by, created_at,
+        tenant_id, store_id, screen_group_id, content_id, report_type, status, title,
+        summary_json, generated_at, published_at, snapshot_key, metrics_sha256
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      snapshotId,
+      criteria.campaign_id || null,
+      criteria.from,
+      criteria.to,
+      reportType,
+      summaryJson,
+      notes,
+      createdBy,
+      now,
+      criteria.tenant_id || null,
+      criteria.store_id || null,
+      criteria.content_id || null,
+      reportType,
+      status,
+      title,
+      summaryJson,
+      report.generated_at,
+      status === "published" ? now : null,
+      snapshotKey,
+      metricsSha256
+    );
+    recordAuditLog("admin", createdBy, "report_snapshot.create", "report_snapshot", snapshotId, null, getReportSnapshot(snapshotId), { snapshot_key: snapshotKey }, now);
+    return snapshotId;
+  });
+
+  return getReportSnapshot(saveSnapshot());
+}
+
 function listReportSnapshots(filters = {}) {
   const params = [
     filters.report_type,
@@ -14533,6 +14658,24 @@ function reportSnapshotKey(criteria, reportType) {
     store_id: criteria.store_id,
     campaign_id: criteria.campaign_id,
     content_id: criteria.content_id
+  })).digest("hex").slice(0, 40);
+  return `rps-${hash}`;
+}
+
+function advertiserReportSnapshotKey(criteria) {
+  const hash = crypto.createHash("sha256").update(JSON.stringify({
+    report_type: "advertiser_campaign_preview",
+    period_start: criteria.from,
+    period_end: criteria.to,
+    tenant_id: criteria.tenant_id,
+    store_id: criteria.store_id,
+    campaign_id: criteria.campaign_id,
+    content_id: criteria.content_id,
+    item_type: criteria.item_type,
+    ad_slot_id: criteria.ad_slot_id,
+    creative_id: criteria.creative_id,
+    qr_link_id: criteria.qr_link_id,
+    manifest_hash: criteria.manifest_hash
   })).digest("hex").slice(0, 40);
   return `rps-${hash}`;
 }

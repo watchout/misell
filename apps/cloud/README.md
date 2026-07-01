@@ -735,11 +735,12 @@ Cloud can aggregate the existing heartbeat, playlog, QR scan, counter-order, and
 - `GET /api/admin/reports/summary` returns the same summary shape from live event tables.
 - `GET /api/admin/reports/daily-metrics` returns persisted read-model rows.
 - `POST /api/admin/reports/monthly-snapshots` rebuilds the read model for a full month and stores an immutable monthly report payload in `report_snapshots`.
+- `POST /api/admin/reports/advertiser-preview/snapshots` stores a full-month internal advertiser campaign preview in `report_snapshots` with `report_type=advertiser_campaign_preview`.
 - `GET /api/admin/reports/monthly-snapshots` and `GET /api/admin/reports/monthly-snapshots/:snapshot_id` retrieve saved report snapshots.
 
-Report periods are local business days. Bucketing uses each store's `timezone` and `business_day_start_time`, so after-midnight activity can still count toward the previous business day. Monthly snapshots are keyed by report type, period, tenant, store, campaign, and content scope to avoid accidental duplicate monthly reports.
+Report periods are local business days. Bucketing uses each store's `timezone` and `business_day_start_time`, so after-midnight activity can still count toward the previous business day. Monthly snapshots are keyed by report type, period, tenant, store, campaign, and content scope to avoid accidental duplicate monthly reports. Advertiser preview snapshots additionally include ad slot, creative, QR link, item type, and manifest hash filters in the snapshot key when supplied.
 
-`metrics_sha256` is calculated from a stable normalized report payload with generation timestamps removed. Replacing a monthly snapshot with the same underlying data keeps the same metrics hash while still updating `generated_at` in the saved payload.
+`metrics_sha256` is calculated from a stable normalized report payload with generation timestamps removed. Replacing a monthly snapshot with the same underlying data keeps the same metrics hash while still updating `generated_at` in the saved payload. Advertiser preview snapshots use the same stable hash boundary and keep ROI, ROAS, lift, guarantee, and incremental attribution as `not_reported`; QR and counter-order counts are Misell rail evidence only.
 
 Customer scoped conversion reporting is exposed through:
 
@@ -787,6 +788,7 @@ The customer conversion report includes QR scans, issued orders, redeemed orders
 - `GET /api/admin/reports/summary` with Basic auth
 - `GET /api/admin/reports/daily-metrics` with Basic auth
 - `POST /api/admin/reports/read-model/rebuild` with Basic auth
+- `POST /api/admin/reports/advertiser-preview/snapshots` with Basic auth
 - `GET /api/admin/reports/monthly-snapshots` with Basic auth
 - `POST /api/admin/reports/monthly-snapshots` with Basic auth
 - `GET /api/admin/reports/monthly-snapshots/:snapshot_id` with Basic auth

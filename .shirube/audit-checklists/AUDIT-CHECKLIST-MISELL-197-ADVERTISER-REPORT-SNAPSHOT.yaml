@@ -1,0 +1,72 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-SNAPSHOT
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-advertiser-report-snapshot.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-SNAPSHOT.yaml
+  cell_id: CELL-MISELL-197-ADVERTISER-REPORT-SNAPSHOT
+  pr: watchout/misell#TBD
+items:
+  - item_id: ARSNAP-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden path is touched.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: ARSNAP-AUDIT-002
+    source: api_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify the new API is admin-only internal snapshot creation and does not add external advertiser/customer/public access, export, billing, publish, device, provider, POS, camera, or ad-network behavior.
+    expected_evidence:
+      - code_review
+      - route_review
+  - item_id: ARSNAP-AUDIT-003
+    source: persistence_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify the implementation uses existing report_snapshots only, adds no DB migration/table/dependency, requires an existing campaign_id, and stores report_type/snapshot_type as advertiser_campaign_preview.
+    expected_evidence:
+      - code_review
+      - migration_scan
+  - item_id: ARSNAP-AUDIT-004
+    source: duplicate_and_hash
+    verification_method: executable
+    required: true
+    prompt: Verify duplicate create returns 409 without replace, replace preserves snapshot_id and stable metrics_sha256 for identical data, and generated_at is excluded from the hash.
+    expected_evidence:
+      - smoke_reporting_result
+      - code_review
+  - item_id: ARSNAP-AUDIT-005
+    source: granular_key_isolation
+    verification_method: executable
+    required: true
+    prompt: Verify ad_slot_id/creative_id/qr_link_id/item_type/manifest_hash filters are included in the advertiser snapshot key so granular snapshots do not collide with campaign-level snapshots.
+    expected_evidence:
+      - smoke_reporting_result
+      - code_review
+  - item_id: ARSNAP-AUDIT-006
+    source: measurement_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify snapshots preserve measured Misell rail evidence only, QR is response evidence, and ROI/ROAS/lift/guarantee/incremental/POS-settled sales claims remain not_reported or absent.
+    expected_evidence:
+      - code_review
+      - smoke_reporting_result
+  - item_id: ARSNAP-AUDIT-007
+    source: no_publish_side_effect
+    verification_method: executable
+    required: true
+    prompt: Verify snapshot creation does not create content_manifest, publish content, mutate Player/device state, or call provider/external AI.
+    expected_evidence:
+      - smoke_reporting_result
+      - changed_files
+  - item_id: ARSNAP-AUDIT-008
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
