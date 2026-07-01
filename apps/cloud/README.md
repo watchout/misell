@@ -737,6 +737,7 @@ Cloud can aggregate the existing heartbeat, playlog, QR scan, counter-order, and
 - `POST /api/admin/reports/monthly-snapshots` rebuilds the read model for a full month and stores an immutable monthly report payload in `report_snapshots`.
 - `POST /api/admin/reports/advertiser-preview/snapshots` stores a full-month internal advertiser campaign preview in `report_snapshots` with `report_type=advertiser_campaign_preview`.
 - `GET /api/admin/reports/monthly-snapshots` and `GET /api/admin/reports/monthly-snapshots/:snapshot_id` retrieve saved report snapshots.
+- `GET /api/admin/reports/monthly-snapshots/:snapshot_id/export?format=json|csv` exports internal advertiser campaign snapshots only. It does not create public links or external advertiser access.
 
 Report periods are local business days. Bucketing uses each store's `timezone` and `business_day_start_time`, so after-midnight activity can still count toward the previous business day. Monthly snapshots are keyed by report type, period, tenant, store, campaign, and content scope to avoid accidental duplicate monthly reports. Advertiser preview snapshots additionally include ad slot, creative, QR link, item type, and manifest hash filters in the snapshot key when supplied.
 
@@ -792,6 +793,7 @@ The customer conversion report includes QR scans, issued orders, redeemed orders
 - `GET /api/admin/reports/monthly-snapshots` with Basic auth
 - `POST /api/admin/reports/monthly-snapshots` with Basic auth
 - `GET /api/admin/reports/monthly-snapshots/:snapshot_id` with Basic auth
+- `GET /api/admin/reports/monthly-snapshots/:snapshot_id/export` with Basic auth
 - `GET /q/:qr_token`
 - `POST /q/:qr_token/orders`
 - `GET /order/:order_token`

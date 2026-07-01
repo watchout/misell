@@ -1810,6 +1810,17 @@ app.post("/api/admin/reports/monthly-snapshots", requireAdminAuth, (req, res, ne
   }
 });
 
+app.get("/api/admin/reports/monthly-snapshots/:snapshot_id/export", requireAdminAuth, (req, res, next) => {
+  try {
+    const exported = exportAdvertiserReportSnapshot(cleanId(req.params.snapshot_id), req.query || {});
+    res.setHeader("Content-Type", exported.content_type);
+    res.setHeader("Content-Disposition", `attachment; filename="${exported.filename}"`);
+    res.send(exported.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/admin/reports/monthly-snapshots/:snapshot_id", requireAdminAuth, (req, res) => {
   const snapshot = getReportSnapshot(cleanId(req.params.snapshot_id));
   if (!snapshot) {
@@ -14545,6 +14556,112 @@ function publicReportSnapshot(row, options = {}) {
     snapshot.totals = summary?.totals || {};
   }
   return snapshot;
+}
+
+function exportAdvertiserReportSnapshot(snapshotId, input = {}) {
+  const snapshot = getReportSnapshot(snapshotId);
+  if (!snapshot) throw requestError("Report snapshot not found", 404);
+  if (snapshot.report_type !== "advertiser_campaign_preview") {
+    throw requestError("Report snapshot export supports advertiser_campaign_preview snapshots only", 400);
+  }
+  const format = normalizeReportSnapshotExportFormat(input.format || "json");
+  const payload = buildAdvertiserReportSnapshotExportPayload(snapshot);
+  const safeId = snapshot.snapshot_id.replace(/[^a-zA-Z0-9_.-]/g, "-");
+  if (format === "json") {
+    return {
+      format,
+      content_type: "application/json; charset=utf-8",
+      filename: `misell-advertiser-report-${safeId}.json`,
+      body: `${JSON.stringify(payload, null, 2)}\n`
+    };
+  }
+  return {
+    format,
+    content_type: "text/csv; charset=utf-8",
+    filename: `misell-advertiser-report-${safeId}.csv`,
+    body: advertiserReportSnapshotExportCsv(payload)
+  };
+}
+
+function normalizeReportSnapshotExportFormat(value) {
+  const format = cleanString(value || "json").toLowerCase();
+  if (!["json", "csv"].includes(format)) {
+    throw requestError("report snapshot export format must be json or csv", 400);
+  }
+  return format;
+}
+
+function buildAdvertiserReportSnapshotExportPayload(snapshot) {
+  const summary = snapshot.summary || {};
+  return {
+    export_type: "advertiser_campaign_snapshot",
+    schema_version: "misell-advertiser-report-export/v1",
+    exported_at: nowIso(),
+    report_snapshot: {
+      snapshot_id: snapshot.snapshot_id,
+      snapshot_key: snapshot.snapshot_key,
+      report_type: snapshot.report_type,
+      status: snapshot.status,
+      title: snapshot.title,
+      tenant_id: snapshot.tenant_id,
+      store_id: snapshot.store_id,
+      campaign_id: snapshot.campaign_id,
+      content_id: snapshot.content_id,
+      period_start: snapshot.period_start,
+      period_end: snapshot.period_end,
+      metrics_sha256: snapshot.metrics_sha256,
+      generated_at: snapshot.generated_at,
+      published_at: snapshot.published_at,
+      created_at: snapshot.created_at
+    },
+    measurement_policy: summary.measurement_policy || {},
+    proof_of_play: summary.proof_of_play || {},
+    response: summary.response || {},
+    conversion: summary.conversion || {},
+    breakdowns: summary.breakdowns || {},
+    daily: Array.isArray(summary.daily) ? summary.daily : [],
+    decision_prompts: Array.isArray(summary.decision_prompts) ? summary.decision_prompts : [],
+    claim_boundary: cleanString(summary.measurement_policy?.claim_boundary || "Misell rail evidence only; no incremental ROI, sales, visit, ROAS, or performance guarantee claim.")
+  };
+}
+
+function advertiserReportSnapshotExportCsv(payload) {
+  const rows = [[
+    "section",
+    "key",
+    "value",
+    "measurement_label",
+    "claim_boundary"
+  ]];
+  const boundary = payload.claim_boundary;
+  const addRow = (section, key, value, label = "") => {
+    rows.push([section, key, value, label, boundary]);
+  };
+  for (const [key, value] of Object.entries(payload.report_snapshot || {})) addRow("snapshot", key, value);
+  for (const [key, value] of Object.entries(payload.measurement_policy || {})) addRow("measurement_policy", key, value);
+  for (const [key, value] of Object.entries(payload.proof_of_play || {})) {
+    addRow("proof_of_play", key, value, payload.proof_of_play.measurement_label || "");
+  }
+  for (const [key, value] of Object.entries(payload.response || {})) {
+    addRow("response", key, value, payload.response.measurement_label || "");
+  }
+  for (const [key, value] of Object.entries(payload.conversion || {})) {
+    addRow("conversion", key, value, payload.conversion.measurement_label || "");
+  }
+  for (const item of payload.decision_prompts || []) {
+    addRow("decision_prompt", cleanString(item.decision_key), cleanString(item.reason), cleanString(item.authority));
+  }
+  for (const item of payload.breakdowns?.ad_measurement || []) {
+    addRow("ad_measurement", `${cleanString(item.ad_slot_id)}:${cleanString(item.creative_id)}:play_started_count`, asInteger(item.play_started_count) || 0, cleanString(item.measurement_label));
+    addRow("ad_measurement", `${cleanString(item.ad_slot_id)}:${cleanString(item.creative_id)}:qr_scan_count`, asInteger(item.qr_scan_count) || 0, cleanString(item.measurement_label));
+  }
+  return `${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
+}
+
+function csvCell(value) {
+  const text = value === null || value === undefined ? "" : String(value).trim();
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
 }
 
 function reportMetricsSha256(report) {
