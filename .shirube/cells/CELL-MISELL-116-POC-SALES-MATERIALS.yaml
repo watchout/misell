@@ -1,0 +1,52 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-116-POC-SALES-MATERIALS
+parent_ssot: https://github.com/watchout/misell/issues/116
+title: POC 70 Facility Sales Materials
+cell_type: sales_materials
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Convert the approved Misell 30-day media partner offer into a current POC sales materials package from main.
+source_specs:
+  - docs/77_POC_PARTNER_PRICING_AND_BUYOUT_STRATEGY.md
+  - docs/78_FINAL_30DAY_IMPACT_OFFER_AND_PROPOSAL_STRATEGY.md
+  - docs/60_TEST_INTRO_PROPOSAL_DECK.md
+  - docs/61_CUSTOMER_PRICING_TABLE.md
+  - docs/62_MISELL_MEDIA_KIT.md
+  - docs/63_TEST_INTRO_AGREEMENT_TEMPLATE.md
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+  - docs/100_AD_EVIDENCE_SOURCE_LEDGER.md
+non_scope:
+  - app/runtime, Cloud, Player, DB, API, auth, workflow, package, deploy, or secret changes
+  - final public publication or external distribution
+  - new price, guarantee, legal, ROI, ROAS, incremental, customer-logo, case-study, or verified proof claims beyond approved sources
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-116-POC-SALES-MATERIALS.yaml
+  - .shirube/control-handoffs/CH-MISELL-116-poc-sales-materials.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-116-POC-SALES-MATERIALS.yaml
+  - docs/README.md
+  - docs/102_MISELL_POC_SALES_MATERIALS_BLUEPRINT.md
+  - prompts/codex_create_misell_poc_sales_materials.md
+  - materials/poc_70_limited/**
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/**
+  - package.json
+  - package-lock.json
+acceptance_criteria:
+  - docs/102 records the sales materials blueprint and replaces stale PR #194's docs/97 number collision.
+  - materials/poc_70_limited contains README plus the 12 requested sales material files.
+  - Price, guarantee, CTA, included/excluded scope, and partner conditions remain traceable to docs/77, docs/78, and #116.
+  - Materials explicitly avoid sales/ad revenue/ROAS/traffic/impression/viewer/QR-count guarantees.
+  - Materials distinguish measured Misell-rail evidence from estimated and incremental claims.
+  - Customer distribution, contract use, publication, price/guarantee changes, and external proof remain owner/legal gated.
+  - No app/runtime files are changed.
