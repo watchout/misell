@@ -1,0 +1,48 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-116-POC-SALES-MATERIALS
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-116-poc-sales-materials.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-116-POC-SALES-MATERIALS.yaml
+  cell_id: CELL-MISELL-116-POC-SALES-MATERIALS
+  pr: watchout/misell#TBD
+items:
+  - item_id: SALES-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden app/runtime/workflow/package paths are touched.
+  - item_id: SALES-AUDIT-002
+    source: source_fidelity
+    verification_method: semantic
+    required: true
+    prompt: Verify price, guarantee, CTA, included/excluded scope, partner conditions, and offer name are traceable to docs/77, docs/78, or #116 without unsupported strengthening.
+  - item_id: SALES-AUDIT-003
+    source: claim_guard
+    verification_method: semantic
+    required: true
+    prompt: Verify materials do not promise sales, ad revenue, ROAS, lift, impressions, viewer count, QR scans, traffic, or Japan-first/only claims.
+  - item_id: SALES-AUDIT-004
+    source: measurement_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify measured/estimated/incremental boundaries from docs/98 are preserved and QR/playlog/order signals are not overstated as ROI attribution.
+  - item_id: SALES-AUDIT-005
+    source: legal_publication_gate
+    verification_method: semantic
+    required: true
+    prompt: Verify customer distribution, contract use, legal language, publication, price/guarantee changes, external proof, and case studies remain owner/legal gated.
+  - item_id: SALES-AUDIT-006
+    source: material_completeness
+    verification_method: semantic
+    required: true
+    prompt: Verify docs/102 plus README and 12 materials exist and map to #116/#194 intended deliverables.
+  - item_id: SALES-AUDIT-007
+    source: stale_pr_reslice
+    verification_method: semantic
+    required: true
+    prompt: Verify PR #194 was not merged, docs/97 number conflict is avoided, and useful content is resliced from current main.
+  - item_id: SALES-AUDIT-008
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
