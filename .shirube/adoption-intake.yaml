@@ -2,7 +2,7 @@ schema_version: shirube-adoption-intake/v1
 adoption_id: ADOPT-MISELL-SHIRUBE-V3-FULL-OPERATIONAL-001
 lane: adoption_intake
 repo: watchout/misell
-framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_ref: watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
 profile: hotel-lite
 disposition: retrofit_accelerate
 owner:
