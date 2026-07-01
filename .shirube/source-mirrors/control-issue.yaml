@@ -6,7 +6,7 @@ issue_number: 487
 source_url: https://github.com/watchout/ai-dev-framework/issues/487
 target_repo: watchout/misell
 product: Misell
-framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_ref: watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
 fetched_at: 2026-06-24T09:30:00Z
 sha256: 25e9576ad29a06328f7c32ea3c069595a0b519d9f484ac87c6af6a5307133b2f
 mirror_is_truth: false

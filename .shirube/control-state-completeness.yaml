@@ -1,7 +1,7 @@
 schema_version: shirube-control-state-completeness-config/v1
 config_id: CONTROL-STATE-MISELL-SHIRUBE-V3-OVERLAY-001
 repo: watchout/misell
-framework_ref: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+framework_ref: watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
 mode: full_operational_with_report_only_overlay
 updated_at: 2026-06-24T09:30:00Z
 required_state_refs:

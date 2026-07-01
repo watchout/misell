@@ -70,7 +70,7 @@ gate_catalog:
       - .shirube/design-rule-packs/shirube-default-design-rules.yaml
   itemized_audit_checklist:
     purpose: Keep semantic audits itemized against the handoff acceptance criteria and evidence list.
-    source: watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+    source: watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
     responsible_role: codex_audit
     required_evidence:
       - checklist items in the audit request or audit comment
@@ -189,7 +189,7 @@ data_boundaries:
   - no production database, backup, or customer file access
 dependency_boundaries:
   - vendored full operational gate scripts remain local until an equivalent trusted full-operational reusable workflow exists upstream
-  - additive Rapid/Lite report-only caller is pinned to watchout/ai-dev-framework@6917720d0ea02fe96f3b7752aa802bc135ec1b19
+  - additive Rapid/Lite report-only caller is pinned to watchout/ai-dev-framework@3b70d368bcbbcb1d200a941a8a0130aa54edf722
   - target repo must not copy new ADF scripts for the overlay refresh unless a later governance cell explicitly approves vendoring
   - GitHub Actions comments/artifacts are the only external write in the full operational gate
 forbidden_actions:
