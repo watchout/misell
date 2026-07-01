@@ -1,0 +1,73 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING
+parent_ssot: https://github.com/watchout/misell/issues/213
+title: Studio measurement fields and QR binding D1
+cell_type: runtime_foundation
+risk_class: R3
+status: implementation
+summary: >
+  Add the approved Studio Execution D1 foundation for measurement bindings and
+  QR binding reverse lookup. This cell records measured/estimated/incremental
+  labels and QR response evidence without advertiser reporting UI, ROI claims,
+  content_manifest creation, publish activation, provider calls, Player/device
+  mutation, or billing/credit behavior.
+
+scope:
+  - Additive Cloud schema for studio_measurement_bindings and studio_qr_bindings.
+  - Optional additive measurement fields on CampaignProject, Scene, qr_links, and qr_scans.
+  - Deterministic contract helper for D1 measurement label/data source/QR response guards.
+  - Admin/operator APIs for create/list/get/validate/soft-delete measurement bindings.
+  - Admin/operator API for creating QR binding draft/active evidence tied to existing qr_links.
+  - Smoke coverage for scope isolation, label guard, incremental guard, QR reverse lookup, soft delete, and no side effects.
+non_scope:
+  - external advertiser reporting UI or customer/public controls
+  - ROI, ROAS, lift, guarantee, purchase, visit, or incremental claims
+  - content_manifest creation, activation, schedule activation, publish, rollback, or Player/device mutation
+  - real provider integration, external AI, MCP runtime, media generation, camera/POS/external data ingestion
+  - billing, quota, credit ledger, pricing, or ad-network delivery
+
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING.yaml
+  - .shirube/control-handoffs/CH-MISELL-213-measurement-fields-qr-binding.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING.yaml
+  - apps/cloud/README.md
+  - apps/cloud/lib/studio-measurement-binding-contract.js
+  - apps/cloud/package.json
+  - apps/cloud/scripts/smoke-studio-measurement-binding.mjs
+  - apps/cloud/server.js
+  - package.json
+  - scripts/ci/db-migration-dry-run.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/player/**
+  - apps/cloud/public/**
+
+acceptance_criteria:
+  - Additive schema exists for studio_measurement_bindings and studio_qr_bindings.
+  - CampaignProject/Scene can expose optional measurement fields without breaking existing APIs.
+  - QR link and QR scan rows preserve reverse lookup to tenant/store/screen_group/project/scene/creative/campaign/ad slot where present.
+  - measurement_label=incremental is blocked unless baseline/holdout evidence exists.
+  - measurement_label=measured is blocked for advertiser_reported/external_estimate/baseline_model sources.
+  - QR scan evidence is labeled measured_response_only and does not imply sale, visit, ROI, ROAS, lift, guarantee, or incremental effect.
+  - Scope isolation is enforced for tenant/store/screen_group on admin/operator APIs.
+  - Soft delete is used for measurement/QR binding records and active QR links are revoked when their binding is deleted.
+  - Smoke proves no content_manifest creation, publish_history, device command, Player/device mutation, provider call, or credit ledger mutation.
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - node --check apps/cloud/lib/studio-measurement-binding-contract.js
+    - npm --prefix apps/cloud run check
+    - npm --prefix apps/cloud run smoke:studio-measurement-binding
+    - npm --prefix apps/cloud run smoke:studio-publish-preflight
+    - node scripts/ci/db-migration-dry-run.js
+    - npm run shirube:smoke-full-operational
+    - npm run test:ci

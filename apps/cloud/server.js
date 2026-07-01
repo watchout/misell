@@ -73,6 +73,17 @@ const {
   buildContentManifestDraftTransform,
   validatePublishPreflightContract
 } = require("./lib/studio-publish-preflight-contract");
+const {
+  MEASUREMENT_BINDING_VERSION,
+  QR_BINDING_VERSION,
+  MEASUREMENT_BINDING_STATUSES,
+  QR_BINDING_STATUSES,
+  assertStudioD1InputBoundary,
+  normalizeMeasurementBindingInput,
+  validateMeasurementBindingContract,
+  normalizeQrBindingInput,
+  validateQrBindingContract
+} = require("./lib/studio-measurement-binding-contract");
 
 const app = express();
 const ROOT_DIR = __dirname;
@@ -937,6 +948,70 @@ app.get("/api/admin/studio-publish-preflights/:publish_preflight_id", requireAdm
     const preflight = getStudioPublishPreflight(cleanId(req.params.publish_preflight_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeDraftTransform: true });
     if (!preflight) throw requestError("Studio publish preflight not found", 404);
     res.json({ ok: true, studio_publish_preflight: preflight });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/campaign-projects/:campaign_project_id/measurement-bindings", requireAdminAuth, (req, res, next) => {
+  try {
+    const bindings = listStudioMeasurementBindingsForProject(cleanId(req.params.campaign_project_id), req.query || {});
+    res.json({ ok: true, studio_measurement_bindings: bindings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/campaign-projects/:campaign_project_id/measurement-bindings", requireAdminAuth, (req, res, next) => {
+  try {
+    const binding = createStudioMeasurementBinding(cleanId(req.params.campaign_project_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, studio_measurement_binding: binding });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-measurement-bindings/:measurement_binding_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const binding = getStudioMeasurementBinding(cleanId(req.params.measurement_binding_id), normalizeCampaignProjectScopeQuery(req.query || {}), { includeQrBindings: true });
+    if (!binding) throw requestError("Studio measurement binding not found", 404);
+    res.json({ ok: true, studio_measurement_binding: binding });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/studio-measurement-bindings/:measurement_binding_id/validate", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = validateStudioMeasurementBinding(cleanId(req.params.measurement_binding_id), req.body || {}, req.adminActor);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/studio-measurement-bindings/:measurement_binding_id", requireAdminAuth, (req, res, next) => {
+  try {
+    const binding = softDeleteStudioMeasurementBinding(cleanId(req.params.measurement_binding_id), req.adminActor);
+    res.json({ ok: true, studio_measurement_binding: binding });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/studio-measurement-bindings/:measurement_binding_id/qr-bindings", requireAdminAuth, (req, res, next) => {
+  try {
+    const bindings = listStudioQrBindingsForMeasurement(cleanId(req.params.measurement_binding_id), req.query || {});
+    res.json({ ok: true, studio_qr_bindings: bindings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/studio-measurement-bindings/:measurement_binding_id/qr-bindings", requireAdminAuth, (req, res, next) => {
+  try {
+    const result = createStudioQrBinding(cleanId(req.params.measurement_binding_id), req.body || {}, req.adminActor);
+    res.status(201).json({ ok: true, ...result });
   } catch (error) {
     next(error);
   }
@@ -4588,6 +4663,123 @@ function schemaMigrations() {
             ON content_manifest_draft_transforms(campaign_project_id, status, created_at DESC);
         `);
       }
+    },
+    {
+      version: 16,
+      name: "studio_measurement_qr_binding_d1",
+      up() {
+        for (const tableName of ["campaign_projects", "campaign_project_scenes"]) {
+          addColumnIfMissing(tableName, "content_layer", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "item_type", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "measurement_goal", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "expected_action", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "campaign_id", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "media_campaign_id", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "creative_id", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "ad_slot_id", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "qr_link_id", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "duration_class", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "variation_group", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "improvement_reason", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "previous_scene_id", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "measurement_label", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "data_source_class", "TEXT NOT NULL DEFAULT ''");
+          addColumnIfMissing(tableName, "next_review_at", "TEXT NOT NULL DEFAULT ''");
+        }
+
+        for (const tableName of ["qr_links", "qr_scans"]) {
+          addColumnIfMissing(tableName, "measurement_binding_id", "TEXT");
+          addColumnIfMissing(tableName, "campaign_project_id", "TEXT");
+          addColumnIfMissing(tableName, "campaign_project_scene_id", "TEXT");
+          addColumnIfMissing(tableName, "media_campaign_id", "TEXT");
+          addColumnIfMissing(tableName, "creative_id", "TEXT");
+          addColumnIfMissing(tableName, "ad_slot_id", "TEXT");
+          addColumnIfMissing(tableName, "measurement_label", "TEXT");
+          addColumnIfMissing(tableName, "data_source_class", "TEXT");
+          addColumnIfMissing(tableName, "attribution_claim", "TEXT");
+        }
+
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS studio_measurement_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            measurement_binding_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_revision INTEGER NOT NULL DEFAULT 1,
+            campaign_project_scene_id TEXT NOT NULL DEFAULT '',
+            render_manifest_id TEXT NOT NULL DEFAULT '',
+            content_layer TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            measurement_goal TEXT NOT NULL,
+            expected_action TEXT NOT NULL,
+            campaign_id TEXT NOT NULL DEFAULT '',
+            media_campaign_id TEXT NOT NULL DEFAULT '',
+            creative_id TEXT NOT NULL,
+            ad_slot_id TEXT NOT NULL DEFAULT '',
+            qr_link_id TEXT NOT NULL DEFAULT '',
+            variation_group TEXT NOT NULL DEFAULT '',
+            improvement_reason TEXT NOT NULL DEFAULT '',
+            previous_scene_id TEXT NOT NULL DEFAULT '',
+            duration_class TEXT NOT NULL,
+            measurement_label TEXT NOT NULL,
+            data_source_class TEXT NOT NULL,
+            baseline_evidence_ref TEXT NOT NULL DEFAULT '',
+            holdout_evidence_ref TEXT NOT NULL DEFAULT '',
+            next_review_at TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft',
+            validation_status TEXT NOT NULL DEFAULT 'invalid',
+            validation_errors_json TEXT NOT NULL DEFAULT '[]',
+            validation_checks_json TEXT NOT NULL DEFAULT '[]',
+            deleted_at TEXT,
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_project_id) REFERENCES campaign_projects(campaign_project_id) ON DELETE RESTRICT
+          );
+
+          CREATE TABLE IF NOT EXISTS studio_qr_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            qr_binding_id TEXT NOT NULL UNIQUE,
+            qr_link_id TEXT NOT NULL UNIQUE,
+            qr_token TEXT NOT NULL DEFAULT '',
+            measurement_binding_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            screen_group_id TEXT NOT NULL,
+            campaign_project_id TEXT NOT NULL,
+            campaign_project_revision INTEGER NOT NULL DEFAULT 1,
+            campaign_project_scene_id TEXT NOT NULL,
+            creative_id TEXT NOT NULL,
+            campaign_id TEXT NOT NULL DEFAULT '',
+            media_campaign_id TEXT NOT NULL DEFAULT '',
+            ad_slot_id TEXT NOT NULL DEFAULT '',
+            target_url TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            attribution_claim TEXT NOT NULL DEFAULT 'measured_response_only',
+            expires_at TEXT NOT NULL DEFAULT '',
+            created_by_actor_id TEXT NOT NULL DEFAULT '',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(measurement_binding_id) REFERENCES studio_measurement_bindings(measurement_binding_id) ON DELETE RESTRICT
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_studio_measurement_bindings_project
+            ON studio_measurement_bindings(campaign_project_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_measurement_bindings_scope
+            ON studio_measurement_bindings(tenant_id, store_id, screen_group_id, item_type, measurement_label, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_measurement_bindings_qr
+            ON studio_measurement_bindings(qr_link_id, campaign_project_scene_id, creative_id);
+          CREATE INDEX IF NOT EXISTS idx_studio_qr_bindings_measurement
+            ON studio_qr_bindings(measurement_binding_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_studio_qr_bindings_scope
+            ON studio_qr_bindings(tenant_id, store_id, screen_group_id, campaign_project_id, status, updated_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_qr_scans_studio_measurement
+            ON qr_scans(tenant_id, store_id, campaign_project_id, campaign_project_scene_id, creative_id, qr_link_id, scanned_at);
+        `);
+      }
     }
   ];
 }
@@ -5366,8 +5558,10 @@ function createQrLink(input) {
       qr_link_id, campaign_id, advertiser_id, qr_id, label, destination_url,
       short_path, status, tenant_id, store_id, screen_group_id, content_id,
       offer_id, offer_revision_id, qr_token, destination_type, valid_from,
-      valid_until, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      valid_until, measurement_binding_id, campaign_project_id, campaign_project_scene_id,
+      media_campaign_id, creative_id, ad_slot_id, measurement_label, data_source_class,
+      attribution_claim, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     normalized.qr_link_id,
     normalized.campaign_id || null,
@@ -5387,6 +5581,15 @@ function createQrLink(input) {
     normalized.destination_type,
     normalized.valid_from,
     normalized.valid_until,
+    normalized.measurement_binding_id || null,
+    normalized.campaign_project_id || null,
+    normalized.campaign_project_scene_id || null,
+    normalized.media_campaign_id || null,
+    normalized.creative_id || null,
+    normalized.ad_slot_id || null,
+    normalized.measurement_label || null,
+    normalized.data_source_class || null,
+    normalized.attribution_claim || null,
     now,
     now
   );
@@ -5427,7 +5630,16 @@ function normalizeQrLinkInput(input) {
     short_path: cleanString(input.short_path || input.shortPath || `/q/${qrToken}`).slice(0, 160),
     valid_from: cleanString(input.valid_from || input.validFrom),
     valid_until: cleanString(input.valid_until || input.validUntil),
-    status: cleanString(input.status || "active") || "active"
+    status: cleanString(input.status || "active") || "active",
+    measurement_binding_id: cleanId(input.measurement_binding_id || input.measurementBindingId),
+    campaign_project_id: cleanId(input.campaign_project_id || input.campaignProjectId),
+    campaign_project_scene_id: cleanId(input.campaign_project_scene_id || input.campaignProjectSceneId || input.scene_id || input.sceneId),
+    media_campaign_id: cleanId(input.media_campaign_id || input.mediaCampaignId),
+    creative_id: cleanId(input.creative_id || input.creativeId),
+    ad_slot_id: cleanId(input.ad_slot_id || input.adSlotId),
+    measurement_label: cleanString(input.measurement_label || input.measurementLabel).slice(0, 40),
+    data_source_class: cleanString(input.data_source_class || input.dataSourceClass).slice(0, 80),
+    attribution_claim: cleanString(input.attribution_claim || input.attributionClaim).slice(0, 80)
   };
 }
 
@@ -5466,8 +5678,10 @@ function recordQrScan(qrLink, req) {
       qr_scan_id, qr_link_id, campaign_id, advertiser_id, store_id, device_id,
       scanned_at, user_agent, ip_hash, referrer, raw_json, tenant_id,
       screen_group_id, content_id, offer_id, offer_revision_id, visit_id,
-      near_store_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      near_store_status, measurement_binding_id, campaign_project_id,
+      campaign_project_scene_id, media_campaign_id, creative_id, ad_slot_id,
+      measurement_label, data_source_class, attribution_claim
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     qrScanId,
     qrLink.qr_link_id,
@@ -5486,13 +5700,30 @@ function recordQrScan(qrLink, req) {
     cleanId(qrLink.offer_id || offerRevision?.offer_id) || null,
     cleanId(qrLink.offer_revision_id || offerRevision?.offer_revision_id) || null,
     visitId,
-    cleanString(req.query.near_store_status || "unknown")
+    cleanString(req.query.near_store_status || "unknown"),
+    qrLink.measurement_binding_id || null,
+    qrLink.campaign_project_id || null,
+    qrLink.campaign_project_scene_id || null,
+    qrLink.media_campaign_id || null,
+    qrLink.creative_id || null,
+    qrLink.ad_slot_id || null,
+    qrLink.measurement_label || null,
+    qrLink.data_source_class || null,
+    cleanString(qrLink.attribution_claim || "measured_response_only")
   );
   return {
     qr_scan_id: qrScanId,
     qr_link_id: qrLink.qr_link_id,
     campaign_id: cleanId(qrLink.campaign_id || offerRevision?.campaign_id),
     store_id: cleanId(qrLink.store_id || offerRevision?.store_id),
+    campaign_project_id: cleanId(qrLink.campaign_project_id),
+    campaign_project_scene_id: cleanId(qrLink.campaign_project_scene_id),
+    media_campaign_id: cleanId(qrLink.media_campaign_id),
+    creative_id: cleanId(qrLink.creative_id),
+    ad_slot_id: cleanId(qrLink.ad_slot_id),
+    measurement_label: cleanString(qrLink.measurement_label),
+    data_source_class: cleanString(qrLink.data_source_class),
+    attribution_claim: cleanString(qrLink.attribution_claim || "measured_response_only"),
     scanned_at: now,
     visit_id: visitId,
     near_store_status: cleanString(req.query.near_store_status || "unknown")
@@ -5522,6 +5753,14 @@ function publicQrScan(row) {
     qr_link_id: cleanId(row.qr_link_id),
     campaign_id: cleanId(row.campaign_id),
     store_id: cleanId(row.store_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    media_campaign_id: cleanId(row.media_campaign_id),
+    creative_id: cleanId(row.creative_id),
+    ad_slot_id: cleanId(row.ad_slot_id),
+    measurement_label: cleanString(row.measurement_label),
+    data_source_class: cleanString(row.data_source_class),
+    attribution_claim: cleanString(row.attribution_claim || "measured_response_only"),
     scanned_at: cleanString(row.scanned_at),
     visit_id: cleanId(row.visit_id),
     near_store_status: cleanString(row.near_store_status || "unknown")
@@ -5537,6 +5776,15 @@ function publicQrLink(row) {
     screen_group_id: cleanId(row.screen_group_id),
     content_id: cleanId(row.content_id),
     campaign_id: cleanId(row.campaign_id),
+    measurement_binding_id: cleanId(row.measurement_binding_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    media_campaign_id: cleanId(row.media_campaign_id),
+    creative_id: cleanId(row.creative_id),
+    ad_slot_id: cleanId(row.ad_slot_id),
+    measurement_label: cleanString(row.measurement_label),
+    data_source_class: cleanString(row.data_source_class),
+    attribution_claim: cleanString(row.attribution_claim || "measured_response_only"),
     offer_id: cleanId(row.offer_id),
     offer_revision_id: cleanId(row.offer_revision_id),
     revision_binding: row.offer_revision_id ? "pinned" : (row.offer_id ? "current_offer_revision" : ""),
@@ -10672,6 +10920,27 @@ function publicCampaignBrief(row) {
   };
 }
 
+function publicMeasurementFieldSummary(row = {}) {
+  return {
+    content_layer: cleanString(row.content_layer),
+    item_type: cleanString(row.item_type),
+    measurement_goal: cleanString(row.measurement_goal),
+    expected_action: cleanString(row.expected_action),
+    campaign_id: cleanId(row.campaign_id),
+    media_campaign_id: cleanId(row.media_campaign_id),
+    creative_id: cleanId(row.creative_id),
+    ad_slot_id: cleanId(row.ad_slot_id),
+    qr_link_id: cleanId(row.qr_link_id),
+    duration_class: cleanString(row.duration_class),
+    variation_group: cleanId(row.variation_group),
+    improvement_reason: cleanString(row.improvement_reason),
+    previous_scene_id: cleanId(row.previous_scene_id),
+    measurement_label: cleanString(row.measurement_label),
+    data_source_class: cleanString(row.data_source_class),
+    next_review_at: cleanString(row.next_review_at)
+  };
+}
+
 function publicCampaignProject(row, options = {}) {
   const project = {
     campaign_project_id: cleanId(row.campaign_project_id),
@@ -10698,6 +10967,7 @@ function publicCampaignProject(row, options = {}) {
     deleted_at: cleanString(row.deleted_at),
     created_at: cleanString(row.created_at),
     updated_at: cleanString(row.updated_at),
+    measurement: publicMeasurementFieldSummary(row),
     no_external_ai: true,
     no_media_generation: true,
     no_content_manifest_creation: true,
@@ -10730,6 +11000,7 @@ function publicCampaignProjectScene(row) {
     status: cleanString(row.status),
     validation_status: cleanString(row.validation_status),
     validation_errors: parseJson(row.validation_errors_json || "[]", []),
+    measurement: publicMeasurementFieldSummary(row),
     deleted_at: cleanString(row.deleted_at),
     created_at: cleanString(row.created_at),
     updated_at: cleanString(row.updated_at)
@@ -10950,6 +11221,611 @@ function publicContentManifestDraftTransform(row) {
     created_by_actor_id: cleanId(row.created_by_actor_id),
     created_at: cleanString(row.created_at)
   };
+}
+
+function listStudioMeasurementBindingsForProject(projectId, query = {}) {
+  const projectRow = getCampaignProjectRow(projectId);
+  if (!projectRow) throw requestError("Campaign project not found", 404);
+  if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+  const scope = normalizeCampaignProjectScopeQuery(query || {});
+  if (scope.tenant_id || scope.store_id || scope.screen_group_id) {
+    assertCampaignProjectInputScope(scope, projectRow, "Campaign project");
+  }
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  return db.prepare(`
+    SELECT * FROM studio_measurement_bindings
+    WHERE campaign_project_id = ?
+      AND (? = 1 OR status != 'deleted')
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 100
+  `).all(cleanId(projectId), includeDeleted ? 1 : 0).map(publicStudioMeasurementBinding);
+}
+
+function createStudioMeasurementBinding(projectId, input = {}, actor = {}) {
+  assertStudioD1RouteBoundary(input);
+  const created = db.transaction(() => {
+    const projectRow = getCampaignProjectRow(projectId);
+    if (!projectRow) throw requestError("Campaign project not found", 404);
+    if (projectRow.status === "deleted") throw requestError("Campaign project is deleted", 400);
+    assertCampaignProjectInputScope(input, projectRow, "Campaign project");
+    const sceneRow = resolveStudioD1Scene(projectRow, input);
+    const renderManifestRow = resolveStudioD1RenderManifest(projectRow, input);
+    const now = nowIso();
+    const defaults = defaultMeasurementBindingFields(projectRow, sceneRow, renderManifestRow, input);
+    const normalized = normalizeStudioD1MeasurementBinding(input, defaults);
+    const validation = validateMeasurementBindingContract(normalized, {
+      project: projectRow,
+      scene: sceneRow,
+      render_manifest: renderManifestRow
+    });
+    assertNoStudioD1HardBlockers(validation);
+    const bindingId = normalized.measurement_binding_id || nextEntityId("mb", `${projectRow.campaign_project_id}-${sceneRow?.campaign_project_scene_id || "project"}`);
+    db.prepare(`
+      INSERT INTO studio_measurement_bindings (
+        measurement_binding_id, tenant_id, store_id, screen_group_id,
+        campaign_project_id, campaign_project_revision, campaign_project_scene_id,
+        render_manifest_id, content_layer, item_type, measurement_goal, expected_action,
+        campaign_id, media_campaign_id, creative_id, ad_slot_id, qr_link_id,
+        variation_group, improvement_reason, previous_scene_id, duration_class,
+        measurement_label, data_source_class, baseline_evidence_ref, holdout_evidence_ref,
+        next_review_at, status, validation_status, validation_errors_json,
+        validation_checks_json, deleted_at, created_by_actor_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+    `).run(
+      bindingId,
+      normalized.tenant_id,
+      normalized.store_id,
+      normalized.screen_group_id,
+      normalized.campaign_project_id,
+      normalized.campaign_project_revision,
+      normalized.campaign_project_scene_id,
+      normalized.render_manifest_id,
+      normalized.content_layer,
+      normalized.item_type,
+      normalized.measurement_goal,
+      normalized.expected_action,
+      normalized.campaign_id,
+      normalized.media_campaign_id,
+      normalized.creative_id,
+      normalized.ad_slot_id,
+      normalized.qr_link_id,
+      normalized.variation_group,
+      normalized.improvement_reason,
+      normalized.previous_scene_id,
+      normalized.duration_class,
+      normalized.measurement_label,
+      normalized.data_source_class,
+      normalized.baseline_evidence_ref,
+      normalized.holdout_evidence_ref,
+      normalized.next_review_at,
+      normalized.status,
+      validation.valid ? "valid" : "invalid",
+      safeJsonStringify(validation.errors, 10000),
+      safeJsonStringify(validation.checks, 20000),
+      cleanId(actor.actor_id || "admin"),
+      now,
+      now
+    );
+    applyStudioMeasurementFields(normalized, now);
+    recordCampaignProjectEvent(projectRow.campaign_project_id, normalized.campaign_project_scene_id, "measurement_binding.created", "admin", actor.actor_id || "admin", {
+      measurement_binding_id: bindingId,
+      validation_status: validation.valid ? "valid" : "invalid",
+      measurement_label: normalized.measurement_label,
+      data_source_class: normalized.data_source_class,
+      expected_action: normalized.expected_action,
+      qr_response_only: true,
+      no_roi_fabrication: true,
+      no_content_manifest_creation: true,
+      no_publish: true,
+      no_player_device_mutation: true
+    }, now);
+    return publicStudioMeasurementBinding(getStudioMeasurementBindingRow(bindingId));
+  })();
+  return created;
+}
+
+function getStudioMeasurementBinding(bindingId, scope = null, options = {}) {
+  const row = getStudioMeasurementBindingRow(bindingId);
+  if (!row || row.status === "deleted") return null;
+  if (scope) assertStudioD1RowScope(scope, row, "Studio measurement binding");
+  return publicStudioMeasurementBinding(row, options);
+}
+
+function validateStudioMeasurementBinding(bindingId, input = {}, actor = {}) {
+  assertStudioD1RouteBoundary(input);
+  const result = db.transaction(() => {
+    const row = getStudioMeasurementBindingRow(bindingId);
+    if (!row || row.status === "deleted") throw requestError("Studio measurement binding not found", 404);
+    const projectRow = getCampaignProjectRow(row.campaign_project_id);
+    if (!projectRow || projectRow.status === "deleted") throw requestError("Campaign project not found", 404);
+    assertStudioD1RowScope(input, row, "Studio measurement binding");
+    const sceneRow = row.campaign_project_scene_id ? getCampaignProjectSceneRow(row.campaign_project_scene_id) : null;
+    const renderManifestRow = row.render_manifest_id ? getStudioRenderManifestRow(row.render_manifest_id) : null;
+    const qrBindingRow = row.qr_link_id ? getStudioQrBindingRow(row.qr_link_id) : null;
+    const validation = validateMeasurementBindingContract(publicStudioMeasurementBinding(row), {
+      project: projectRow,
+      scene: sceneRow,
+      render_manifest: renderManifestRow,
+      qr_binding: qrBindingRow
+    });
+    assertNoStudioD1HardBlockers(validation);
+    const now = nowIso();
+    db.prepare(`
+      UPDATE studio_measurement_bindings SET
+        validation_status = ?,
+        validation_errors_json = ?,
+        validation_checks_json = ?,
+        status = CASE WHEN status = 'deleted' THEN status ELSE ? END,
+        updated_at = ?
+      WHERE measurement_binding_id = ?
+    `).run(
+      validation.valid ? "valid" : "invalid",
+      safeJsonStringify(validation.errors, 10000),
+      safeJsonStringify(validation.checks, 20000),
+      validation.valid ? "valid" : "draft",
+      now,
+      row.measurement_binding_id
+    );
+    recordCampaignProjectEvent(row.campaign_project_id, row.campaign_project_scene_id, "measurement_binding.validated", "admin", actor.actor_id || "admin", {
+      measurement_binding_id: row.measurement_binding_id,
+      valid: validation.valid,
+      error_count: validation.errors.length,
+      no_roi_fabrication: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return {
+      valid: validation.valid,
+      validation_errors: validation.errors,
+      validation_checks: validation.checks,
+      studio_measurement_binding: publicStudioMeasurementBinding(getStudioMeasurementBindingRow(row.measurement_binding_id), { includeQrBindings: true })
+    };
+  })();
+  return result;
+}
+
+function softDeleteStudioMeasurementBinding(bindingId, actor = {}) {
+  return db.transaction(() => {
+    const row = getStudioMeasurementBindingRow(bindingId);
+    if (!row) throw requestError("Studio measurement binding not found", 404);
+    if (row.status === "deleted") return publicStudioMeasurementBinding(row, { includeQrBindings: true });
+    const now = nowIso();
+    db.prepare(`
+      UPDATE studio_measurement_bindings SET
+        status = 'deleted',
+        validation_status = 'deleted',
+        deleted_at = ?,
+        updated_at = ?
+      WHERE measurement_binding_id = ?
+    `).run(now, now, row.measurement_binding_id);
+    db.prepare(`
+      UPDATE studio_qr_bindings SET
+        status = 'deleted',
+        deleted_at = COALESCE(NULLIF(deleted_at, ''), ?),
+        updated_at = ?
+      WHERE measurement_binding_id = ?
+        AND status != 'deleted'
+    `).run(now, now, row.measurement_binding_id);
+    db.prepare(`
+      UPDATE qr_links SET
+        status = 'revoked',
+        updated_at = ?
+      WHERE measurement_binding_id = ?
+        AND status = 'active'
+    `).run(now, row.measurement_binding_id);
+    recordCampaignProjectEvent(row.campaign_project_id, row.campaign_project_scene_id, "measurement_binding.deleted", "admin", actor.actor_id || "admin", {
+      measurement_binding_id: row.measurement_binding_id,
+      qr_links_revoked: true
+    }, now);
+    return publicStudioMeasurementBinding(getStudioMeasurementBindingRow(row.measurement_binding_id), { includeQrBindings: true });
+  })();
+}
+
+function listStudioQrBindingsForMeasurement(bindingId, query = {}) {
+  const binding = getStudioMeasurementBindingRow(bindingId);
+  if (!binding || binding.status === "deleted") throw requestError("Studio measurement binding not found", 404);
+  assertStudioD1RowScope(query, binding, "Studio measurement binding");
+  const includeDeleted = normalizeBooleanFlag(query.include_deleted || query.includeDeleted);
+  return db.prepare(`
+    SELECT * FROM studio_qr_bindings
+    WHERE measurement_binding_id = ?
+      AND (? = 1 OR status != 'deleted')
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 100
+  `).all(cleanId(bindingId), includeDeleted ? 1 : 0).map(publicStudioQrBinding);
+}
+
+function createStudioQrBinding(bindingId, input = {}, actor = {}) {
+  assertStudioD1RouteBoundary(input);
+  return db.transaction(() => {
+    const bindingRow = getStudioMeasurementBindingRow(bindingId);
+    if (!bindingRow || bindingRow.status === "deleted") throw requestError("Studio measurement binding not found", 404);
+    assertStudioD1RowScope(input, bindingRow, "Studio measurement binding");
+    const now = nowIso();
+    const qrToken = cleanId(input.qr_token || input.qrToken || crypto.randomBytes(12).toString("base64url"));
+    const defaults = {
+      ...publicStudioMeasurementBinding(bindingRow),
+      qr_binding_id: nextEntityId("qrb", bindingRow.measurement_binding_id),
+      qr_link_id: cleanId(input.qr_link_id || input.qrLinkId) || nextEntityId("qr", bindingRow.measurement_binding_id),
+      qr_token: qrToken,
+      target_url: cleanString(input.target_url || input.targetUrl || input.destination_url || input.destinationUrl) || `/q/${qrToken}`,
+      status: cleanString(input.status || "draft"),
+      attribution_claim: "measured_response_only",
+      created_by_actor_id: cleanId(actor.actor_id || "admin")
+    };
+    const normalized = normalizeStudioD1QrBinding(input, defaults);
+    const validation = validateQrBindingContract(normalized, publicStudioMeasurementBinding(bindingRow));
+    if (!validation.valid) {
+      throw requestError(`QR binding contract is invalid: ${validation.errors.map((error) => `${error.field}:${error.code}`).join(", ")}`, 400);
+    }
+    const qrLink = createQrLink({
+      qr_link_id: normalized.qr_link_id,
+      qr_token: normalized.qr_token,
+      tenant_id: normalized.tenant_id,
+      store_id: normalized.store_id,
+      screen_group_id: normalized.screen_group_id,
+      campaign_id: normalized.campaign_id,
+      label: `Studio QR ${normalized.creative_id}`,
+      destination_type: "external_url",
+      destination_url: normalized.target_url,
+      status: normalized.status === "active" ? "active" : "draft",
+      valid_until: normalized.expires_at,
+      measurement_binding_id: normalized.measurement_binding_id,
+      campaign_project_id: normalized.campaign_project_id,
+      campaign_project_scene_id: normalized.campaign_project_scene_id,
+      media_campaign_id: normalized.media_campaign_id,
+      creative_id: normalized.creative_id,
+      ad_slot_id: normalized.ad_slot_id,
+      measurement_label: "measured",
+      data_source_class: "misell_qr",
+      attribution_claim: "measured_response_only"
+    });
+    db.prepare(`
+      INSERT INTO studio_qr_bindings (
+        qr_binding_id, qr_link_id, qr_token, measurement_binding_id,
+        tenant_id, store_id, screen_group_id, campaign_project_id,
+        campaign_project_revision, campaign_project_scene_id, creative_id,
+        campaign_id, media_campaign_id, ad_slot_id, target_url, status,
+        attribution_claim, expires_at, created_by_actor_id, deleted_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    `).run(
+      normalized.qr_binding_id,
+      normalized.qr_link_id,
+      normalized.qr_token,
+      normalized.measurement_binding_id,
+      normalized.tenant_id,
+      normalized.store_id,
+      normalized.screen_group_id,
+      normalized.campaign_project_id,
+      normalized.campaign_project_revision,
+      normalized.campaign_project_scene_id,
+      normalized.creative_id,
+      normalized.campaign_id,
+      normalized.media_campaign_id,
+      normalized.ad_slot_id,
+      normalized.target_url,
+      normalized.status,
+      normalized.attribution_claim,
+      normalized.expires_at,
+      normalized.created_by_actor_id,
+      now,
+      now
+    );
+    db.prepare(`
+      UPDATE studio_measurement_bindings SET
+        qr_link_id = ?,
+        measurement_label = 'measured',
+        data_source_class = 'misell_qr',
+        status = 'valid',
+        validation_status = 'valid',
+        validation_errors_json = '[]',
+        validation_checks_json = ?,
+        updated_at = ?
+      WHERE measurement_binding_id = ?
+    `).run(
+      normalized.qr_link_id,
+      safeJsonStringify(validateMeasurementBindingContract({
+        ...publicStudioMeasurementBinding(bindingRow),
+        qr_link_id: normalized.qr_link_id,
+        measurement_label: "measured",
+        data_source_class: "misell_qr"
+      }, { qr_binding: normalized }).checks, 20000),
+      now,
+      bindingRow.measurement_binding_id
+    );
+    applyStudioMeasurementFields({
+      ...publicStudioMeasurementBinding(getStudioMeasurementBindingRow(bindingRow.measurement_binding_id)),
+      qr_link_id: normalized.qr_link_id
+    }, now);
+    recordCampaignProjectEvent(bindingRow.campaign_project_id, bindingRow.campaign_project_scene_id, "qr_binding.created", "admin", actor.actor_id || "admin", {
+      measurement_binding_id: bindingRow.measurement_binding_id,
+      qr_binding_id: normalized.qr_binding_id,
+      qr_link_id: normalized.qr_link_id,
+      status: normalized.status,
+      attribution_claim: "measured_response_only",
+      no_roi_fabrication: true,
+      no_content_manifest_creation: true,
+      no_publish: true
+    }, now);
+    return {
+      studio_qr_binding: publicStudioQrBinding(getStudioQrBindingRow(normalized.qr_link_id)),
+      qr_link: qrLink,
+      studio_measurement_binding: publicStudioMeasurementBinding(getStudioMeasurementBindingRow(bindingRow.measurement_binding_id), { includeQrBindings: true })
+    };
+  })();
+}
+
+function getStudioMeasurementBindingRow(bindingId) {
+  return db.prepare("SELECT * FROM studio_measurement_bindings WHERE measurement_binding_id = ?").get(cleanId(bindingId));
+}
+
+function getStudioQrBindingRow(qrLinkId) {
+  return db.prepare("SELECT * FROM studio_qr_bindings WHERE qr_link_id = ?").get(cleanId(qrLinkId));
+}
+
+function publicStudioMeasurementBinding(row, options = {}) {
+  const binding = {
+    schema_version: "studio-measurement-binding/d1",
+    binding_version: MEASUREMENT_BINDING_VERSION,
+    measurement_binding_id: cleanId(row.measurement_binding_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 1,
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    render_manifest_id: cleanId(row.render_manifest_id),
+    content_layer: cleanString(row.content_layer),
+    item_type: cleanString(row.item_type),
+    measurement_goal: cleanString(row.measurement_goal),
+    expected_action: cleanString(row.expected_action),
+    campaign_id: cleanId(row.campaign_id),
+    media_campaign_id: cleanId(row.media_campaign_id),
+    creative_id: cleanId(row.creative_id),
+    ad_slot_id: cleanId(row.ad_slot_id),
+    qr_link_id: cleanId(row.qr_link_id),
+    variation_group: cleanId(row.variation_group),
+    improvement_reason: cleanString(row.improvement_reason),
+    previous_scene_id: cleanId(row.previous_scene_id),
+    duration_class: cleanString(row.duration_class),
+    measurement_label: cleanString(row.measurement_label),
+    data_source_class: cleanString(row.data_source_class),
+    baseline_evidence_ref: cleanString(row.baseline_evidence_ref),
+    holdout_evidence_ref: cleanString(row.holdout_evidence_ref),
+    next_review_at: cleanString(row.next_review_at),
+    status: cleanString(row.status),
+    validation_status: cleanString(row.validation_status),
+    validation_errors: parseJson(row.validation_errors_json || "[]", []),
+    validation_checks: parseJson(row.validation_checks_json || "[]", []),
+    deleted_at: cleanString(row.deleted_at),
+    created_by_actor_id: cleanId(row.created_by_actor_id),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    qr_scan_is_measured_response_only: true,
+    no_roi_fabrication: true,
+    no_content_manifest_creation: true,
+    no_publish: true,
+    no_player_device_mutation: true
+  };
+  if (options.includeQrBindings) {
+    const includeDeleted = options.includeDeletedQrBindings ? 1 : 0;
+    binding.qr_bindings = db.prepare(`
+      SELECT * FROM studio_qr_bindings
+      WHERE measurement_binding_id = ?
+        AND (? = 1 OR status != 'deleted')
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 100
+    `).all(binding.measurement_binding_id, includeDeleted).map(publicStudioQrBinding);
+  }
+  return binding;
+}
+
+function publicStudioQrBinding(row) {
+  return {
+    schema_version: "studio-qr-binding/d1",
+    binding_version: QR_BINDING_VERSION,
+    qr_binding_id: cleanId(row.qr_binding_id),
+    qr_link_id: cleanId(row.qr_link_id),
+    qr_token: cleanId(row.qr_token),
+    measurement_binding_id: cleanId(row.measurement_binding_id),
+    tenant_id: cleanId(row.tenant_id),
+    store_id: cleanId(row.store_id),
+    screen_group_id: cleanId(row.screen_group_id),
+    campaign_project_id: cleanId(row.campaign_project_id),
+    campaign_project_revision: asInteger(row.campaign_project_revision) || 1,
+    campaign_project_scene_id: cleanId(row.campaign_project_scene_id),
+    creative_id: cleanId(row.creative_id),
+    campaign_id: cleanId(row.campaign_id),
+    media_campaign_id: cleanId(row.media_campaign_id),
+    ad_slot_id: cleanId(row.ad_slot_id),
+    target_url: cleanString(row.target_url),
+    status: cleanString(row.status),
+    attribution_claim: cleanString(row.attribution_claim || "measured_response_only"),
+    expires_at: cleanString(row.expires_at),
+    created_by_actor_id: cleanId(row.created_by_actor_id),
+    deleted_at: cleanString(row.deleted_at),
+    created_at: cleanString(row.created_at),
+    updated_at: cleanString(row.updated_at),
+    qr_scan_is_measured_response_only: true,
+    no_roi_fabrication: true,
+    no_content_manifest_creation: true,
+    no_publish: true
+  };
+}
+
+function normalizeStudioD1MeasurementBinding(input, defaults) {
+  try {
+    return normalizeMeasurementBindingInput(input, defaults);
+  } catch (error) {
+    throw requestError(error.message || "Studio measurement binding input is invalid", 400);
+  }
+}
+
+function normalizeStudioD1QrBinding(input, defaults) {
+  try {
+    return normalizeQrBindingInput(input, defaults);
+  } catch (error) {
+    throw requestError(error.message || "Studio QR binding input is invalid", 400);
+  }
+}
+
+function assertStudioD1RouteBoundary(input = {}) {
+  try {
+    assertStudioD1InputBoundary(input);
+  } catch (error) {
+    throw requestError(error.message || "Studio Execution D1 input is out of scope", 400);
+  }
+}
+
+function assertNoStudioD1HardBlockers(validation) {
+  const hardCodes = new Set(["incremental_requires_baseline_or_holdout", "measured_source_mismatch"]);
+  const hardError = validation.errors.find((error) => hardCodes.has(error.code));
+  if (hardError) {
+    throw requestError(`${hardError.field}: ${hardError.message}`, 400);
+  }
+}
+
+function resolveStudioD1Scene(projectRow, input = {}) {
+  const sceneId = cleanId(input.campaign_project_scene_id || input.campaignProjectSceneId || input.scene_id || input.sceneId);
+  if (!sceneId) return null;
+  const sceneRow = getCampaignProjectSceneRow(sceneId);
+  if (!sceneRow || sceneRow.status === "deleted") throw requestError("Campaign project scene not found", 404);
+  if (cleanId(sceneRow.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+    throw requestError("Campaign project scene is outside project scope", 403);
+  }
+  collectScopeMismatchErrorsOrThrow(projectRow, sceneRow, "Campaign project scene");
+  return sceneRow;
+}
+
+function resolveStudioD1RenderManifest(projectRow, input = {}) {
+  const renderManifestId = cleanId(input.render_manifest_id || input.renderManifestId);
+  if (!renderManifestId) return null;
+  const row = getStudioRenderManifestRow(renderManifestId);
+  if (!row || row.status === "deleted") throw requestError("Studio render manifest not found", 404);
+  if (cleanId(row.campaign_project_id) !== cleanId(projectRow.campaign_project_id)) {
+    throw requestError("Studio render manifest is outside project scope", 403);
+  }
+  collectScopeMismatchErrorsOrThrow(projectRow, row, "Studio render manifest");
+  return row;
+}
+
+function defaultMeasurementBindingFields(projectRow, sceneRow = null, renderManifestRow = null, input = {}) {
+  const successMetrics = parseJson(projectRow.success_metrics_json || "[]", []);
+  const measurementGoal = cleanString(input.measurement_goal || input.measurementGoal) ||
+    cleanString(successMetrics[0]) ||
+    "qr_scan_count";
+  const sceneId = cleanId(sceneRow?.campaign_project_scene_id);
+  const projectId = cleanId(projectRow.campaign_project_id);
+  return {
+    tenant_id: cleanId(projectRow.tenant_id),
+    store_id: cleanId(projectRow.store_id),
+    screen_group_id: cleanId(projectRow.screen_group_id),
+    campaign_project_id: projectId,
+    campaign_project_revision: 1,
+    campaign_project_scene_id: sceneId,
+    render_manifest_id: cleanId(renderManifestRow?.render_manifest_id),
+    content_layer: cleanString(input.content_layer || input.contentLayer || projectRow.content_layer) || "campaign_refresh",
+    item_type: cleanString(input.item_type || input.itemType || projectRow.item_type) || "content",
+    measurement_goal: measurementGoal,
+    expected_action: cleanString(input.expected_action || input.expectedAction) || expectedActionFromCta(sceneRow?.cta_text || projectRow.cta),
+    campaign_id: cleanId(input.campaign_id || input.campaignId || projectRow.campaign_id),
+    media_campaign_id: cleanId(input.media_campaign_id || input.mediaCampaignId || projectRow.media_campaign_id),
+    creative_id: cleanId(input.creative_id || input.creativeId || sceneRow?.creative_id) || cleanId(`creative-${sceneId || projectId}`),
+    ad_slot_id: cleanId(input.ad_slot_id || input.adSlotId || projectRow.ad_slot_id),
+    qr_link_id: cleanId(input.qr_link_id || input.qrLinkId || sceneRow?.qr_link_id || projectRow.qr_link_id),
+    duration_class: cleanString(input.duration_class || input.durationClass || sceneRow?.duration_class) || durationClassForSeconds(sceneRow?.duration_seconds),
+    measurement_label: cleanString(input.measurement_label || input.measurementLabel) || "measured",
+    data_source_class: cleanString(input.data_source_class || input.dataSourceClass) || "misell_qr",
+    status: "draft"
+  };
+}
+
+function expectedActionFromCta(ctaText) {
+  const text = cleanString(ctaText);
+  return /qr/i.test(text) || /QR/.test(text) ? "qr_scan" : "awareness";
+}
+
+function durationClassForSeconds(seconds) {
+  const value = asInteger(seconds) || 0;
+  if (value <= 3) return "glance_3s";
+  if (value <= 7) return "visual_5_7s";
+  if (value <= 10) return "text_7_10s";
+  if (value <= 15) return "standard_8_15s";
+  return "detail_15_20s";
+}
+
+function applyStudioMeasurementFields(binding, updatedAt = nowIso()) {
+  const values = [
+    cleanString(binding.content_layer),
+    cleanString(binding.item_type),
+    cleanString(binding.measurement_goal),
+    cleanString(binding.expected_action),
+    cleanId(binding.campaign_id),
+    cleanId(binding.media_campaign_id),
+    cleanId(binding.creative_id),
+    cleanId(binding.ad_slot_id),
+    cleanId(binding.qr_link_id),
+    cleanString(binding.duration_class),
+    cleanId(binding.variation_group),
+    cleanString(binding.improvement_reason),
+    cleanId(binding.previous_scene_id),
+    cleanString(binding.measurement_label),
+    cleanString(binding.data_source_class),
+    cleanString(binding.next_review_at),
+    updatedAt
+  ];
+  if (cleanId(binding.campaign_project_scene_id)) {
+    db.prepare(`
+      UPDATE campaign_project_scenes SET
+        content_layer = ?,
+        item_type = ?,
+        measurement_goal = ?,
+        expected_action = ?,
+        campaign_id = ?,
+        media_campaign_id = ?,
+        creative_id = ?,
+        ad_slot_id = ?,
+        qr_link_id = ?,
+        duration_class = ?,
+        variation_group = ?,
+        improvement_reason = ?,
+        previous_scene_id = ?,
+        measurement_label = ?,
+        data_source_class = ?,
+        next_review_at = ?,
+        updated_at = ?
+      WHERE campaign_project_scene_id = ?
+    `).run(...values, cleanId(binding.campaign_project_scene_id));
+    return;
+  }
+  db.prepare(`
+    UPDATE campaign_projects SET
+      content_layer = ?,
+      item_type = ?,
+      measurement_goal = ?,
+      expected_action = ?,
+      campaign_id = ?,
+      media_campaign_id = ?,
+      creative_id = ?,
+      ad_slot_id = ?,
+      qr_link_id = ?,
+      duration_class = ?,
+      variation_group = ?,
+      improvement_reason = ?,
+      previous_scene_id = ?,
+      measurement_label = ?,
+      data_source_class = ?,
+      next_review_at = ?,
+      updated_at = ?
+    WHERE campaign_project_id = ?
+  `).run(...values, cleanId(binding.campaign_project_id));
+}
+
+function assertStudioD1RowScope(input = {}, row = {}, label = "Record") {
+  const scope = normalizeCampaignProjectScopeQuery(input || {});
+  if (scope.tenant_id && scope.tenant_id !== cleanId(row.tenant_id)) throw requestError(`${label} is outside tenant scope`, 403);
+  if (scope.store_id && scope.store_id !== cleanId(row.store_id)) throw requestError(`${label} is outside store scope`, 403);
+  if (scope.screen_group_id && scope.screen_group_id !== cleanId(row.screen_group_id)) throw requestError(`${label} is outside screen group scope`, 403);
 }
 
 function listStudioRenderQaResults(renderManifestId) {

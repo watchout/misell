@@ -1,0 +1,84 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-213-measurement-fields-qr-binding.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING.yaml
+  cell_id: CELL-MISELL-213-MEASUREMENT-FIELDS-QR-BINDING
+  pr: watchout/misell#TBD
+items:
+  - item_id: D1-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden path is touched.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: D1-AUDIT-002
+    source: schema
+    verification_method: executable
+    required: true
+    prompt: Verify the schema changes are additive and include studio_measurement_bindings, studio_qr_bindings, CampaignProject/Scene optional measurement fields, and qr_links/qr_scans reverse lookup columns.
+    expected_evidence:
+      - db_migration_dry_run
+      - schema_review
+  - item_id: D1-AUDIT-003
+    source: contract
+    verification_method: semantic
+    required: true
+    prompt: Verify deterministic contract helpers enforce measurement_label/data_source_class guardrails and reject out-of-scope publish/provider/billing/device/ROI inputs.
+    expected_evidence:
+      - code_review
+      - smoke_result
+  - item_id: D1-AUDIT-004
+    source: api
+    verification_method: semantic
+    required: true
+    prompt: Verify Admin/operator APIs are authenticated and limited to create/list/get/validate/soft-delete measurement bindings plus QR binding evidence.
+    expected_evidence:
+      - code_review
+  - item_id: D1-AUDIT-005
+    source: scope_isolation
+    verification_method: executable
+    required: true
+    prompt: Verify tenant/store/screen_group scope mismatches are rejected for D1 APIs.
+    expected_evidence:
+      - smoke_result
+  - item_id: D1-AUDIT-006
+    source: label_guard
+    verification_method: executable
+    required: true
+    prompt: Verify incremental without baseline/holdout evidence is blocked and measured values cannot use advertiser_reported/external_estimate/baseline_model data sources.
+    expected_evidence:
+      - smoke_result
+  - item_id: D1-AUDIT-007
+    source: qr_reverse_lookup
+    verification_method: executable
+    required: true
+    prompt: Verify QR scan evidence preserves reverse lookup to project/scene/creative/campaign/ad slot and attribution_claim remains measured_response_only.
+    expected_evidence:
+      - smoke_result
+      - code_review
+  - item_id: D1-AUDIT-008
+    source: non_scope
+    verification_method: executable
+    required: true
+    prompt: Verify D1 creates no content_manifest, publish_history, device command, Player/device mutation, provider call, or credit ledger mutation.
+    expected_evidence:
+      - smoke_result
+      - code_review
+  - item_id: D1-AUDIT-009
+    source: soft_delete
+    verification_method: executable
+    required: true
+    prompt: Verify measurement/QR binding deletion is soft-delete and active QR links are revoked when their binding is deleted.
+    expected_evidence:
+      - smoke_result
+  - item_id: D1-AUDIT-010
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

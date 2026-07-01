@@ -313,6 +313,37 @@ not create active `content_manifest` rows, activate content, mutate schedules,
 publish, mutate Player/device state, call providers, or consume credits. The
 smoke target is `npm --prefix apps/cloud run smoke:studio-publish-preflight`.
 
+Studio Execution D1 adds the measurement-binding and QR reverse-lookup
+foundation. It records optional measurement fields for CampaignProject/Scene
+drafts and creates `studio_measurement_bindings` / `studio_qr_bindings` evidence
+that can connect a QR scan back to tenant, store, screen group, project, scene,
+creative, campaign, and ad slot.
+
+D1 preserves the docs/98 measurement boundary:
+
+- `measured` is allowed only for Misell rails such as playlog, QR, coupon, or
+  counter order evidence.
+- `estimated` remains visibly labeled and must not be called measured.
+- `incremental` is blocked unless accepted baseline or holdout evidence exists.
+- QR scan is response evidence only. It is not a sale, visit, ROI, ROAS, lift,
+  guarantee, or incremental attribution by itself.
+
+D1 Admin-only endpoints:
+
+- `GET /api/admin/campaign-projects/:id/measurement-bindings`
+- `POST /api/admin/campaign-projects/:id/measurement-bindings`
+- `GET /api/admin/studio-measurement-bindings/:measurement_binding_id`
+- `POST /api/admin/studio-measurement-bindings/:measurement_binding_id/validate`
+- `DELETE /api/admin/studio-measurement-bindings/:measurement_binding_id`
+- `GET /api/admin/studio-measurement-bindings/:measurement_binding_id/qr-bindings`
+- `POST /api/admin/studio-measurement-bindings/:measurement_binding_id/qr-bindings`
+
+D1 does not add advertiser-facing reports, customer/public controls, ROI/ROAS
+claims, external AI/provider calls, media generation, billing/credits,
+`content_manifest` creation, publish, schedule activation, or Player/device
+mutation. The smoke target is
+`npm --prefix apps/cloud run smoke:studio-measurement-binding`.
+
 Scene Editor partial regeneration requests are also event-only stubs. Operators
 can request `scene_regeneration`, `copy_regeneration`, or
 `qr_cta_regeneration` for a non-deleted scene, and Cloud records a
