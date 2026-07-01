@@ -1,0 +1,102 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Incremental ROI holdout contract
+cell_type: docs_contract
+risk_class: R2
+owner:
+  role: repo_owner
+  actor: watchout
+goal: Define the protected implementation contract for future baseline/holdout incremental ROI work without enabling runtime incremental claims, advertiser guarantees, billing, external reporting access, or data integrations.
+scope:
+  - Add a machine-readable Shirube Cell for incremental ROI holdout readiness.
+  - Add a control handoff that freezes non-scope, protected stop conditions, and required future approvals.
+  - Add an audit checklist for this contract slice.
+  - Make clear that this PR does not implement runtime holdout assignment, incremental reporting, ROI/ROAS/lift claims, billing, POS/camera/ad-network integration, or advertiser self-service.
+non_scope:
+  - runtime holdout assignment, experiment randomization, or traffic splitting
+  - DB migration, persistent baseline/holdout tables, or report snapshot schema change
+  - Cloud API route, Admin UI, customer UI, advertiser UI, Player behavior, or device behavior change
+  - external advertiser/agency access, public links, signed URLs, report sharing, or self-service portals
+  - ROI, ROAS, lift, guarantee, purchase, visit, conversion-value, attributed-sales, or incremental claim activation
+  - pricing, billing, credit, settlement, contract revenue, ad revenue booking, or payout logic
+  - POS, camera, biometric, sensitive profiling, inventory, weather, CRM, tracking tag, ad network, external AI, or MCP provider integration
+  - content_manifest creation, publish, schedule activation, rollback, or Player/device mutation
+  - legal advice, final legal sign-off, privacy sign-off, or regulated-industry approval
+inputs:
+  - https://github.com/watchout/misell/issues/197
+  - docs/98_AD_OPERATION_ROI_STORY_AND_MEASUREMENT_CONCEPTS.md
+  - docs/99_AD_LEGAL_PRIVACY_GATE_SPEC.md
+outputs:
+  - .shirube/cells/CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-incremental-roi-holdout.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-INCREMENTAL-ROI-HOLDOUT.yaml
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-incremental-roi-holdout.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-INCREMENTAL-ROI-HOLDOUT.yaml
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - apps/**
+  - tests/**
+  - docs/**
+  - package.json
+  - package-lock.json
+protected_surfaces:
+  - reporting_claim_contract
+  - legal_privacy_gate
+  - future_runtime_boundary
+stop_conditions:
+  - implementation needs runtime code, DB migration, API route, UI, Player/device behavior, report snapshot schema, or tests outside Shirube contract files
+  - implementation needs actual holdout assignment, experiment randomization, baseline calculation, lift calculation, attribution model, or incremental report output
+  - implementation displays or exports ROI, ROAS, lift, guaranteed outcome, attributed sales, POS-settled sales, purchase, visit, or incremental claims
+  - implementation treats QR scans, playlogs, coupon/order issuance, or Misell counter-order value as incremental effect without approved baseline/holdout evidence
+  - implementation needs advertiser/customer/public access, share links, signed URLs, external reporting portal, billing, pricing, settlement, or ad revenue recognition
+  - implementation needs POS, camera, biometric, sensitive profiling, inventory, weather, CRM, tracking tag, ad network, external AI, or MCP provider integration
+  - legal/privacy/ad-review sign-off, regulated-industry approval, or claim wording approval is needed
+  - changed file outside allowed_paths
+  - forbidden path touched
+  - missing exact head evidence
+  - missing structured audit PASS/PASS_WITH_WARN for exact head
+  - owner decision missing before merge
+future_runtime_gate:
+  required_before_runtime:
+    - CTO/security approval
+    - legal/privacy/ad-review approval
+    - owner exact-head decision
+    - explicit baseline/holdout design with scope, period, population, exclusion rules, and data source labels
+    - wording review for any incremental, lift, ROI, ROAS, or performance claim
+  minimum_runtime_contract:
+    - all reported values must carry measurement_label: measured, estimated, or incremental
+    - incremental is forbidden unless baseline_evidence_ref or holdout_evidence_ref is accepted and auditable
+    - QR scans and playlogs are response/delivery evidence, not incremental effect by themselves
+    - POS/camera/ad-network/external data are separate protected integrations
+acceptance_criteria:
+  - Cell contract exists and is discoverable at the #197 next-cell ID.
+  - Active control handoff points to CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT.
+  - Handoff states that this slice is contract-only and must not change runtime, DB, API, UI, Player, workflow, package, docs, tests, deploy, or secrets.
+  - Handoff records CTO/security and legal/privacy/ad-review approval as required before any runtime incremental ROI work.
+  - Handoff blocks baseline/holdout-free incremental claims, ROI/ROAS/lift guarantees, and treating QR/playlog/order rail signals as incremental effect by themselves.
+  - Audit checklist asks for allowed-path, non-runtime, gate, claim-boundary, and validation verification.
+  - No runtime, app, docs, package, workflow, deploy, secret, branch-protection, or ruleset file is changed.
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for active handoff, cell, handoff, and checklist
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT-RUNTIME-FIRST-SLICE
+  - CELL-MISELL-197-MEDIA-KIT-REFRESH

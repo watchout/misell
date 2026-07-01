@@ -29,8 +29,9 @@ rps_scope:
     - full operational PR evidence for this Cell
     - diff scope and handoff consistency checks
     - checklist-driven audit request evidence
+    - explicit protected stop before future runtime incremental ROI work
   shirube_does_not_own:
-    - legal advice or final legal sign-off
+    - legal advice or final legal/privacy/ad-review sign-off
     - production deployment or runtime operations
     - branch protection or required-check mutation
     - actual experiment design approval
