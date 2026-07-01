@@ -1,0 +1,62 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-SURFACE
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-advertiser-report-surface.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-SURFACE.yaml
+  cell_id: CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+  pr: watchout/misell#TBD
+items:
+  - item_id: ARS-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden path is touched.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: ARS-AUDIT-002
+    source: ui_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify the change is an internal admin UI read surface only and does not add server routes, DB migration, workflow, package, deploy, Player, secret, or public advertiser/customer files.
+    expected_evidence:
+      - changed_files
+      - code_review
+  - item_id: ARS-AUDIT-003
+    source: read_only_api_use
+    verification_method: semantic
+    required: true
+    prompt: Verify the panel only reads existing proof-of-play and advertiser-preview APIs and adds no mutation controls.
+    expected_evidence:
+      - code_review
+      - e2e_result
+  - item_id: ARS-AUDIT-004
+    source: measurement_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify displayed signals remain measured rail evidence, QR is response-only, and no ROI/ROAS/lift/guarantee/incremental attribution claim is introduced.
+    expected_evidence:
+      - code_review
+      - e2e_result
+  - item_id: ARS-AUDIT-005
+    source: empty_state
+    verification_method: semantic
+    required: true
+    prompt: Verify missing campaign_id is handled as a non-error measurement-not-connected state.
+    expected_evidence:
+      - code_review
+  - item_id: ARS-AUDIT-006
+    source: e2e
+    verification_method: executable
+    required: true
+    prompt: Verify E2E seeds existing D1/D3 evidence and sees the CampaignProject editor report surface without mutation buttons.
+    expected_evidence:
+      - e2e_result
+  - item_id: ARS-AUDIT-007
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha

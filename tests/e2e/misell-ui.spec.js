@@ -4,6 +4,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "../..");
+const Database = require(path.join(repoRoot, "apps/cloud/node_modules/better-sqlite3"));
 const outputDir = path.resolve(process.env.MISELL_E2E_OUTPUT_DIR || path.join(repoRoot, "test-results/e2e/misell-ui"));
 const screenshotsDir = path.join(outputDir, "screenshots");
 const artifactsDir = path.join(outputDir, "artifacts");
@@ -240,6 +241,31 @@ async function authedRequest(baseUrl, endpoint, options = {}) {
     json = null;
   }
   return { ok: res.ok, status: res.status, text, json };
+}
+
+function seedCampaignFixture(campaignId, storeId) {
+  const handle = new Database(path.join(cloudDataDir, "misell-cloud.sqlite"));
+  try {
+    const now = "2026-07-01T00:00:00.000Z";
+    handle.prepare(`
+      INSERT OR REPLACE INTO campaigns (
+        campaign_id, advertiser_id, campaign_name, status, start_date, end_date,
+        target_store_ids_json, target_time_slots_json, priority, qr_url, notes,
+        created_at, updated_at
+      ) VALUES (?, NULL, ?, 'active', ?, ?, ?, '[]', 0, '', ?, ?, ?)
+    `).run(
+      campaignId,
+      `Browser ad report ${campaignId}`,
+      "2026-07-01",
+      "2026-07-31",
+      JSON.stringify([storeId]),
+      "Browser UI advertiser report fixture",
+      now,
+      now
+    );
+  } finally {
+    handle.close();
+  }
 }
 
 async function runCommand(command, args = [], options = {}) {
@@ -761,6 +787,59 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   const renderManifest = renderManifestResponse.json.studio_render_manifest;
   expect(renderManifest.qa_status).toBe("passed");
   expect(renderManifest.output_sha256).toBeTruthy();
+  const measuredScene = campaignProjectDetail.json.campaign_project.scenes[0];
+  seedCampaignFixture("cmp-browser-ad-report", "STO-BROWSER");
+  const measurementResponse = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}/measurement-bindings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      screen_group_id: "SG-BROWSER",
+      campaign_project_scene_id: measuredScene.campaign_project_scene_id,
+      render_manifest_id: renderManifest.render_manifest_id,
+      content_layer: "campaign_refresh",
+      item_type: "sponsor",
+      measurement_goal: "qr_scan_count",
+      expected_action: "qr_scan",
+      campaign_id: "cmp-browser-ad-report",
+      media_campaign_id: "media-browser-ad-report",
+      creative_id: "creative-browser-ad-report",
+      ad_slot_id: "slot-browser-ad-report",
+      variation_group: "vg-browser-ad-report",
+      improvement_reason: "Browser UI advertiser report proof",
+      measurement_label: "measured",
+      data_source_class: "misell_qr"
+    })
+  });
+  expect(measurementResponse.status, measurementResponse.text).toBe(201);
+  const measurementBinding = measurementResponse.json.studio_measurement_binding;
+  const qrBindingResponse = await authedRequest(cloudBase, `/api/admin/studio-measurement-bindings/${measurementBinding.measurement_binding_id}/qr-bindings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      screen_group_id: "SG-BROWSER",
+      target_url: "https://example.invalid/browser-ad-report",
+      status: "active",
+      expires_at: "2099-12-31T00:00:00.000Z"
+    })
+  });
+  expect(qrBindingResponse.status, qrBindingResponse.text).toBe(201);
+  const qrBinding = qrBindingResponse.json.studio_qr_binding;
+  const qrScanResponse = await fetch(`${cloudBase}/q/${encodeURIComponent(qrBinding.qr_token)}?visit_id=VISIT-BROWSER-AD-REPORT`, { redirect: "manual" });
+  expect([302, 303, 307, 308]).toContain(qrScanResponse.status);
+  const proofRebuild = await authedRequest(cloudBase, `/api/admin/campaign-projects/${campaignProjectId}/proof-of-play-bindings/rebuild`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant_id: "TEN-BROWSER",
+      store_id: "STO-BROWSER",
+      screen_group_id: "SG-BROWSER"
+    })
+  });
+  expect(proofRebuild.status, proofRebuild.text).toBe(200);
   const campaignPreviewPromise = context.waitForEvent("page");
   await page.locator(`[data-campaign-project-preview="${campaignProjectId}"]`).click();
   const campaignPreview = await campaignPreviewPromise;
@@ -837,6 +916,15 @@ test("cloud admin UI renders dashboard and supports operational forms", async ({
   await expect(providerStatusPanel).toContainText("asset provenanceはまだありません");
   await expect(providerStatusPanel.locator("button")).toHaveCount(0);
   await expect(providerStatusPanel.locator("[data-provider-mutation-control]")).toHaveCount(0);
+  const advertiserReportPanel = campaignEditor.locator(".campaign-editor-ad-report-surface");
+  await expect(advertiserReportPanel).toContainText("広告レポート内部プレビュー", { timeout: 5000 });
+  await expect(advertiserReportPanel).toContainText("read-only");
+  await expect(advertiserReportPanel).toContainText("internal admin only");
+  await expect(advertiserReportPanel).toContainText("cmp-browser-ad-report");
+  await expect(advertiserReportPanel).toContainText("QR Response");
+  await expect(advertiserReportPanel).toContainText("measured_response_only");
+  await expect(advertiserReportPanel).toContainText("ROAS・増分効果は未表示");
+  await expect(advertiserReportPanel.locator("button")).toHaveCount(0);
   const preflightPanel = campaignEditor.locator(".campaign-editor-publish-preflight");
   await expect(preflightPanel).toContainText("公開前 dry-run", { timeout: 5000 });
   await expect(preflightPanel).toContainText("公開・schedule有効化・Player/端末更新は行いません");

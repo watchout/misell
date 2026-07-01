@@ -13,6 +13,10 @@
     providers: [],
     generationJobs: [],
     assetProvenance: [],
+    proofOfPlayBindings: [],
+    proofOfPlayError: "",
+    advertiserReport: null,
+    advertiserReportError: "",
     cutPlans: [],
     renderManifestsByCutPlanId: {},
     selectedSceneId: "",
@@ -47,10 +51,15 @@
     ]);
     state.generationJobs = jobsResponse.ai_generation_jobs || [];
     state.assetProvenance = provenanceResponse.asset_provenance || [];
-    const [publishPreflightDetail, renderManifestsByCutPlanId] = await Promise.all([
+    const [measurementEvidence, publishPreflightDetail, renderManifestsByCutPlanId] = await Promise.all([
+      loadMeasurementEvidence(state.project),
       loadLatestPublishPreflightDetail(state.publishPreflights),
       loadRenderManifests(state.cutPlans)
     ]);
+    state.proofOfPlayBindings = measurementEvidence.proofOfPlayBindings;
+    state.proofOfPlayError = measurementEvidence.proofOfPlayError;
+    state.advertiserReport = measurementEvidence.advertiserReport;
+    state.advertiserReportError = measurementEvidence.advertiserReportError;
     state.publishPreflightDetail = publishPreflightDetail;
     state.renderManifestsByCutPlanId = renderManifestsByCutPlanId;
     const scenes = activeScenes(state.project);
@@ -109,6 +118,10 @@
         ${(project.events || []).slice(0, 8).map(renderEvent).join("") || `<p class="empty">履歴なし</p>`}
       </section>
       ${renderProviderStatusPanel(project, state.providers, state.generationJobs, state.assetProvenance)}
+      ${renderAdvertiserReportSurface(project, state.proofOfPlayBindings, state.advertiserReport, {
+        proofOfPlayError: state.proofOfPlayError,
+        advertiserReportError: state.advertiserReportError
+      })}
       ${renderHandoffDraft(state.handoffDraft)}
       ${renderScheduleHandoffDraft(state.scheduleHandoffDraft)}
       ${renderCutPlanPanel(project, state.cutPlans, state.renderManifestsByCutPlanId)}
@@ -167,6 +180,27 @@
       return [cutPlanId, response.studio_render_manifests || []];
     }));
     return Object.fromEntries(entries.filter(([cutPlanId]) => cutPlanId));
+  }
+
+  async function loadMeasurementEvidence(project) {
+    const projectId = project?.campaign_project_id || "";
+    if (!projectId) {
+      return { proofOfPlayBindings: [], proofOfPlayError: "", advertiserReport: null, advertiserReportError: "" };
+    }
+    const proofUrl = `/api/admin/campaign-projects/${encodeURIComponent(projectId)}/proof-of-play-bindings?${projectScopeQuery(project)}`;
+    const proofResponse = await fetchJson(proofUrl).then((response) => ({ response })).catch((error) => ({ error }));
+    const proofRows = proofResponse.response?.studio_proof_of_play_bindings || [];
+    const evidenceForReport = proofRows.find((row) => row.campaign_id) || {};
+    const campaignId = project?.measurement?.campaign_id || evidenceForReport.campaign_id || "";
+    const advertiserResponse = campaignId
+      ? await fetchJson(`/api/admin/reports/advertiser-preview?${advertiserReportQuery(project, campaignId, evidenceForReport)}`).then((response) => ({ response })).catch((error) => ({ error }))
+      : { response: null };
+    return {
+      proofOfPlayBindings: proofRows,
+      proofOfPlayError: proofResponse.error?.message || "",
+      advertiserReport: advertiserResponse.response?.report || null,
+      advertiserReportError: advertiserResponse.error?.message || ""
+    };
   }
 
   function renderSceneButton(scene, selected) {
@@ -645,6 +679,72 @@
     `;
   }
 
+  function renderAdvertiserReportSurface(project, proofRows = [], report = null, errors = {}) {
+    const measurement = project?.measurement || {};
+    const firstEvidence = proofRows.find((row) => row.campaign_id) || {};
+    const campaignId = measurement.campaign_id || firstEvidence.campaign_id || "";
+    const playEvidenceCount = proofRows.filter((row) => row.evidence_label === "measured_play_evidence").length;
+    const responseEvidenceCount = proofRows.filter((row) => row.evidence_label === "measured_response_only").length;
+    const proof = report?.proof_of_play || {};
+    const response = report?.response || {};
+    const conversion = report?.conversion || {};
+    const unavailable = !campaignId;
+    return `
+      <section class="campaign-editor-handoff campaign-editor-ad-report-surface" aria-label="Internal advertiser report preview" data-advertiser-report-surface>
+        <div class="campaign-editor-handoff-head">
+          <div>
+            <h2>広告レポート内部プレビュー</h2>
+            <small>D1/D3の測定証跡を読むだけのoperator向け確認です。外部広告主公開、請求、保証、publishは行いません。</small>
+          </div>
+          <span class="update-status update-status-${escapeAttr(report ? "success" : "pending")}">${report ? "計測表示" : "接続待ち"}</span>
+        </div>
+        <div class="campaign-editor-guard-flags" aria-label="Advertiser report surface guard flags">
+          <small>read-only</small>
+          <small>internal admin only</small>
+          <small>no_external_advertiser_access</small>
+          <small>no_roi_guarantee</small>
+          <small>no_publish</small>
+        </div>
+        <div class="campaign-editor-ad-report-grid">
+          <article>
+            <strong>Scope</strong>
+            <small>tenant: ${escapeHtml(project.tenant_id || "")}</small>
+            <small>store: ${escapeHtml(project.store_id || "")}</small>
+            <small>screen group: ${escapeHtml(project.screen_group_id || "")}</small>
+            <small>campaign: ${escapeHtml(campaignId || "未接続")}</small>
+          </article>
+          <article>
+            <strong>Proof of Play</strong>
+            <b>${escapeHtml(String(proof.play_started_count || 0))}</b>
+            <small>started / ${escapeHtml(proof.measurement_label || "measured")}</small>
+            <small>D3 play rows: ${escapeHtml(String(playEvidenceCount))}</small>
+          </article>
+          <article>
+            <strong>QR Response</strong>
+            <b>${escapeHtml(String(response.qr_scan_count || 0))}</b>
+            <small>scans / ${escapeHtml(response.measurement_label || "measured_response_only")}</small>
+            <small>D3 response rows: ${escapeHtml(String(responseEvidenceCount))}</small>
+          </article>
+          <article>
+            <strong>Order Evidence</strong>
+            <b>${escapeHtml(String(conversion.counter_orders_issued_count || 0))}</b>
+            <small>issued / ${escapeHtml(conversion.measurement_label || "measured")}</small>
+            <small>ROAS・増分効果は未表示</small>
+          </article>
+        </div>
+        ${unavailable ? `<p class="empty">D1 measurement の campaign_id が未設定です。測定接続後に内部レポートが表示されます。</p>` : ""}
+        ${errors.proofOfPlayError ? `<p class="empty">proof-of-play 読み込み失敗: ${escapeHtml(errors.proofOfPlayError)}</p>` : ""}
+        ${errors.advertiserReportError ? `<p class="empty">advertiser preview 読み込み失敗: ${escapeHtml(errors.advertiserReportError)}</p>` : ""}
+        ${proofRows.length ? `
+          <div class="campaign-editor-proof-list">
+            ${proofRows.slice(0, 6).map(renderProofOfPlayRow).join("")}
+          </div>
+        ` : `<p class="empty">proof-of-play binding はまだありません。</p>`}
+        <p class="campaign-editor-provider-note">QR反応は measured response evidence です。売上・来店・ROI・ROAS・lift・保証として扱いません。</p>
+      </section>
+    `;
+  }
+
   function renderPublishPreflightPanel(project, preflights, detail) {
     const rows = Array.isArray(preflights) ? preflights : [];
     const latest = detail || rows[0] || null;
@@ -868,6 +968,20 @@
     `;
   }
 
+  function renderProofOfPlayRow(row) {
+    return `
+      <article class="campaign-editor-proof-item">
+        <div>
+          <strong>${escapeHtml(row.evidence_label || "")}</strong>
+          <small>${escapeHtml(row.source_system || "")} / ${escapeHtml(row.source_event_id || "")}</small>
+        </div>
+        <span class="update-status update-status-${escapeAttr(statusClass(row.validation_status))}">${escapeHtml(row.validation_status || "")}</span>
+        <small>${escapeHtml(row.creative_id || "")} / ${escapeHtml(row.ad_slot_id || "")} / ${escapeHtml(row.qr_link_id || "")}</small>
+        <small>${escapeHtml(row.source_event_at || "")}</small>
+      </article>
+    `;
+  }
+
   function renderGuardFlags(entry) {
     const flags = [
       ["no_external_ai", "外部AIなし"],
@@ -1054,6 +1168,31 @@
       if (value) params.set(key, value);
     }
     params.set("limit", "50");
+    return params.toString();
+  }
+
+  function projectScopeQuery(project) {
+    const params = new URLSearchParams();
+    for (const key of ["tenant_id", "store_id", "screen_group_id"]) {
+      const value = project?.[key];
+      if (value) params.set(key, value);
+    }
+    return params.toString();
+  }
+
+  function advertiserReportQuery(project, campaignId = "", evidence = {}) {
+    const params = new URLSearchParams();
+    const measurement = project?.measurement || {};
+    params.set("tenant_id", project?.tenant_id || "");
+    params.set("campaign_id", campaignId || measurement.campaign_id || evidence.campaign_id || "");
+    for (const key of ["store_id", "screen_group_id"]) {
+      const value = project?.[key];
+      if (value) params.set(key, value);
+    }
+    for (const key of ["ad_slot_id", "creative_id", "qr_link_id"]) {
+      const value = measurement[key] || evidence[key];
+      if (value) params.set(key, value);
+    }
     return params.toString();
   }
 

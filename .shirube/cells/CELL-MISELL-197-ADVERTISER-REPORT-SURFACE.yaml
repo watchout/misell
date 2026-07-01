@@ -1,0 +1,80 @@
+schema_version: shirube-cell/v1
+cell_id: CELL-MISELL-197-ADVERTISER-REPORT-SURFACE
+parent_ssot: https://github.com/watchout/misell/issues/197
+title: Advertiser report internal UI surface
+cell_type: ui_foundation
+risk_class: R2
+status: implementation
+summary: >
+  Add a read-only internal admin UI surface that connects CampaignProject editor
+  screens to the existing advertiser preview report API and D3 proof-of-play
+  bindings. This cell only displays measured Misell rail evidence for operators;
+  it does not create advertiser/customer access, billing, ROI/ROAS/lift claims,
+  content manifests, publish, or device/player mutations.
+
+scope:
+  - Show an internal advertiser report preview panel in the CampaignProject editor.
+  - Read existing D1/D3 scope, proof-of-play bindings, and advertiser-preview metrics.
+  - Display measured proof-of-play, QR response, and order evidence counts.
+  - Display guardrail text that QR response is measured response evidence only.
+  - Preserve no external advertiser access, no publish, no billing, and no ROI guarantee boundaries.
+  - E2E coverage proves the UI reads existing measurement evidence and has no mutation controls.
+non_scope:
+  - advertiser or agency login, role, self-service, public link, or external report access
+  - legal/privacy/ad-review runtime enforcement or regulated category support
+  - ROI, ROAS, lift, guarantee, purchase, visit, incremental, or conversion-value claims
+  - baseline/holdout attribution model
+  - CSV/PDF export, snapshot creation, billing, pricing, credit, or settlement
+  - DB migration, new persistent table, or new API route
+  - content_manifest creation, schedule activation, publish, rollback, or Player/device mutation
+  - provider integration, external AI, MCP runtime, media generation, camera/POS/external data ingestion, or ad network delivery
+
+allowed_paths:
+  - .shirube/control-handoff.yaml
+  - .shirube/cells/CELL-MISELL-197-ADVERTISER-REPORT-SURFACE.yaml
+  - .shirube/control-handoffs/CH-MISELL-197-advertiser-report-surface.yaml
+  - .shirube/audit-checklists/AUDIT-CHECKLIST-MISELL-197-ADVERTISER-REPORT-SURFACE.yaml
+  - apps/cloud/public/campaign-project-editor.js
+  - apps/cloud/public/style.css
+  - tests/e2e/misell-ui.spec.js
+forbidden_paths:
+  - .env
+  - .env.*
+  - secrets/**
+  - deploy/**
+  - '**/branch-protection/**'
+  - '**/ruleset/**'
+  - .github/workflows/**
+  - package.json
+  - package-lock.json
+  - apps/player/**
+  - apps/cloud/server.js
+  - apps/cloud/lib/**
+  - apps/cloud/scripts/**
+
+acceptance_criteria:
+  - CampaignProject editor includes an internal advertiser report preview panel.
+  - The panel reads existing CampaignProject proof-of-play binding API and advertiser-preview API only.
+  - The panel shows project scope, campaign_id, proof-of-play, QR response, and order evidence counts.
+  - The panel has no buttons or mutation controls.
+  - The panel explicitly states no external advertiser access, no ROI/ROAS/lift/guarantee claim, no billing, and no publish.
+  - Missing campaign_id is handled as a non-error "measurement not connected" state.
+  - E2E seeds existing D1/D3 evidence and verifies the internal UI surface displays measured response-only evidence.
+
+validation:
+  required_commands:
+    - git diff --check
+    - ruby YAML safe_load for cell/handoff/checklist
+    - npm --prefix apps/cloud run check
+    - npm run test:e2e
+    - npm run test:ci
+    - npm run shirube:smoke-full-operational
+  required_evidence:
+    - changed_files
+    - validation_commands
+    - exact_head_sha
+    - structured_audit
+    - owner_decision
+next_cells:
+  - CELL-MISELL-197-ADVERTISER-REPORT-SNAPSHOT
+  - CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT

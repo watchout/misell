@@ -1581,13 +1581,15 @@ td small {
 }
 
 .campaign-editor-cut-plan-list,
-.campaign-editor-render-manifest-list {
+.campaign-editor-render-manifest-list,
+.campaign-editor-proof-list {
   display: grid;
   gap: 10px;
 }
 
 .campaign-editor-cut-plan,
-.campaign-editor-render-manifest {
+.campaign-editor-render-manifest,
+.campaign-editor-proof-item {
   border: 1px solid #d8dee4;
   border-radius: 8px;
   display: grid;
@@ -1597,6 +1599,44 @@ td small {
 
 .campaign-editor-render-manifest {
   background: #f8fafc;
+}
+
+.campaign-editor-ad-report-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.campaign-editor-ad-report-grid article {
+  background: #f8fafc;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.campaign-editor-ad-report-grid b {
+  color: #0b3b60;
+  font-size: 26px;
+}
+
+.campaign-editor-proof-item {
+  align-items: center;
+  background: #ffffff;
+  grid-template-columns: minmax(180px, 1fr) auto minmax(160px, 1fr) minmax(120px, auto);
+}
+
+.campaign-editor-proof-item > div {
+  display: grid;
+  gap: 3px;
+}
+
+@media (max-width: 900px) {
+  .campaign-editor-proof-item {
+    align-items: start;
+    grid-template-columns: 1fr;
+  }
 }
 
 .campaign-editor-cut-plan-head,
