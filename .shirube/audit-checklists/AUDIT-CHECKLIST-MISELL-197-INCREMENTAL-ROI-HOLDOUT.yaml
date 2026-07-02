@@ -1,0 +1,56 @@
+schema_version: shirube-audit-checklist/v1
+audit_checklist_id: AUDIT-CHECKLIST-MISELL-197-INCREMENTAL-ROI-HOLDOUT
+source:
+  handoff_ref: .shirube/control-handoffs/CH-MISELL-197-incremental-roi-holdout.yaml
+  cell_ref: .shirube/cells/CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT.yaml
+  cell_id: CELL-MISELL-197-INCREMENTAL-ROI-HOLDOUT
+  pr: watchout/misell#TBD
+items:
+  - item_id: IHOLD-AUDIT-001
+    source: allowed_paths
+    verification_method: executable
+    required: true
+    prompt: Verify all changed files are inside handoff allowed_paths and no forbidden path is touched.
+    expected_evidence:
+      - changed_files
+      - forbidden_path_scan
+  - item_id: IHOLD-AUDIT-002
+    source: contract_only_scope
+    verification_method: semantic
+    required: true
+    prompt: Verify this PR is contract-only and does not change runtime code, DB migrations, APIs, UI, Player/device behavior, docs, tests, packages, workflows, deploy, secrets, branch protection, or rulesets.
+    expected_evidence:
+      - changed_files
+      - semantic_review
+  - item_id: IHOLD-AUDIT-003
+    source: future_gate
+    verification_method: semantic
+    required: true
+    prompt: Verify future runtime incremental ROI / holdout work is explicitly blocked until CTO/security and legal/privacy/ad-review approval are recorded.
+    expected_evidence:
+      - cell_review
+      - handoff_review
+  - item_id: IHOLD-AUDIT-004
+    source: claim_boundary
+    verification_method: semantic
+    required: true
+    prompt: Verify the contract forbids baseline/holdout-free incremental claims, ROI/ROAS/lift guarantees, and treating QR scans, playlogs, coupon/order issuance, or Misell counter-order value as incremental effect by themselves.
+    expected_evidence:
+      - cell_review
+      - handoff_review
+  - item_id: IHOLD-AUDIT-005
+    source: protected_integrations
+    verification_method: semantic
+    required: true
+    prompt: Verify POS, camera, biometric, sensitive profiling, inventory, weather, CRM, tracking tag, ad network, external AI, MCP provider, billing, pricing, settlement, advertiser/customer/public access, share links, and signed URLs remain non-scope.
+    expected_evidence:
+      - cell_review
+      - handoff_review
+  - item_id: IHOLD-AUDIT-006
+    source: validation
+    verification_method: executable
+    required: true
+    prompt: Verify required validation commands passed and exact head is recorded.
+    expected_evidence:
+      - validation_results
+      - exact_head_sha
