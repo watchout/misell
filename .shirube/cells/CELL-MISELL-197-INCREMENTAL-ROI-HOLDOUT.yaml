@@ -50,9 +50,11 @@ forbidden_paths:
   - package.json
   - package-lock.json
 protected_surfaces:
-  - reporting_claim_contract
-  - legal_privacy_gate
-  - future_runtime_boundary
+  - none
+future_runtime_protected_surfaces:
+  - runtime
+  - api
+  - db
 stop_conditions:
   - implementation needs runtime code, DB migration, API route, UI, Player/device behavior, report snapshot schema, or tests outside Shirube contract files
   - implementation needs actual holdout assignment, experiment randomization, baseline calculation, lift calculation, attribution model, or incremental report output

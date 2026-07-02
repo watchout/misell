@@ -12,9 +12,11 @@ premise_confirmation_ref: https://github.com/watchout/misell/issues/197
 spec_review_state: ready_for_implementation
 protected_stop: true
 protected_surfaces:
-  - reporting_claim_contract
-  - legal_privacy_gate
-  - future_runtime_boundary
+  - none
+future_runtime_protected_surfaces:
+  - runtime
+  - api
+  - db
 escalation_route: "This slice is contract-only. Future runtime incremental ROI / holdout work requires CTO/security plus legal/privacy/ad-review approval before implementation."
 
 repo: watchout/misell
@@ -72,9 +74,11 @@ cell:
     - package.json
     - package-lock.json
   protected_surfaces:
-    - reporting_claim_contract
-    - legal_privacy_gate
-    - future_runtime_boundary
+    - none
+  future_runtime_protected_surfaces:
+    - runtime
+    - api
+    - db
   escalation_route: "This slice is contract-only. Future runtime incremental ROI / holdout work requires CTO/security plus legal/privacy/ad-review approval before implementation."
   stop_conditions:
     - implementation needs runtime code, DB migration, API route, UI, Player/device behavior, report snapshot schema, or tests outside Shirube contract files
